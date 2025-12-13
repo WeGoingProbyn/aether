@@ -1,26 +1,64 @@
 # Aether
 
-A Rust-based application with modular architecture.
+Aether is a Rust-based experimental project for developing and validating
+numerical solvers for partial differential equations (PDEs), with real-time
+visualization using the Bevy game engine.
+
+The project emphasizes a **modular, engine-agnostic architecture**, separating
+core mathematical and numerical logic from application and rendering concerns.
+
+---
 
 ## Overview
 
-Aether is a Rust project organized into distinct modules for maintainability and scalability.
+Aether is designed as a foundation for experimenting with continuum mechanics,
+transport equations, and eventually fluid dynamics across different coordinate
+systems.
+
+The codebase is structured to:
+
+- Keep numerical solvers independent of any game engine
+- Enable rapid validation through real-time visualization
+- Scale toward more complex geometries and coordinate systems
+- Serve as a potential basis for interactive simulations or games
+
+At present, the project focuses on solving and visualizing simple PDEs (such as
+temperature advection–diffusion) on structured Cartesian grids.
+
+---
 
 ## Project Structure
 
-```
 aether/
-├── app/          # Application layer
-├── continuum/    # Core continuum module
-├── Cargo.toml    # Workspace configuration
-├── Cargo.lock    # Dependency lock file
-└── .gitignore    # Git ignore rules
-```
+├── app/ # Application layer (Bevy-based)
+│ ├── src/
+│ │ ├── plugins/ # Bevy plugins (simulation, rendering, input)
+│ │ └── main.rs # Application entry point
+│
+├── continuum/ # Core numerical / continuum library
+│ ├── src/
+│ │ ├── coords/ # Coordinate system abstractions
+│ │ ├── field/ # Scalar and field data structures
+│ │ ├── maths/ # Math utilities and primitives
+│ │ ├── solver/ # PDE solvers and time-stepping logic
+│ │ ├── tests/ # Sanity and correctness tests
+│ │ └── lib.rs
+
+The `continuum` module contains **no Bevy dependencies** and can be reused in
+headless simulations or other frontends.
+
+The `app` module integrates the solvers into a Bevy application for visualization
+and interaction.
+
+---
 
 ## Prerequisites
 
-- [Rust](https://www.rust-lang.org/tools/install) (latest stable version recommended)
-- Cargo (comes with Rust)
+- [Rust](https://www.rust-lang.org/tools/install) (latest stable recommended)
+- Cargo (installed with Rust)
+- A GPU capable of running Bevy’s rendering backend
+
+---
 
 ## Installation
 
@@ -31,73 +69,79 @@ git clone https://github.com/WeGoingProbyn/aether.git
 cd aether
 ```
 
-## Building
-
-Build the project using Cargo:
+# Building
+Build using cargo's compiler:
 
 ```bash
-# Development build
-cargo build
-
-# Release build (optimized)
-cargo build --release
+cargo b --release
 ```
 
-## Running
+# Running
+
+Run the application layer to visualize the simulation:
 
 ```bash
-# Run in development mode
-cargo run
-
-# Run the release build
 cargo run --release
 ```
 
-## Testing
+When running, a window will open displaying the current scalar field.
 
-Run the test suite:
+# Testing
+
+Run the test suite (primarily targeting the continuum module):
 
 ```bash
 cargo test
 ```
 
-## Project Modules
+These tests focus on basic correctness and numerical sanity checks.
 
-### `app/`
-The application layer containing the main entry point and high-level application logic.
+# Project Modules
+## app
 
-### `continuum/`
-Core continuum module providing foundational functionality.
+The application layer built on top of Bevy:
 
-## Development
+- Owning simulation state as Bevy resources
 
-### Code Formatting
+- Scheduling solver time steps
 
-Format your code with:
+- Uploading field data to GPU textures
 
-```bash
-cargo fmt
-```
+- Rendering scalar fields for visual inspection
 
-### Linting
+- Handling input and application lifecycle
 
-Run the linter:
+This layer is intentionally thin and delegates all numerical work to continuum.
 
-```bash
-cargo clippy
-```
+## continuum
 
-### Documentation
+The core numerical and mathematical library:
+
+- Grid definitions and indexing
+
+- Field storage and access
+
+- Coordinate system abstractions
+
+- PDE discretization and time-stepping logic
+
+- Numerical correctness tests
+
+This module is engine-agnostic and does not depend on Bevy or any rendering code.
+
+# Development
 
 Generate and view documentation:
 
-```bash
 cargo doc --open
-```
 
-## Contributing
+Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome.
+
+If you’re interested in numerical methods, simulation, rendering, or Rust
+architecture, feel free to open an issue or submit a pull request.
+
 
 ## License
 
