@@ -60,7 +60,7 @@ and interaction.
 
 ---
 
-## Installation
+# Installation
 
 Clone the repository:
 
@@ -93,6 +93,7 @@ Run the test suite (primarily targeting the continuum module):
 ```bash
 cargo test
 ```
+---
 
 These tests focus on basic correctness and numerical sanity checks.
 
@@ -129,11 +130,15 @@ The core numerical and mathematical library:
 
 This module is engine-agnostic and does not depend on Bevy or any rendering code.
 
+---
+
 # Development
 
 Generate and view documentation:
 
 cargo doc --open
+
+---
 
 Contributing
 
@@ -141,7 +146,6 @@ Contributions are welcome.
 
 If you’re interested in numerical methods, simulation, rendering, or Rust
 architecture, feel free to open an issue or submit a pull request.
-
 
 ## License
 
