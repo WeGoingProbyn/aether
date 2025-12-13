@@ -29,20 +29,20 @@ temperature advection–diffusion) on structured Cartesian grids.
 
 ## Project Structure
 
+```
 aether/
-├── app/ # Application layer (Bevy-based)
-│ ├── src/
-│ │ ├── plugins/ # Bevy plugins (simulation, rendering, input)
-│ │ └── main.rs # Application entry point
-│
-├── continuum/ # Core numerical / continuum library
-│ ├── src/
-│ │ ├── coords/ # Coordinate system abstractions
-│ │ ├── field/ # Scalar and field data structures
-│ │ ├── maths/ # Math utilities and primitives
-│ │ ├── solver/ # PDE solvers and time-stepping logic
-│ │ ├── tests/ # Sanity and correctness tests
-│ │ └── lib.rs
+├── app/                       # Application layer (Bevy-based)
+│   └── src/
+│       ├── plugins/           # Bevy plugins (simulation, rendering, input)
+│       └── main.rs            # Application entry point
+└── continuum/                 # Core numerical / continuum library
+    └── src/
+        ├── coords/            # Coordinate system abstractions
+        ├── field/             # Scalar and field data structures
+        ├── maths/             # Math utilities and primitives
+        ├── solver/            # PDE solvers and time-stepping logic
+        ├── tests/             # Sanity and correctness tests
+```
 
 The `continuum` module contains **no Bevy dependencies** and can be reused in
 headless simulations or other frontends.
