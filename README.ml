@@ -101,7 +101,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-[Add your license here]
+MIT License. See the `LICENSE` file for details.
 
 ## Authors
 
@@ -109,4 +109,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## Acknowledgments
 
-[Will Add any acknowledgments or credits here]
+- [Bevy](https://github.com/bevyengine/bevy)
