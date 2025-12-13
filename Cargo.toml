@@ -1,0 +1,7 @@
+[workspace]
+members = [
+  "continuum",
+  "app",
+]
+
+resolver = "2"
