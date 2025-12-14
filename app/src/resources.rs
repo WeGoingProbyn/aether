@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use continuum::geometry::{MappedGeometry, IdentityMap};
 use continuum::grid::grid::Grid;
-use continuum::solver::explicit::FiniteVolumeSolver;
+use continuum::solver::fv::FiniteVolumeSolver;
 use continuum::solver::temperature::TemperatureAdvectionDiffusion;
 use continuum::topology::StructuredTopology;
 

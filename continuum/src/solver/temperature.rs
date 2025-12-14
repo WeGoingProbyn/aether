@@ -1,5 +1,5 @@
 use crate::geometry::VecN;
-use crate::solver::explicit::{Flux, Model, State};
+use crate::solver::fv::{Flux, Model, State};
 use crate::topology::BoundaryId;
 
 /// Scalar temperature T satisfies:

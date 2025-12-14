@@ -97,9 +97,10 @@ fn upload_temperature_to_texture(
       let idx = j * nx + i;
 
       let t = sim.solver.u[idx][0];
-      let x = ((t - tmin) * inv).clamp(0.0, 1.0);
+      let mut x = ((t - tmin) * inv).clamp(0.0, 1.0);
 
-      let [r, g, b] = turbo_colormap(x);
+      x = normalize(t, tmin, tmax);
+      let [r, g, b] = inferno_colormap(x);
 
       let p = idx * 4;
       data[p + 0] = r;
@@ -139,4 +140,96 @@ fn turbo_colormap(x: f64) -> [u8; 3] {
 
   let to_u8 = |v: f64| -> u8 { (v.clamp(0.0, 1.0) * 255.0) as u8 };
   [to_u8(r), to_u8(g), to_u8(b)]
+}
+
+pub fn viridis_colormap(x: f64) -> [u8; 3] {
+  let x = x.clamp(0.0, 1.0);
+
+  // Approx-style fit; outputs roughly sRGB in [0,1]
+  let r = 0.280268 + x * (0.230519 + x * (1.010135 + x * (-1.412354 + x * 0.891495)));
+  let g = 0.165368 + x * (1.160916 + x * (-1.491468 + x * (0.897369 + x * -0.226609)));
+  let b = 0.476837 + x * (1.061376 + x * (-1.607240 + x * (0.683710 + x * -0.120294)));
+
+  let to_u8 = |v: f64| -> u8 { (v.clamp(0.0, 1.0) * 255.0) as u8 };
+  [to_u8(r), to_u8(g), to_u8(b)]
+}
+
+pub fn magma_colormap(x: f64) -> [u8; 3] {
+  let x = x.clamp(0.0, 1.0);
+
+  // Smooth “magma-ish” analytic approximation (hand-tuned)
+  let r = (1.0 - (1.0 - x).powf(2.2)).clamp(0.0, 1.0);
+  let g = (x.powf(1.7) * 0.9).clamp(0.0, 1.0);
+  let b = ((x * 0.6).powf(2.2)).clamp(0.0, 1.0);
+
+  // Add a gentle purple lift at low end
+  let b = (b + (1.0 - x).powf(3.0) * 0.35).clamp(0.0, 1.0);
+
+  let to_u8 = |v: f64| -> u8 { (v * 255.0).round() as u8 };
+  [to_u8(r), to_u8(g), to_u8(b)]
+}
+
+pub fn inferno_colormap(x: f64) -> [u8; 3] {
+  let x = x.clamp(0.0, 1.0);
+
+  let r = (x.powf(0.55)).clamp(0.0, 1.0);
+  let g = (x.powf(1.35)).clamp(0.0, 1.0);
+  let b = ((x * 0.85).powf(3.0)).clamp(0.0, 1.0);
+
+  // Push midtones warmer
+  let g = (g * (0.7 + 0.3 * x)).clamp(0.0, 1.0);
+
+  let to_u8 = |v: f64| -> u8 { (v * 255.0).round() as u8 };
+  [to_u8(r), to_u8(g), to_u8(b)]
+}
+
+pub fn blue_white_red(x: f64) -> [u8; 3] {
+  let x = x.clamp(0.0, 1.0);
+
+  // 0 = blue, 0.5 = white, 1 = red
+  let (r, g, b) = if x < 0.5 {
+    let t = x / 0.5;
+    // blue -> white
+    (t, t, 1.0)
+  } else {
+    let t = (x - 0.5) / 0.5;
+    // white -> red
+    (1.0, 1.0 - t, 1.0 - t)
+  };
+
+  let to_u8 = |v: f64| -> u8 { (v.clamp(0.0, 1.0) * 255.0).round() as u8 };
+  [to_u8(r), to_u8(g), to_u8(b)]
+}
+
+pub fn cubehelix_colormap(x: f64) -> [u8; 3] {
+  let x = x.clamp(0.0, 1.0);
+
+  // Dave Green's cubehelix-like formula
+  let a = 0.5 * x * (1.0 - x);
+  let angle = 2.0 * std::f64::consts::PI * (0.5 / 3.0 + 1.0 * x);
+
+  let r = (x + a * (-0.14861 * angle.cos() + 1.78277 * angle.sin())).clamp(0.0, 1.0);
+  let g = (x + a * (-0.29227 * angle.cos() - 0.90649 * angle.sin())).clamp(0.0, 1.0);
+  let b = (x + a * ( 1.97294 * angle.cos() )).clamp(0.0, 1.0);
+
+  let to_u8 = |v: f64| -> u8 { (v * 255.0).round() as u8 };
+  [to_u8(r), to_u8(g), to_u8(b)]
+}
+
+pub fn plasma_colormap(x: f64) -> [u8; 3] {
+  let x = x.clamp(0.0, 1.0);
+
+  // Smooth “plasma-ish” using powered ramps
+  let r = (x.powf(0.65)).clamp(0.0, 1.0);
+  let g = ((x * (1.0 - x)).powf(0.35) * 1.8).clamp(0.0, 1.0);
+  let b = ((1.0 - x).powf(0.9) * 0.9 + x.powf(2.5) * 0.2).clamp(0.0, 1.0);
+
+  let to_u8 = |v: f64| -> u8 { (v * 255.0).round() as u8 };
+  [to_u8(r), to_u8(g), to_u8(b)]
+}
+
+#[inline]
+pub fn normalize(value: f64, min: f64, max: f64) -> f64 {
+  if (max - min).abs() < 1e-12 { return 0.0; }
+  ((value - min) / (max - min)).clamp(0.0, 1.0)
 }
