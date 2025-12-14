@@ -1,10 +1,20 @@
 use bevy::prelude::*;
-use continuum::solver::temperature::TemperatureSolver2D;
+use continuum::geometry::{MappedGeometry, IdentityMap};
+use continuum::grid::grid::Grid;
+use continuum::solver::explicit::FiniteVolumeSolver;
+use continuum::solver::temperature::TemperatureAdvectionDiffusion;
+use continuum::topology::StructuredTopology;
 
 #[derive(Resource)]
 pub struct Simulation {
-  pub solver: TemperatureSolver2D,
-  pub dt: f32,
+  pub solver: FiniteVolumeSolver<
+    StructuredTopology<2>,
+    MappedGeometry<2, IdentityMap>,
+    TemperatureAdvectionDiffusion<2>,
+    2,
+    1
+  >,
+  pub dt: f64,
 }
 
 #[derive(Resource)]

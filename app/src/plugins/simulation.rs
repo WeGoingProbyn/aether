@@ -1,53 +1,52 @@
 use bevy::prelude::*;
+
 use crate::resources::Simulation;
 
-use continuum::field::scalar::ScalarField;
-use continuum::solver::temperature::TemperatureSolver2D;
-use continuum::grid::structured::cartesian::CartesianGrid2D;
+use continuum::grid::grid::Grid;
+use continuum::topology::StructuredTopology;
+use continuum::geometry::{MappedGeometry, IdentityMap};
+use continuum::solver::explicit::FiniteVolumeSolver;
+use continuum::solver::temperature::TemperatureAdvectionDiffusion;
 
 pub struct SimulationPlugin;
 
 impl Plugin for SimulationPlugin {
   fn build(&self, app: &mut App) {
-    let nx = 128;
-    let ny = 128;
+    let nx: usize = 64;
+    let ny: usize = 64;
 
-    let grid = CartesianGrid2D { 
-      nx, 
-      ny, 
-      dx: 1.0 / nx as f32, 
-      dy: 1.0 / ny as f32, 
-      total_cells: nx * ny 
-    };
-    let mut temperature = ScalarField::new(nx * ny);
+    // 1) Computational grid on [0,1]^2
+    let grid = Grid::<2>::new([nx, ny]);
 
-    // hot blob in the center
-    let cx = nx as f32 * 0.5;
-    let cy = ny as f32 * 0.5;
-    let r2 = (nx.min(ny) as f32 * 0.12).powi(2);
+    // 2) Topology (neighbors/boundaries). Optional: set periodic if you want.
+    let topo = StructuredTopology::<2>::new(grid.clone());
+    // let topo = StructuredTopology::<2>::new(grid.clone())
+    //   .with_periodic(0, true)
+    //   .with_periodic(1, true);
 
-    for j in 0..ny {
-      for i in 0..nx {
-        let dx = i as f32 - cx;
-        let dy = j as f32 - cy;
-        let val = if dx * dx + dy * dy < r2 { 1.0 } else { 0.0 };
-        temperature.field[j * nx + i] = val;
-      }
-    }
+    // 3) Geometry (physical measures). Here: identity Cartesian mapping.
+    let geom = MappedGeometry::<2, _>::new(grid.clone(), IdentityMap);
 
-    let solver = TemperatureSolver2D {
-      grid,
-      temperature,
-      velocity: [0.0, 0.0],
-      diffusivity: 0.001,
-    };
+    // 4) Model: advection + diffusion of temperature (scalar, NV=1)
+    let model = TemperatureAdvectionDiffusion::<2>::new([0.0, 0.0], 0.005)
+      //.with_outflow(); 
+      .with_dirichlet(0.0);
 
-    let (mut tmin, mut tmax) = (f32::INFINITY, f32::NEG_INFINITY);
-    for &t in &solver.temperature.field {
-      tmin = tmin.min(t);
-      tmax = tmax.max(t);
-    }
-    println!("init temperature: min={tmin}, max={tmax}");
+    // 5) Solver (D=2, NV=1)
+    let mut solver: FiniteVolumeSolver<_, _, _, 2, 1> =
+    FiniteVolumeSolver::new(topo, geom, model);
+
+    // Initial condition: hot blob in center, expressed in *physical* coords x in [0,1]^2
+    let cx = 0.5_f64;
+    let cy = 0.5_f64;
+    let r2 = (0.12_f64).powi(2);
+
+    solver.initialize_with(|x| {
+      let dx = x[0] - cx;
+      let dy = x[1] - cy;
+      let t = if dx * dx + dy * dy < r2 { 1.0 } else { 0.0 };
+      [t]
+    });
 
     app.insert_resource(Simulation { solver, dt: 0.01 })
       .add_systems(FixedUpdate, step_simulation);
@@ -55,6 +54,7 @@ impl Plugin for SimulationPlugin {
 }
 
 fn step_simulation(mut sim: ResMut<Simulation>) {
-  let dt = sim.dt.clone();
-  sim.solver.step(dt);
+  let dt = sim.dt;
+  sim.solver.step_explicit(dt);
 }
+
