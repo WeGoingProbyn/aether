@@ -1,0 +1,140 @@
+\documentclass[11pt]{article}
+
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{hyperref}
+
+\title{Continuum: Grid, Topology, and Geometry}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Purpose and High-Level View}
+This document describes the core mathematical roles of three systems in the \texttt{continuum} project:
+\begin{itemize}
+  \item \textbf{Grid}: represents the \emph{computational domain} (logical index space) and stores discrete fields.
+  \item \textbf{Topology}: represents \emph{connectivity} between discrete entities (neighbors, boundaries, patch seams).
+  \item \textbf{Geometry}: represents the \emph{mapping} between computational and physical space and provides metric quantities (volumes, face area-vectors) required by the solver.
+\end{itemize}
+
+The central design goal is to keep the finite-volume solver largely independent of the physical coordinate system or embedding: if the solver can query \emph{neighbor relations} (Topology) and \emph{geometric measures} (Geometry), it can advance conservative PDEs on many kinds of domains (Cartesian, curvilinear, multi-block, cubed-sphere, etc.).
+
+\section{Computational vs Physical Domain}
+Let $\boldsymbol{\xi}$ denote \emph{computational coordinates} (logical coordinates), e.g.
+\[
+\boldsymbol{\xi} = (\xi,\eta,\zeta) \in \hat{\Omega},
+\]
+where $\hat{\Omega}$ is typically a simple structured domain such as $[0,1]^d$. The \textbf{Grid} discretises $\hat{\Omega}$ with a structured index space $(i,j,k)$.
+
+Let $\mathbf{x}$ denote \emph{physical coordinates} in the real domain $\Omega \subset \mathbb{R}^d$:
+\[
+\mathbf{x} = (x,y,z) \in \Omega.
+\]
+The \textbf{Geometry} provides a map
+\[
+\mathbf{x} = \mathbf{x}(\boldsymbol{\xi}),
+\]
+so that each logical cell in $\hat{\Omega}$ corresponds to a (possibly curved or distorted) physical control volume in $\Omega$.
+
+\section{Finite Volume Update: What the Solver Needs}
+Consider a conservative PDE in physical space,
+\[
+\frac{\partial U}{\partial t} + \nabla \cdot \mathbf{F}(U) = S(U,\mathbf{x},t),
+\]
+where $U$ is a vector of conserved quantities, $\mathbf{F}$ is a flux, and $S$ is a source term.
+
+Finite volume methods evolve \emph{cell averages} over physical control volumes $V_i$:
+\[
+\bar{U}_i(t) = \frac{1}{|V_i|}\int_{V_i} U(\mathbf{x},t)\, dV.
+\]
+A standard semi-discrete FV form is:
+\[
+\frac{d}{dt}\left(|V_i|\,\bar{U}_i\right)
+\;+\;
+\sum_{f \in \partial V_i}
+\int_{A_f} \mathbf{F}(U)\cdot \mathbf{n}\, dA
+\;=\;
+\int_{V_i} S\, dV.
+\]
+
+In practice, the solver typically needs:
+\begin{itemize}
+  \item \textbf{Cell volume} $|V_i|$
+  \item \textbf{Face area-vector} $\mathbf{S}_{f,i} := \mathbf{n}_{f,i}\,|A_f|$ (physical normal times physical face area, oriented outward from cell $i$)
+  \item \textbf{Neighbor info} for each face: which cell or boundary is adjacent to the face
+\end{itemize}
+The update step can be written schematically as
+\[
+\bar{U}_i^{n+1}
+=
+\bar{U}_i^{n}
+-
+\frac{\Delta t}{|V_i|}
+\sum_{f \in \partial V_i}
+\widehat{\mathbf{F}}_{f}\cdot \mathbf{S}_{f,i}
+\;+\;
+\Delta t\,\bar{S}_i,
+\]
+where $\widehat{\mathbf{F}}_{f}$ is a numerical flux (e.g.\ from a Riemann solver), computed using left/right states provided by Topology and reconstruction.
+
+\section{Grid: The Computational Domain}
+\subsection*{Role}
+The \textbf{Grid} is the discrete representation of the computational domain $\hat{\Omega}$:
+\begin{itemize}
+  \item Defines the structured index space (2D or 3D), e.g.\ $(i,j,k)$ with extents $(N_x,N_y,N_z)$.
+  \item Owns storage for discrete fields (cell-centered, face-centered, etc.).
+  \item Provides iteration order and memory layout (AoS/SoA), ghost layers, and views/slices.
+\end{itemize}
+
+\subsection*{Key Idea}
+A cell index $(i,j,k)$ is \emph{not} automatically a physical cube in $\Omega$. It is a \emph{logical} cell in $\hat{\Omega}$; its physical shape and size are provided by Geometry.
+
+\section{Topology: Connectivity and Boundaries}
+\subsection*{Role}
+The \textbf{Topology} provides the relationships needed to traverse the grid as a control-volume complex:
+\begin{itemize}
+  \item For each cell, enumerates its faces and adjacent entities.
+  \item For each face, identifies the neighbor cell across the face, or a boundary condition object (wall, inflow, outflow, periodic, etc.).
+  \item For multi-block grids (e.g.\ cubed-sphere), encodes cross-block connections and index mappings at seams.
+\end{itemize}
+
+\subsection*{Key Idea}
+Topology is \emph{purely combinatorial}: it answers ``who is adjacent to whom?'' without needing to know physical distances or areas. This lets the solver walk the mesh consistently, including at boundaries and patch interfaces.
+
+\section{Geometry: Mapping and Metric Quantities}
+\subsection*{Role}
+The \textbf{Geometry} supplies physical meaning to logical grid entities by exposing metric quantities derived from the mapping $\mathbf{x}(\boldsymbol{\xi})$:
+\begin{itemize}
+  \item Computes/caches physical \textbf{cell volumes} $|V_i|$.
+  \item Computes/caches physical \textbf{face area-vectors} $\mathbf{S}_{f,i}$.
+  \item Optionally provides physical cell/face centers $\mathbf{x}_i$, $\mathbf{x}_f$ for source terms and reconstruction.
+\end{itemize}
+
+\subsection*{Jacobian Viewpoint}
+Let $J$ be the Jacobian of the mapping:
+\[
+J = \frac{\partial \mathbf{x}}{\partial \boldsymbol{\xi}}.
+\]
+Then physical volume elements relate via
+\[
+dV = \left|\det J\right|\, d\boldsymbol{\xi}.
+\]
+In structured mapped grids, Geometry uses $J$ (and related cofactor data) to build the FV measures $|V_i|$ and $\mathbf{S}_{f,i}$ that appear in the flux balance.
+
+\subsection*{Key Idea}
+The solver should not need to know whether it is on Cartesian space, polar coordinates, or a cubed-sphere patch. If Geometry returns correct $(|V_i|, \mathbf{S}_{f,i})$, the same conservation update applies.
+
+\section{Putting It Together}
+At a high level, a solver timestep looks like:
+\begin{enumerate}
+  \item \textbf{Grid}: access current fields $\bar{U}_i^n$.
+  \item \textbf{Topology}: for each cell $i$, iterate its faces and obtain neighbor/boundary information.
+  \item \textbf{Geometry}: for each face and cell, query $\mathbf{S}_{f,i}$ and $|V_i|$ (and optionally centers).
+  \item \textbf{Solver}: reconstruct left/right states, compute numerical flux $\widehat{\mathbf{F}}_f$, accumulate $\widehat{\mathbf{F}}_f\cdot \mathbf{S}_{f,i}$, divide by $|V_i|$, update $\bar{U}_i$.
+\end{enumerate}
+
+This separation supports extending \texttt{continuum} from simple Cartesian CFD to mapped domains (curvilinear grids, multi-block cubed-sphere) and, with richer Geometry, to more general coordinate systems where metric factors are required.
+
+\end{document}

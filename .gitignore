@@ -10,3 +10,7 @@ target
 # Contains mutation testing data
 **/mutants.out*/
 
+# Add tex based gitignores
+*.aux
+*.log
+*.out
