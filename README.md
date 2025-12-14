@@ -43,7 +43,9 @@ aether/
         ├── field/             # Scalar and field data structures
         ├── maths/             # Math utilities and primitives
         ├── solver/            # PDE solvers and time-stepping logic
-        ├── tests/             # Sanity and correctness tests
+        └── tests/             # Sanity and correctness tests
+    └── docs/
+        └── domain.pdf         # How does continuum abstract across domains
 ```
 
 The `continuum` module contains **no Bevy dependencies** and is intended to be
