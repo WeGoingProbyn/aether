@@ -15,11 +15,11 @@
 This document describes the core mathematical roles of three systems in the \texttt{continuum} project:
 \begin{itemize}
   \item \textbf{Grid}: represents the \emph{computational domain} (logical index space) and stores discrete fields.
-  \item \textbf{Topology}: represents \emph{connectivity} between discrete entities (neighbors, boundaries, patch seams).
+  \item \textbf{Topology}: represents \emph{connectivity} between discrete entities (neighbours, boundaries, patch seams).
   \item \textbf{Geometry}: represents the \emph{mapping} between computational and physical space and provides metric quantities (volumes, face area-vectors) required by the solver.
 \end{itemize}
 
-The central design goal is to keep the finite-volume solver largely independent of the physical coordinate system or embedding: if the solver can query \emph{neighbor relations} (Topology) and \emph{geometric measures} (Geometry), it can advance conservative PDEs on many kinds of domains (Cartesian, curvilinear, multi-block, cubed-sphere, etc.).
+The central design goal is to keep the finite-volume solver largely independent of the physical coordinate system or embedding: if the solver can query \emph{neighbour relations} (Topology) and \emph{geometric measures} (Geometry), it can advance conservative PDEs on many kinds of domains (Cartesian, curvilinear, multi-block, cubed-sphere, etc.).
 
 \section{Computational vs Physical Domain}
 Let $\boldsymbol{\xi}$ denote \emph{computational coordinates} (logical coordinates), e.g.
@@ -63,7 +63,7 @@ In practice, the solver typically needs:
 \begin{itemize}
   \item \textbf{Cell volume} $|V_i|$
   \item \textbf{Face area-vector} $\mathbf{S}_{f,i} := \mathbf{n}_{f,i}\,|A_f|$ (physical normal times physical face area, oriented outward from cell $i$)
-  \item \textbf{Neighbor info} for each face: which cell or boundary is adjacent to the face
+  \item \textbf{Neighbour info} for each face: which cell or boundary is adjacent to the face
 \end{itemize}
 The update step can be written schematically as
 \[
@@ -96,7 +96,7 @@ A cell index $(i,j,k)$ is \emph{not} automatically a physical cube in $\Omega$. 
 The \textbf{Topology} provides the relationships needed to traverse the grid as a control-volume complex:
 \begin{itemize}
   \item For each cell, enumerates its faces and adjacent entities.
-  \item For each face, identifies the neighbor cell across the face, or a boundary condition object (wall, inflow, outflow, periodic, etc.).
+  \item For each face, identifies the neighbour cell across the face, or a boundary condition object (wall, inflow, outflow, periodic, etc.).
   \item For multi-block grids (e.g.\ cubed-sphere), encodes cross-block connections and index mappings at seams.
 \end{itemize}
 
@@ -130,7 +130,7 @@ The solver should not need to know whether it is on Cartesian space, polar coord
 At a high level, a solver timestep looks like:
 \begin{enumerate}
   \item \textbf{Grid}: access current fields $\bar{U}_i^n$.
-  \item \textbf{Topology}: for each cell $i$, iterate its faces and obtain neighbor/boundary information.
+  \item \textbf{Topology}: for each cell $i$, iterate its faces and obtain neighbour/boundary information.
   \item \textbf{Geometry}: for each face and cell, query $\mathbf{S}_{f,i}$ and $|V_i|$ (and optionally centers).
   \item \textbf{Solver}: reconstruct left/right states, compute numerical flux $\widehat{\mathbf{F}}_f$, accumulate $\widehat{\mathbf{F}}_f\cdot \mathbf{S}_{f,i}$, divide by $|V_i|$, update $\bar{U}_i$.
 \end{enumerate}
