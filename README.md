@@ -38,12 +38,12 @@ aether/
 │       ├── plugins/           # Bevy plugins
 │       └── main.rs            # Application entry point
 └── continuum/                 # Core numerical / continuum library
-    └── src/
-        ├── grid/              # Grid system abstractions
-        ├── field/             # Scalar and field data structures
-        ├── maths/             # Math utilities and primitives
-        ├── solver/            # PDE solvers and time-stepping logic
-        └── tests/             # Sanity and correctness tests
+    ├── src/
+    │   ├── grid/              # Grid system abstractions
+    │   ├── field/             # Scalar and field data structures
+    │   ├── maths/             # Math utilities and primitives
+    │   ├── solver/            # PDE solvers and time-stepping logic
+    │   └── tests/             # Sanity and correctness tests
     └── docs/
         └── domain.pdf         # How does continuum abstract across domains
 ```
