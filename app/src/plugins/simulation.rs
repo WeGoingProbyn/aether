@@ -2,8 +2,8 @@ use bevy::prelude::*;
 use crate::resources::Simulation;
 
 use continuum::field::scalar::ScalarField;
-use continuum::coords::cartesian::CartesianGrid2D;
 use continuum::solver::temperature::TemperatureSolver2D;
+use continuum::grid::structured::cartesian::CartesianGrid2D;
 
 pub struct SimulationPlugin;
 

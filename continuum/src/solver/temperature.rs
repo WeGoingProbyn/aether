@@ -1,4 +1,4 @@
-use crate::coords::cartesian::{ CartesianGrid2D, CoordinateSystem };
+use crate::grid::structured::cartesian::{ CartesianGrid2D, CoordinateSystem };
 use crate::field::scalar::ScalarField;
 
 pub struct TemperatureSolver2D {
