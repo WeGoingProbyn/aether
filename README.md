@@ -4,8 +4,8 @@ Aether is a Rust-based experimental project for developing and validating
 numerical solvers for partial differential equations (PDEs), with real-time
 visualization using the Bevy game engine.
 
-The project emphasizes a **modular, engine-agnostic architecture**, separating
-core mathematical and numerical logic from application and rendering concerns.
+It emphasizes a **modular, engine-agnostic architecture**, separating
+core mathematical and numerical logic from application and rendering.
 
 ---
 
@@ -18,12 +18,14 @@ systems.
 The codebase is structured to:
 
 - Keep numerical solvers independent of any game engine
-- Enable rapid validation through real-time visualization
+- Enable quick validation through real-time visualization
 - Scale toward more complex geometries and coordinate systems
 - Serve as a potential basis for interactive simulations or games
+- It does not aim to solve transport equations to the detail necessary for real world applications
 
 At present, the project focuses on solving and visualizing simple PDEs (such as
-temperature advection–diffusion) on structured Cartesian grids.
+temperature advection–diffusion) on structured Cartesian grids using finite differences.
+See the issues tab for a todo list of future plans.
 
 ---
 
@@ -33,19 +35,19 @@ temperature advection–diffusion) on structured Cartesian grids.
 aether/
 ├── app/                       # Application layer (Bevy-based)
 │   └── src/
-│       ├── plugins/           # Bevy plugins (simulation, rendering, input)
+│       ├── plugins/           # Bevy plugins
 │       └── main.rs            # Application entry point
 └── continuum/                 # Core numerical / continuum library
     └── src/
-        ├── coords/            # Coordinate system abstractions
+        ├── grid/              # Grid system abstractions
         ├── field/             # Scalar and field data structures
         ├── maths/             # Math utilities and primitives
         ├── solver/            # PDE solvers and time-stepping logic
         ├── tests/             # Sanity and correctness tests
 ```
 
-The `continuum` module contains **no Bevy dependencies** and can be reused in
-headless simulations or other frontends.
+The `continuum` module contains **no Bevy dependencies** and is intended to be
+reuseable in headless simulations or other frontends.
 
 The `app` module integrates the solvers into a Bevy application for visualization
 and interaction.
@@ -95,7 +97,10 @@ cargo test
 ```
 ---
 
-These tests focus on basic correctness and numerical sanity checks.
+These tests focus on basic correctness and numerical sanity checks,
+following the assumptions underpinning the mathematical basis for
+continuum's solvers. Such as conservation of computed quantities,
+correctness around boundary implementations etc.
 
 # Project Modules
 ## app
@@ -119,6 +124,8 @@ This layer is intentionally thin and delegates all numerical work to continuum.
 The core numerical and mathematical library:
 
 - Grid definitions and indexing
+
+- Topolgy and geometry definitions
 
 - Field storage and access
 
@@ -154,6 +161,7 @@ MIT License. See the `LICENSE` file for details.
 ## Authors
 
 - [@WeGoingProbyn](https://github.com/WeGoingProbyn)
+- [@TheCharlieKennedy](https://github.com/TheCharlieKennedy)
 
 ## Acknowledgments
 
