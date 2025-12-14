@@ -7,15 +7,15 @@ use crate::resources::Simulation;
 use continuum::grid::grid::Grid;
 use continuum::topology::StructuredTopology;
 use continuum::geometry::{MappedGeometry, IdentityMap};
-use continuum::solver::fv::{TimeIntegrator, FiniteVolumeSolver};
+use continuum::solver::fv::{FiniteVolumeSolver, HybridConfig, HybridState, TimeIntegrator};
 use continuum::solver::temperature::TemperatureAdvectionDiffusion;
 
 pub struct SimulationPlugin;
 
 impl Plugin for SimulationPlugin {
   fn build(&self, app: &mut App) {
-    let nx: usize = 64;
-    let ny: usize = 64;
+    let nx: usize = 128;
+    let ny: usize = 128;
 
     // 1) Computational grid on [0,1]^2
     let grid = Grid::<2>::new([nx, ny]);
@@ -31,29 +31,27 @@ impl Plugin for SimulationPlugin {
 
     // 4) Model: advection + diffusion of temperature (scalar, NV=1)
     let model = TemperatureAdvectionDiffusion::<2>::new([0.0, 0.0], 0.005)
-      .with_outflow(); 
-      // .with_dirichlet(0.0);
+      // .with_outflow(); 
+      .with_dirichlet(0.0);
 
-    let integrator = TimeIntegrator::ImplicitBackwardEuler(ImplicitConfig {
-      newton: NewtonConfig {
-        max_iters: 100,
-        tol: 1e-8,
-        fd_epsilon: 1e-6,
-      },
-      gmres: GmresConfig {
-        restart: 30,
-        max_iters: 200,
-        tol: 1e-8,
-      },
-    });
+    let implicit_cfg = ImplicitConfig {
+      newton: NewtonConfig { max_iters: 8, tol: 1e-8, fd_epsilon: 1e-6 },
+      gmres: GmresConfig { restart: 30, max_iters: 200, tol: 1e-8 },
+    };
+
+    let integrator = TimeIntegrator::Hybrid(
+      implicit_cfg,
+      HybridConfig::default(),
+      HybridState::default(),
+    );
 
     // 5) Solver (D=2, NV=1)
     let mut solver: FiniteVolumeSolver<_, _, _, 2, 1> =
-    FiniteVolumeSolver::new(topo, geom, model, TimeIntegrator::ExplicitEuler);
+    FiniteVolumeSolver::new(topo, geom, model, integrator);
 
     // Initial condition: hot blob in center, expressed in *physical* coords x in [0,1]^2
-    let cx = 0.0_f64;
-    let cy = 0.0_f64;
+    let cx = 0.5_f64;
+    let cy = 0.5_f64;
     let r2 = (0.12_f64).powi(2);
 
     solver.initialize_with(|x| {
@@ -63,7 +61,7 @@ impl Plugin for SimulationPlugin {
       [t]
     });
 
-    app.insert_resource(Simulation { solver, dt: 0.01 })
+    app.insert_resource(Simulation { solver, dt: 0.001 })
       .add_systems(FixedUpdate, step_simulation);
   }
 }

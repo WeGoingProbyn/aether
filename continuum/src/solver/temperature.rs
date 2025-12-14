@@ -101,9 +101,8 @@ impl<const D: usize> Model<D, 1> for TemperatureAdvectionDiffusion<D> {
     dist_n: f64,
     _t: f64,
   ) -> State<1> {
-    if self.kappa == 0.0 {
-      return [0.0];
-    }
+    if self.kappa == 0.0 { [0.0] } else { [self.kappa / dist_n] };
+
 
     // F_diff · n = -κ * ∂T/∂n  ≈ -κ * (T_R - T_L)/dist_n
     let dtdn = (ur[0] - ul[0]) / dist_n;

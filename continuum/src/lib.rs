@@ -5,3 +5,5 @@ pub mod solver;
 
 pub mod topology;
 pub mod geometry;
+
+pub mod tests;

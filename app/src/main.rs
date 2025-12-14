@@ -1,6 +1,7 @@
 mod plugins;
 mod resources;
 
+use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
 use bevy::prelude::*;
 use plugins::simulation::SimulationPlugin;
 use plugins::rendering::RenderingPlugin;
@@ -16,6 +17,10 @@ fn main() {
       }),
       ..default()
     }))
+    .add_plugins((
+      FrameTimeDiagnosticsPlugin::default(),
+      LogDiagnosticsPlugin::default(),
+    ))
     .add_plugins((SimulationPlugin, RenderingPlugin))
     .run();
 }
