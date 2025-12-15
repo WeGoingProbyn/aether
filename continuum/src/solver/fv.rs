@@ -1,7 +1,7 @@
 use log::{info, warn};
 
 use crate::geometry::{Geometry, VecN};
-use crate::grid::grid::{CellId, FaceId, Side};
+use crate::grid::grid::Side;
 use crate::topology::{BoundaryId, Neighbor, Topology};
 
 pub type State<const NV: usize> = [f64; NV];
@@ -70,6 +70,45 @@ pub trait Model<const D: usize, const NV: usize> {
   ) -> State<NV> {
     zero_state::<NV>()
   }
+}
+
+/// CFL controller settings for explicit (and hybrid) stepping.
+#[derive(Debug, Clone)]
+pub struct CflConfig {
+  /// Advective CFL number (typical stable range: 0 < cfl <= 1).
+  pub cfl: f64,
+  /// Diffusive CFL number; use smaller values when diffusion dominates.
+  pub diffusion_cfl: f64,
+  /// Hard upper cap on any single step.
+  pub max_dt: f64,
+  /// Guard against pathological tiny steps per outer call.
+  pub max_substeps: usize,
+}
+
+impl Default for CflConfig {
+  fn default() -> Self {
+    Self {
+      cfl: 0.45,
+      diffusion_cfl: 0.25,
+      max_dt: 1e9,
+      max_substeps: 32,
+    }
+  }
+}
+
+#[derive(Debug, Clone)]
+pub struct CflEstimate {
+  pub dt: f64,
+  pub dt_adv: f64,
+  pub dt_diff: f64,
+  pub limiting_cell: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CflStepStats {
+  pub substeps: usize,
+  pub advanced_dt: f64,
+  pub last_estimate: CflEstimate,
 }
 
 /// Explicit / implicit / hybrid choice.
@@ -247,6 +286,168 @@ where
     let mean_mag = (mag_sum / (grid.cell_count() as f64 * NV as f64)).max(1e-12);
     let mean_jump = if count == 0 { 0.0 } else { jump_sum / (count as f64) };
     mean_jump / mean_mag
+  }
+
+  /// Estimate a stable timestep based on Rusanov advection and model-provided diffusion Lipschitz.
+  pub fn estimate_cfl_dt(&self, cfg: &CflConfig) -> CflEstimate {
+    let grid = self.topo.grid();
+    let mut dt_best = f64::INFINITY;
+    let mut dt_adv_best = f64::INFINITY;
+    let mut dt_diff_best = f64::INFINITY;
+    let mut limiting_cell = None;
+
+    for cell in grid.iter_cells() {
+      let i = grid.cell_linear(cell);
+      let ui = self.u[i];
+
+      let mut adv_sum = [0.0; NV];
+      let mut diff_sum = [0.0; NV];
+
+      for face in self.topo.faces_of_cell(cell) {
+        let s = self.geom.face_area_vector(face);
+        let area = norm::<D>(s);
+        if area == 0.0 {
+          continue;
+        }
+
+        let mut n_unit = [0.0; D];
+        for d in 0..D {
+          n_unit[d] = s[d] / area;
+        }
+
+        let neighbor = self.topo.neighbor_across(face);
+        let ur = match neighbor {
+          Neighbor::Cell(nc) => {
+            let j = grid.cell_linear(nc);
+            self.u[j]
+          }
+          Neighbor::Boundary(bid) => {
+            let xf = self.geom.face_center_x(face);
+            self.model.boundary_state(bid, &ui, xf, self.time)
+          }
+        };
+
+        // Advective wave speed (Rusanov dissipation uses 0.5 * a)
+        let a = self
+          .model
+          .max_wave_speed(&ui, n_unit)
+          .max(self.model.max_wave_speed(&ur, n_unit));
+
+        // Diffusion Lipschitz ~ c where F_diff · n ≈ -c (u_r - u_l)
+        let x_l = self.geom.cell_center_x(face.cell);
+        let x_r = match neighbor {
+          Neighbor::Cell(nc) => self.geom.cell_center_x(nc),
+          Neighbor::Boundary(_) => {
+            let xf = self.geom.face_center_x(face);
+            let mut xr = [0.0; D];
+            for d in 0..D {
+              xr[d] = 2.0 * xf[d] - x_l[d];
+            }
+            xr
+          }
+        };
+        let mut dx = [0.0; D];
+        for d in 0..D {
+          dx[d] = x_r[d] - x_l[d];
+        }
+        let dist_n = dot::<D>(dx, n_unit).abs().max(1e-12);
+        let c = self
+          .model
+          .diffusion_lipschitz_coeff(&ui, &ur, n_unit, dist_n, self.time);
+
+        for m in 0..NV {
+          adv_sum[m] += area * 0.5 * a;
+          diff_sum[m] += area * c[m].max(0.0);
+        }
+      }
+
+      let vol = self.geom.cell_volume(cell);
+      for m in 0..NV {
+        let dt_adv = if adv_sum[m] > 0.0 {
+          cfg.cfl * vol / adv_sum[m]
+        } else {
+          f64::INFINITY
+        };
+        let dt_diff = if diff_sum[m] > 0.0 {
+          cfg.diffusion_cfl * vol / diff_sum[m]
+        } else {
+          f64::INFINITY
+        };
+        let dt_cell = dt_adv.min(dt_diff);
+
+        dt_adv_best = dt_adv_best.min(dt_adv);
+        dt_diff_best = dt_diff_best.min(dt_diff);
+
+        if dt_cell < dt_best {
+          dt_best = dt_cell;
+          limiting_cell = Some(i);
+        }
+      }
+    }
+
+    let dt_raw = if dt_best.is_finite() {
+      dt_best
+    } else {
+      cfg.max_dt
+    };
+
+    let dt = dt_raw.min(cfg.max_dt);
+    let dt_adv = dt_adv_best.min(cfg.max_dt);
+    let dt_diff = dt_diff_best.min(cfg.max_dt);
+
+    CflEstimate {
+      dt,
+      dt_adv,
+      dt_diff,
+      limiting_cell,
+    }
+  }
+
+  /// Advance up to `target_dt` using CFL-limited substeps. Returns stats about the last estimate.
+  pub fn step_cfl(&mut self, target_dt: f64, cfg: &CflConfig) -> CflStepStats {
+    let mut remaining = target_dt.max(0.0);
+    let mut substeps = 0usize;
+    let mut last_est = self.estimate_cfl_dt(cfg);
+
+    while remaining > 0.0 && substeps < cfg.max_substeps {
+      last_est = self.estimate_cfl_dt(cfg);
+      let dt_step = last_est.dt.min(remaining).min(cfg.max_dt);
+
+      if !dt_step.is_finite() || dt_step <= 0.0 {
+        warn!("CFL estimate produced non-positive dt; aborting step");
+        break;
+      }
+
+      self.step(dt_step);
+      remaining -= dt_step;
+      substeps += 1;
+    }
+
+    if remaining > 0.0 {
+      warn!(
+        "CFL step capped at {} substeps; {} time left unadvanced",
+        cfg.max_substeps,
+        remaining
+      );
+    }
+
+    let stats = CflStepStats {
+      substeps,
+      advanced_dt: target_dt - remaining,
+      last_estimate: last_est,
+    };
+
+    info!(
+      "CFL step: advanced_dt={:.3e}, substeps={}, dt_est={:.3e} (adv={:.3e}, diff={:.3e}), limiter_cell={:?}",
+      stats.advanced_dt,
+      stats.substeps,
+      stats.last_estimate.dt,
+      stats.last_estimate.dt_adv,
+      stats.last_estimate.dt_diff,
+      stats.last_estimate.limiting_cell,
+    );
+
+    stats
   }
 
   fn step_hybrid(
@@ -460,4 +661,3 @@ where
     }
   }
 }
-

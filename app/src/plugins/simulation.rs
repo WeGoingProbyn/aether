@@ -1,13 +1,14 @@
 use bevy::prelude::*;
 use continuum::solver::gmres::GmresConfig;
 use continuum::solver::implicit::{ImplicitConfig, NewtonConfig};
+use bevy::log::info;
 
 use crate::resources::Simulation;
 
 use continuum::grid::grid::Grid;
 use continuum::topology::StructuredTopology;
 use continuum::geometry::{MappedGeometry, IdentityMap};
-use continuum::solver::fv::{FiniteVolumeSolver, HybridConfig, HybridState, TimeIntegrator};
+use continuum::solver::fv::{CflConfig, FiniteVolumeSolver, HybridConfig, HybridState, TimeIntegrator};
 use continuum::solver::temperature::TemperatureAdvectionDiffusion;
 
 pub struct SimulationPlugin;
@@ -61,13 +62,49 @@ impl Plugin for SimulationPlugin {
       [t]
     });
 
-    app.insert_resource(Simulation { solver, dt: 0.001 })
+    app.insert_resource(Simulation {
+      solver,
+      dt: 1.0 / 60.0,
+      cfl: CflConfig {
+        cfl: 0.45,
+        diffusion_cfl: 0.3,
+        max_dt: 1.0 / 60.0,
+        max_substeps: 32,
+      },
+    })
       .add_systems(FixedUpdate, step_simulation);
   }
 }
 
 fn step_simulation(mut sim: ResMut<Simulation>) {
-  let dt = sim.dt;
-  sim.solver.step(dt);
-}
+  let target_dt = sim.dt;
+  let cfl_cfg = sim.cfl.clone();
+  let integrator_before = match &sim.solver.integrator {
+    TimeIntegrator::ExplicitEuler => "explicit",
+    TimeIntegrator::ImplicitBackwardEuler(_) => "implicit",
+    TimeIntegrator::Hybrid(_, _, st) => match st.phase {
+      continuum::solver::fv::HybridPhase::Explicit => "hybrid-explicit",
+      continuum::solver::fv::HybridPhase::Implicit => "hybrid-implicit",
+    },
+  };
 
+  let stats = sim.solver.step_cfl(target_dt, &cfl_cfg);
+  let integrator_after = match &sim.solver.integrator {
+    TimeIntegrator::ExplicitEuler => "explicit",
+    TimeIntegrator::ImplicitBackwardEuler(_) => "implicit",
+    TimeIntegrator::Hybrid(_, _, st) => match st.phase {
+      continuum::solver::fv::HybridPhase::Explicit => "hybrid-explicit",
+      continuum::solver::fv::HybridPhase::Implicit => "hybrid-implicit",
+    },
+  };
+
+  info!(
+    "Frame dt={:.3e}s, integrator {} -> {}, time={:.3e}, advanced={:.3e}s in {} substeps",
+    target_dt,
+    integrator_before,
+    integrator_after,
+    sim.solver.time,
+    stats.advanced_dt,
+    stats.substeps,
+  );
+}

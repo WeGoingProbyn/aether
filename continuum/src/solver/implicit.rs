@@ -2,6 +2,7 @@ use crate::geometry::{Geometry, VecN};
 use crate::solver::fv::{FiniteVolumeSolver, Model, State};
 use crate::solver::gmres::{gmres_left_precond, GmresConfig, LeftPreconditioner, LinearOperator};
 use crate::topology::{Neighbor, Topology};
+use log::{debug, warn};
 
 #[derive(Debug, Clone)]
 pub struct NewtonConfig {
@@ -301,9 +302,10 @@ where
 
   let mut g0_norm: Option<f64> = None;
   let mut last_rel = f64::INFINITY;
+  let t_next = solver.time + dt;
 
-  for _newton_it in 0..cfg.newton.max_iters {
-    solver.compute_l(&u, solver.time, &mut l_base);
+  for newton_it in 0..cfg.newton.max_iters {
+    solver.compute_l(&u, t_next, &mut l_base);
     pack::<NV>(&l_base, &mut l_base_flat);
     pack::<NV>(&u, &mut u_flat);
 
@@ -317,13 +319,18 @@ where
     last_rel = gnorm / *refn;
 
     if last_rel <= cfg.newton.tol {
+      debug!(
+        "Implicit BE converged in {} iters: rel_res={:.3e}",
+        newton_it + 1,
+        last_rel
+      );
       solver.u = u;
       solver.time += dt;
       return Ok(());
     }
 
     // Build left preconditioner from current u
-    let precond = build_jacobi_precond::<Topo, Geom, M, D, NV>(solver, &u, dt, solver.time);
+    let precond = build_jacobi_precond::<Topo, Geom, M, D, NV>(solver, &u, dt, t_next);
 
     // Jacobian-free operator
     let mut op = JacobianFreeOp::new(
@@ -332,7 +339,7 @@ where
       &l_base_flat,
       dt,
       cfg.newton.fd_epsilon,
-      solver.time,
+      t_next,
     );
 
     let adapter = OpAdapter(std::cell::RefCell::new(&mut op));
@@ -340,6 +347,7 @@ where
     delta.fill(0.0);
     let gm = gmres_left_precond(&adapter, &precond, &rhs, &mut delta, &cfg.gmres);
     if let Err(e) = gm {
+      warn!("GMRES failed at Newton iter {}: {}", newton_it + 1, e);
       return Err(ImplicitStepError::GmresFailed(e));
     }
 
@@ -347,9 +355,13 @@ where
     unpack_add::<NV>(&delta, &mut u, 1.0);
   }
 
+  warn!(
+    "Implicit BE did not converge in {} iters: last_rel={:.3e}",
+    cfg.newton.max_iters,
+    last_rel
+  );
   Err(ImplicitStepError::NewtonNoConverge {
     iters: cfg.newton.max_iters,
     rel_res: last_rel,
   })
 }
-

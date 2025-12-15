@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use continuum::geometry::{MappedGeometry, IdentityMap};
 use continuum::grid::grid::Grid;
 use continuum::solver::fv::FiniteVolumeSolver;
+use continuum::solver::fv::CflConfig;
 use continuum::solver::temperature::TemperatureAdvectionDiffusion;
 use continuum::topology::StructuredTopology;
 
@@ -15,6 +16,7 @@ pub struct Simulation {
     1
   >,
   pub dt: f64,
+  pub cfl: CflConfig,
 }
 
 #[derive(Resource)]

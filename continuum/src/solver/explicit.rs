@@ -1,4 +1,4 @@
-use crate::solver::fv::{FiniteVolumeSolver, Model, State};
+use crate::solver::fv::{FiniteVolumeSolver, Model};
 use crate::geometry::Geometry;
 use crate::topology::Topology;
 
@@ -22,4 +22,3 @@ where
     }
     solver.time += dt;
 }
-

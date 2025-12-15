@@ -101,12 +101,28 @@ impl<const D: usize> Model<D, 1> for TemperatureAdvectionDiffusion<D> {
     dist_n: f64,
     _t: f64,
   ) -> State<1> {
-    if self.kappa == 0.0 { [0.0] } else { [self.kappa / dist_n] };
-
+    if self.kappa == 0.0 {
+      return [0.0];
+    }
 
     // F_diff · n = -κ * ∂T/∂n  ≈ -κ * (T_R - T_L)/dist_n
     let dtdn = (ur[0] - ul[0]) / dist_n;
     [-self.kappa * dtdn]
   }
-}
 
+  fn diffusion_lipschitz_coeff(
+    &self,
+    _ul: &State<1>,
+    _ur: &State<1>,
+    _n_unit: VecN<D>,
+    dist_n: f64,
+    _t: f64,
+  ) -> State<1> {
+    if self.kappa == 0.0 {
+      [0.0]
+    } else {
+      // |∂(F_diff·n)/∂U| ≈ κ / dist_n
+      [self.kappa / dist_n]
+    }
+  }
+}
