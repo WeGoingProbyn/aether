@@ -1,0 +1,7 @@
+[package]
+name = "utility"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+utility_macros = { path = "./utility_macros" }
