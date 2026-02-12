@@ -409,11 +409,11 @@ where
     if self.row >= R { return None }
 
     let next = &self.inner[self.row][self.col];
+    self.col += 1;
+
     if self.col >= C {
       self.col = 0;
       self.row += 1;
-    } else {
-      self.col += 1;
     }
 
     Some(next)
@@ -439,11 +439,11 @@ where
     if self.row >= R { return None }
 
     let next = &mut self.inner[self.row][self.col] as *mut T;
+    self.col += 1;
+
     if self.col >= C {
       self.col = 0;
       self.row += 1;
-    } else {
-      self.col += 1;
     }
 
     // This is safe as long as we never
@@ -471,15 +471,13 @@ where
     if self.row >= R { return None }
 
     let next = self.inner[self.row][self.col].clone();
+    self.col += 1;
+
     if self.col >= C {
       self.col = 0;
       self.row += 1;
-    } else {
-      self.col += 1;
     }
 
-    // This is safe as long as we never
-    // hand out the same mut reference twice!
     Some(next)
   }
 }

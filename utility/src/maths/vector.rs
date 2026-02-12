@@ -45,7 +45,7 @@ where
   T: Default,
   for<'x> &'x T: Add<&'x T, Output = T>,
 {
-  fn sum(&self) -> T {
+  pub fn sum(&self) -> T {
     self.iter().fold(T::default(), |acc, x| &acc + x)
   }
 }
@@ -62,7 +62,7 @@ where
 impl<const C: usize> Vector<f32, C>
 {
   pub fn normalise(&self) -> Vector<f32, C> {
-    self / &self.sum()
+    self / &self.magnitude()
   }
 }
 
