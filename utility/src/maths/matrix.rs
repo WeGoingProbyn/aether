@@ -1,8 +1,8 @@
 use std::ops::{
-  Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, Sub, SubAssign,
+  Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign
 };
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 pub struct Matrix<T: Default, const C: usize, const R: usize> {
   pub(crate) inner: [[T; C]; R],
 }
@@ -195,6 +195,52 @@ where
   }
 }
 
+impl<'a, T: Default, const C: usize, const R: usize> Add<&'a T>
+  for &Matrix<T, C, R>
+where
+  for<'x> &'x T: Add<&'x T, Output = T>,
+{
+  type Output = Matrix<T, C, R>;
+
+  fn add(self, rhs: &'a T) -> Self::Output {
+    Matrix {
+      inner: std::array::from_fn(|j| {
+        std::array::from_fn(|i| &self.inner[j][i] + rhs)
+      }),
+    }
+  }
+}
+
+impl<T, const C: usize, const R: usize> Add<T> for Matrix<T, C, R>
+where
+  T: Add<Output = T> + Default + Clone,
+{
+  type Output = Self;
+
+  fn add(self, rhs: T) -> Self {
+    Matrix {
+      inner: std::array::from_fn(|j| {
+        std::array::from_fn(|i| {
+          self.inner[j][i].clone() + rhs.clone()
+        })
+      }),
+    }
+  }
+}
+
+impl<T, const C: usize, const R: usize> AddAssign<T> for Matrix<T, C, R>
+where
+  T: Default + Clone + AddAssign,
+{
+  fn add_assign(&mut self, rhs: T) {
+    for j in 0..R {
+      for i in 0..C {
+        self.inner[j][i] += rhs.clone();
+      }
+    }
+  }
+}
+
 // ================= Sub impls =======================//
 
 impl<'a, T: Default, const C: usize, const R: usize> Sub<&'a Matrix<T, C, R>>
@@ -238,6 +284,52 @@ where
     for j in 0..R {
       for i in 0..C {
         self.inner[j][i] -= rhs.inner[j][i].clone();
+      }
+    }
+  }
+}
+
+impl<'a, T: Default, const C: usize, const R: usize> Sub<&'a T>
+  for &Matrix<T, C, R>
+where
+  for<'x> &'x T: Sub<&'x T, Output = T>,
+{
+  type Output = Matrix<T, C, R>;
+
+  fn sub(self, rhs: &'a T) -> Self::Output {
+    Matrix {
+      inner: std::array::from_fn(|j| {
+        std::array::from_fn(|i| &self.inner[j][i] - rhs)
+      }),
+    }
+  }
+}
+
+impl<T, const C: usize, const R: usize> Sub<T> for Matrix<T, C, R>
+where
+  T: Sub<Output = T> + Default + Clone,
+{
+  type Output = Self;
+
+  fn sub(self, rhs: T) -> Self {
+    Matrix {
+      inner: std::array::from_fn(|j| {
+        std::array::from_fn(|i| {
+          self.inner[j][i].clone() - rhs.clone()
+        })
+      }),
+    }
+  }
+}
+
+impl<T, const C: usize, const R: usize> SubAssign<T> for Matrix<T, C, R>
+where
+  T: Default + Clone + SubAssign,
+{
+  fn sub_assign(&mut self, rhs: T) {
+    for j in 0..R {
+      for i in 0..C {
+        self.inner[j][i] -= rhs.clone();
       }
     }
   }
@@ -382,6 +474,107 @@ where
           acc = acc + prod;
         }
         out.inner[j][i] = acc;
+      }
+    }
+    out
+  }
+}
+
+impl<T, const K: usize, const N: usize, const R: usize> MulAssign<Matrix<T, R, K>>
+  for Matrix<T, K, N>
+where
+  T: Mul<Output = T> + Add<Output = T> + Default + Clone,
+{
+  fn mul_assign(&mut self, rhs: Matrix<T, R, K>) {
+    for j in 0..N {
+      for i in 0..R {
+        let mut acc = T::default();
+        for k in 0..K {
+          let prod = self.inner[j][k].clone() * rhs.inner[k][i].clone();
+          acc = acc + prod;
+        }
+        self.inner[j][i] = acc;
+      }
+    }
+  }
+}
+
+impl<'a, T: Default, const C: usize, const R: usize> Mul<&'a T>
+  for &Matrix<T, C, R>
+where
+  for<'x> &'x T: Mul<&'x T, Output = T>,
+{
+  type Output = Matrix<T, C, R>;
+
+  fn mul(self, rhs: &'a T) -> Self::Output {
+    Matrix {
+      inner: std::array::from_fn(|j| {
+        std::array::from_fn(|i| &self.inner[j][i] * rhs)
+      }),
+    }
+  }
+}
+
+impl<T, const C: usize, const R: usize> Mul<T> for Matrix<T, C, R>
+where
+  T: Mul<Output = T> + Default + Clone,
+{
+  type Output = Self;
+
+  fn mul(self, rhs: T) -> Self {
+    Matrix {
+      inner: std::array::from_fn(|j| {
+        std::array::from_fn(|i| {
+          self.inner[j][i].clone() * rhs.clone()
+        })
+      }),
+    }
+  }
+}
+
+impl<T, const C: usize, const R: usize> MulAssign<T> for Matrix<T, C, R>
+where
+  T: Default + Clone + MulAssign,
+{
+  fn mul_assign(&mut self, rhs: T) {
+    for j in 0..R {
+      for i in 0..C {
+        self.inner[j][i] *= rhs.clone();
+      }
+    }
+  }
+}
+
+// ==================== Neg impl =====================//
+
+impl<T, const C: usize, const R: usize> Neg for &Matrix<T, C, R> 
+where 
+  T: Default + Neg,
+  for<'x> &'x T: Neg<Output = T>,
+{
+  type Output = Matrix<T, C, R>;
+
+  fn neg(self) -> Self::Output {
+    let mut out = Matrix::default();
+    for j in 0..R {
+      for i in 0..C {
+        out[j][i] = -&self[j][i];
+      }
+    }
+    out
+  }
+}
+
+impl<T, const C: usize, const R: usize> Neg for Matrix<T, C, R> 
+where 
+  T: Default + Clone + Neg<Output = T>,
+{
+  type Output = Self;
+  fn neg(self) -> Self::Output {
+    let mut out = Matrix::default();
+    for j in 0..R {
+      for i in 0..C {
+        out[j][i] = -self[j][i].clone();
       }
     }
     out

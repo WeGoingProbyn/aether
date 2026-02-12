@@ -1,5 +1,5 @@
 use std::ops::{
-  Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, Sub, SubAssign,
+  Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Sub, SubAssign
 };
 
 use crate::maths::matrix::Matrix;
@@ -342,6 +342,41 @@ where
   }
 }
 
+impl<'a, T: Default, const C: usize> Add<&'a T> for &Vector<T, C>
+where
+  for<'x> &'x T: Add<&'x T, Output = T>,
+{
+  type Output = Vector<T, C>;
+
+  fn add(self, rhs: &'a T) -> Self::Output {
+    Vector {
+      inner: &self.inner + rhs,
+    }
+  }
+}
+
+impl<T, const C: usize> Add<T> for Vector<T, C>
+where
+  T: Add<Output = T> + Default + Clone,
+{
+  type Output = Self;
+
+  fn add(self, rhs: T) -> Self {
+    Vector {
+      inner: self.inner + rhs,
+    }
+  }
+}
+
+impl<T, const C: usize> AddAssign<T> for Vector<T, C>
+where
+  T: Default + Clone + AddAssign,
+{
+  fn add_assign(&mut self, rhs: T) {
+    self.inner += rhs;
+  }
+}
+
 // ====================== Sub impls ======================//
 
 impl<'a, T: Default, const C: usize> Sub<&'a Vector<T, C>> for &Vector<T, C>
@@ -376,6 +411,41 @@ where
 {
   fn sub_assign(&mut self, rhs: Self) {
     self.inner -= rhs.inner;
+  }
+}
+
+impl<'a, T: Default, const C: usize> Sub<&'a T> for &Vector<T, C>
+where
+  for<'x> &'x T: Sub<&'x T, Output = T>,
+{
+  type Output = Vector<T, C>;
+
+  fn sub(self, rhs: &'a T) -> Self::Output {
+    Vector {
+      inner: &self.inner - rhs,
+    }
+  }
+}
+
+impl<T, const C: usize> Sub<T> for Vector<T, C>
+where
+  T: Sub<Output = T> + Default + Clone,
+{
+  type Output = Self;
+
+  fn sub(self, rhs: T) -> Self {
+    Vector {
+      inner: self.inner - rhs,
+    }
+  }
+}
+
+impl<T, const C: usize> SubAssign<T> for Vector<T, C>
+where
+  T: Default + Clone + SubAssign,
+{
+  fn sub_assign(&mut self, rhs: T) {
+    self.inner -= rhs;
   }
 }
 
@@ -473,6 +543,50 @@ where
 
   fn mul(self, rhs: Matrix<T, N, K>) -> Self::Output {
     (self.inner * rhs).into()
+  }
+}
+
+impl<T, const K: usize, const N: usize> MulAssign<Matrix<T, N, K>> for Vector<T, K>
+where
+  T: Default + Clone + Mul<T, Output = T> + Add<T, Output = T>,
+{
+  fn mul_assign(&mut self, rhs: Matrix<T, N, K>) {
+    self.inner *= rhs
+  }
+}
+
+impl<'a, T: Default, const C: usize> Mul<&'a T> for &Vector<T, C>
+where
+  for<'x> &'x T: Mul<&'x T, Output = T>,
+{
+  type Output = Vector<T, C>;
+
+  fn mul(self, rhs: &'a T) -> Self::Output {
+    Vector {
+      inner: &self.inner * rhs,
+    }
+  }
+}
+
+impl<T, const C: usize> Mul<T> for Vector<T, C>
+where
+  T: Mul<Output = T> + Default + Clone,
+{
+  type Output = Self;
+
+  fn mul(self, rhs: T) -> Self {
+    Vector {
+      inner: self.inner * rhs,
+    }
+  }
+}
+
+impl<T, const C: usize> MulAssign<T> for Vector<T, C>
+where
+  T: Default + Clone + MulAssign,
+{
+  fn mul_assign(&mut self, rhs: T) {
+    self.inner *= rhs;
   }
 }
 
