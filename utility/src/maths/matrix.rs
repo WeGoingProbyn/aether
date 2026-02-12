@@ -549,7 +549,7 @@ where
 
 impl<T, const C: usize, const R: usize> Neg for &Matrix<T, C, R> 
 where 
-  T: Default + Neg,
+  T: Default,
   for<'x> &'x T: Neg<Output = T>,
 {
   type Output = Matrix<T, C, R>;
