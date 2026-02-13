@@ -481,7 +481,7 @@ where
     out[2] = &d - &e;
 
     let f = &(&self[3] * &rhs[3]) - &(&self[0] * &rhs[0]);
-    let g = &(&self[1] * &rhs[1]) - &(&self[2] * &rhs[2]);
+    let g = &(&self[1] * &rhs[1]) + &(&self[2] * &rhs[2]);
     out[3] = &f - &g;
 
     out
@@ -510,7 +510,7 @@ where
     out[2] = d - e;
 
     let f = self[3].clone() * rhs[3].clone() - self[0].clone() * rhs[0].clone();
-    let g = self[1].clone() * rhs[1].clone() - self[2].clone() * rhs[2].clone();
+    let g = self[1].clone() * rhs[1].clone() + self[2].clone() * rhs[2].clone();
     out[3] = f - g;
 
     out
@@ -537,7 +537,7 @@ where
     out[2] = d - e;
 
     let f = self[3].clone() * rhs[3].clone() - self[0].clone() * rhs[0].clone();
-    let g = self[1].clone() * rhs[1].clone() - self[2].clone() * rhs[2].clone();
+    let g = self[1].clone() * rhs[1].clone() + self[2].clone() * rhs[2].clone();
     out[3] = f - g;
 
     *self = out
@@ -607,4 +607,321 @@ where
 
 // ================ Iterator impls =================//
 
+pub struct QuatIter<'a, T> 
+where 
+  T: Default,
+{
+  inner: &'a Matrix<T, 4, 1>,
+}
+
+impl<'a, T> Iterator for QuatIter<'a, T> 
+where
+  T: Default,
+{
+  type Item = &'a T;
+  fn next(&mut self) -> Option<Self::Item> {
+    self.inner.iter().next()
+  }
+}
+
+pub struct QuatIterMut<'a, T> 
+where 
+  T: Default,
+{
+  inner: &'a mut Matrix<T, 4, 1>,
+  col: usize,
+}
+
+impl<'a, T> Iterator for QuatIterMut<'a, T> 
+where
+  T: Default,
+{
+  type Item = &'a mut T;
+  fn next(&mut self) -> Option<Self::Item> {
+    if self.col >= 4 { return None }
+
+    let next = &mut self.inner[0][self.col] as *mut T;
+    self.col += 1;
+
+    // This is safe because we never
+    // index past the bound of C!
+    Some(unsafe { &mut *next })
+  }
+}
+
+pub struct QuatIterInto<T> 
+where 
+  T: Default + Clone,
+{
+  inner: Matrix<T, 4, 1>,
+  col: usize,
+}
+
+impl<T> Iterator for QuatIterInto<T> 
+where
+  T: Default + Clone,
+{
+  type Item = T;
+  fn next(&mut self) -> Option<Self::Item> {
+    if self.col >= 4 { return None }
+
+    let next = self.inner[0][self.col].clone();
+    self.col += 1;
+
+    // This is safe because we never
+    // index past the bound of C!
+    Some(next)
+  }
+}
+
+impl<T> Quaternion<T> 
+where 
+  T: Default,
+{
+  pub fn iter(&self) -> QuatIter<'_, T> {
+    QuatIter {
+      inner: &self.inner,
+    }
+  }
+
+  pub fn iter_mut(&mut self) -> QuatIterMut<'_, T> {
+    QuatIterMut {
+      inner: &mut self.inner,
+      col: 0,
+    }
+  }
+}
+
+impl<T> IntoIterator for Quaternion<T> 
+where 
+  T: Default + Clone,
+{
+  type Item = T;
+  type IntoIter = QuatIterInto<T>;
+
+  fn into_iter(self) -> Self::IntoIter {
+    QuatIterInto {
+      inner: self.inner,
+      col: 0,
+    }
+  }
+}
+
 // ================ Unit tests =================//
+
+#[cfg(test)]
+mod test {
+  use crate::maths::quaternion::Quaternion;
+  use crate::maths::vector::Vector;
+  use crate::maths::matrix::Matrix;
+
+  fn approx_eq_quat(a: &Quaternion<f32>, b: &Quaternion<f32>, eps: f32) -> bool {
+    for i in 0..4 {
+      if (a[i] - b[i]).abs() > eps { return false; }
+    }
+    true
+  }
+
+  fn approx_eq_vec3(a: &Vector<f32, 3>, b: &Vector<f32, 3>, eps: f32) -> bool {
+    for i in 0..3 {
+      if (a[i] - b[i]).abs() > eps { return false; }
+    }
+    true
+  }
+
+  fn approx_eq_mat4(a: &Matrix<f32, 4, 4>, b: &Matrix<f32, 4, 4>, eps: f32) -> bool {
+    for r in 0..4 {
+      for c in 0..4 {
+        if (a[r][c] - b[r][c]).abs() > eps { return false; }
+      }
+    }
+    true
+  }
+
+  #[test]
+  fn from_axis_angle_identity() {
+    let axis: Vector<f32, 3> = [0.0, 1.0, 0.0].into();
+    let q = Quaternion::<f32>::from_axis_angle(&axis, 0.0);
+    // angle=0 gives identity quaternion [0,0,0,1]
+    assert!((q[0]).abs() < 1e-6);
+    assert!((q[1]).abs() < 1e-6);
+    assert!((q[2]).abs() < 1e-6);
+    assert!((q[3] - 1.0).abs() < 1e-6);
+  }
+
+  #[test]
+  fn from_axis_angle_180_degrees() {
+    let axis: Vector<f32, 3> = [0.0, 0.0, 1.0].into();
+    let q = Quaternion::<f32>::from_axis_angle(&axis, std::f32::consts::PI);
+    // w = cos(pi/2) = 0, z = sin(pi/2) = 1
+    assert!((q[3]).abs() < 1e-5);
+    assert!((q[2] - 1.0).abs() < 1e-5);
+  }
+
+  #[test]
+  fn magnitude_unit_quaternion() {
+    let axis: Vector<f32, 3> = [1.0, 0.0, 0.0].into();
+    let q = Quaternion::<f32>::from_axis_angle(&axis, 1.5);
+    assert!((q.magnitude() - 1.0).abs() < 1e-6);
+  }
+
+  #[test]
+  fn inverse_of_unit_is_conjugate() {
+    let axis: Vector<f32, 3> = [1.0, 1.0, 0.0].into();
+    let q = Quaternion::<f32>::from_axis_angle(&axis, 0.8);
+    let inv = q.inverse().unwrap();
+    let conj = q.conjugate();
+    // for unit quaternions, inverse == conjugate
+    assert!(approx_eq_quat(&inv, &conj, 1e-6));
+  }
+
+  #[test]
+  fn inverse_q_times_q_is_identity() {
+    let axis: Vector<f32, 3> = [1.0, 2.0, 3.0].into();
+    let q = Quaternion::<f32>::from_axis_angle(&axis, 1.2);
+    let inv = q.inverse().unwrap();
+    let result = &q * &inv;
+    // should be identity: [0,0,0,1]
+    assert!((result[0]).abs() < 1e-5);
+    assert!((result[1]).abs() < 1e-5);
+    assert!((result[2]).abs() < 1e-5);
+    assert!((result[3] - 1.0).abs() < 1e-5);
+  }
+
+  #[test]
+  fn inverse_zero_returns_none() {
+    let q: Quaternion<f32> = [0.0, 0.0, 0.0, 0.0].into();
+    assert!(q.inverse().is_none());
+  }
+
+  #[test]
+  fn rotate_vector_90_around_z() {
+    let axis: Vector<f32, 3> = [0.0, 0.0, 1.0].into();
+    let q = Quaternion::<f32>::from_axis_angle(&axis, std::f32::consts::FRAC_PI_2);
+    let v: Vector<f32, 3> = [1.0, 0.0, 0.0].into();
+    let rotated = q.rotate_vector(&v);
+    let expected: Vector<f32, 3> = [0.0, 1.0, 0.0].into();
+    assert!(approx_eq_vec3(&rotated, &expected, 1e-5));
+  }
+
+  #[test]
+  fn rotate_vector_180_around_y() {
+    let axis: Vector<f32, 3> = [0.0, 1.0, 0.0].into();
+    let q = Quaternion::<f32>::from_axis_angle(&axis, std::f32::consts::PI);
+    let v: Vector<f32, 3> = [1.0, 0.0, 0.0].into();
+    let rotated = q.rotate_vector(&v);
+    let expected: Vector<f32, 3> = [-1.0, 0.0, 0.0].into();
+    assert!(approx_eq_vec3(&rotated, &expected, 1e-5));
+  }
+
+  #[test]
+  fn rotate_vector_preserves_magnitude() {
+    let axis: Vector<f32, 3> = [1.0, 1.0, 1.0].into();
+    let q = Quaternion::<f32>::from_axis_angle(&axis, 1.3);
+    let v: Vector<f32, 3> = [3.0, 4.0, 5.0].into();
+    let rotated = q.rotate_vector(&v);
+    assert!((rotated.magnitude() - v.magnitude()).abs() < 1e-4);
+  }
+
+  #[test]
+  fn to_matrix_matches_rotate_vector() {
+    let axis: Vector<f32, 3> = [1.0, 2.0, 3.0].into();
+    let q = Quaternion::<f32>::from_axis_angle(&axis, 0.7);
+    let v: Vector<f32, 3> = [4.0, 5.0, 6.0].into();
+
+    // rotate via quaternion
+    let r1 = q.rotate_vector(&v);
+
+    // rotate via matrix: extract 3x3 rotation from 4x4
+    let m = q.to_matrix();
+    let r2: Vector<f32, 3> = [
+      m[0][0]*v[0] + m[0][1]*v[1] + m[0][2]*v[2],
+      m[1][0]*v[0] + m[1][1]*v[1] + m[1][2]*v[2],
+      m[2][0]*v[0] + m[2][1]*v[1] + m[2][2]*v[2],
+    ].into();
+
+    assert!(approx_eq_vec3(&r1, &r2, 1e-4));
+  }
+
+  #[test]
+  fn to_matrix_from_matrix_roundtrip() {
+    let axis: Vector<f32, 3> = [0.0, 1.0, 0.0].into();
+    let q = Quaternion::<f32>::from_axis_angle(&axis, 1.0);
+    let m = q.to_matrix();
+    let q2 = Quaternion::<f32>::from_matrix(&m);
+    // quaternions can differ by sign and represent same rotation
+    let same = approx_eq_quat(&q, &q2, 1e-5);
+    let neg: Quaternion<f32> = [-q[0], -q[1], -q[2], -q[3]].into();
+    let same_neg = approx_eq_quat(&neg, &q2, 1e-5);
+    assert!(same || same_neg);
+  }
+
+  #[test]
+  fn from_euler_pitch_only() {
+    // pitch 90° around X should be same as axis_angle(X, 90°)
+    let q = Quaternion::<f32>::from_euler(std::f32::consts::FRAC_PI_2, 0.0, 0.0);
+    let axis: Vector<f32, 3> = [1.0, 0.0, 0.0].into();
+    let expected = Quaternion::<f32>::from_axis_angle(&axis, std::f32::consts::FRAC_PI_2);
+    let same = approx_eq_quat(&q, &expected, 1e-5);
+    let neg: Quaternion<f32> = [-expected[0], -expected[1], -expected[2], -expected[3]].into();
+    let same_neg = approx_eq_quat(&q, &neg, 1e-5);
+    assert!(same || same_neg);
+  }
+
+  #[test]
+  fn slerp_endpoints() {
+    let axis1: Vector<f32, 3> = [0.0, 1.0, 0.0].into();
+    let axis2: Vector<f32, 3> = [0.0, 0.0, 1.0].into();
+    let a = Quaternion::<f32>::from_axis_angle(&axis1, 0.5);
+    let b = Quaternion::<f32>::from_axis_angle(&axis2, 1.0);
+
+    let s0 = a.slerp(&b, 0.0);
+    let s1 = a.slerp(&b, 1.0);
+
+    assert!(approx_eq_quat(&s0, &a, 1e-5));
+    // slerp(a,b,1) may differ by sign from b
+    let same = approx_eq_quat(&s1, &b, 1e-5);
+    let neg: Quaternion<f32> = [-b[0], -b[1], -b[2], -b[3]].into();
+    let same_neg = approx_eq_quat(&s1, &neg, 1e-5);
+    assert!(same || same_neg);
+  }
+
+  #[test]
+  fn slerp_midpoint_unit_length() {
+    let axis1: Vector<f32, 3> = [1.0, 0.0, 0.0].into();
+    let axis2: Vector<f32, 3> = [0.0, 1.0, 0.0].into();
+    let a = Quaternion::<f32>::from_axis_angle(&axis1, 0.0);
+    let b = Quaternion::<f32>::from_axis_angle(&axis2, std::f32::consts::PI);
+    let mid = a.slerp(&b, 0.5);
+    // slerp preserves unit length
+    assert!((mid.magnitude() - 1.0).abs() < 1e-5);
+  }
+
+  #[test]
+  fn slerp_same_quaternion() {
+    let axis: Vector<f32, 3> = [1.0, 0.0, 0.0].into();
+    let q = Quaternion::<f32>::from_axis_angle(&axis, 0.5);
+    let mid = q.slerp(&q, 0.5);
+    assert!(approx_eq_quat(&mid, &q, 1e-5));
+  }
+
+  #[test]
+  fn conjugate_negates_xyz() {
+    let q: Quaternion<f32> = [1.0, 2.0, 3.0, 4.0].into();
+    let c = q.conjugate();
+    assert!((c[0] - (-1.0)).abs() < 1e-6);
+    assert!((c[1] - (-2.0)).abs() < 1e-6);
+    assert!((c[2] - (-3.0)).abs() < 1e-6);
+    assert!((c[3] - 4.0).abs() < 1e-6);
+  }
+
+  #[test]
+  fn quaternion_multiply_non_commutative() {
+    let a: Quaternion<f32> = [1.0, 0.0, 0.0, 1.0].into();
+    let b: Quaternion<f32> = [0.0, 1.0, 0.0, 1.0].into();
+    let ab = &a * &b;
+    let ba = &b * &a;
+    // quaternion multiplication is NOT commutative
+    assert!(!approx_eq_quat(&ab, &ba, 1e-6));
+  }
+}

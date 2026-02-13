@@ -34,7 +34,7 @@ macro_rules! impl_vector_float {
       }
 
       pub fn project(&self, other: &Vector<$t, C>) -> Vector<$t, C> {
-         other * &(self.dot(other) / other.dot(self))
+         other * &(self.dot(other) / other.dot(other))
       }
 
       pub fn reflect(&self, normal: &Vector<$t, C>) -> Vector<$t, C> {
@@ -646,5 +646,113 @@ mod test {
 
     assert_eq!(res, known);
     assert_eq!(res_clone, known);
+  }
+
+  fn approx_eq_vec<const C: usize>(a: &Vector<f32, C>, b: &Vector<f32, C>, eps: f32) -> bool {
+    for i in 0..C {
+      if (a[i] - b[i]).abs() > eps { return false; }
+    }
+    true
+  }
+
+  #[test]
+  fn magnitude_unit_vector() {
+    let v: Vector<f32, 3> = [1.0, 0.0, 0.0].into();
+    assert!((v.magnitude() - 1.0).abs() < 1e-6);
+  }
+
+  #[test]
+  fn magnitude_345() {
+    let v: Vector<f32, 3> = [3.0, 4.0, 0.0].into();
+    assert!((v.magnitude() - 5.0).abs() < 1e-6);
+  }
+
+  #[test]
+  fn normalise_preserves_direction() {
+    let v: Vector<f32, 3> = [3.0, 4.0, 0.0].into();
+    let n = v.normalise();
+    assert!((n.magnitude() - 1.0).abs() < 1e-6);
+    assert!((n[0] - 0.6).abs() < 1e-6);
+    assert!((n[1] - 0.8).abs() < 1e-6);
+  }
+
+  #[test]
+  fn lerp_endpoints() {
+    let a: Vector<f32, 3> = [0.0, 0.0, 0.0].into();
+    let b: Vector<f32, 3> = [10.0, 20.0, 30.0].into();
+    assert!(approx_eq_vec(&a.lerp(&b, 0.0), &a, 1e-6));
+    assert!(approx_eq_vec(&a.lerp(&b, 1.0), &b, 1e-6));
+  }
+
+  #[test]
+  fn lerp_midpoint() {
+    let a: Vector<f32, 3> = [0.0, 0.0, 0.0].into();
+    let b: Vector<f32, 3> = [10.0, 20.0, 30.0].into();
+    let mid = a.lerp(&b, 0.5);
+    let expected: Vector<f32, 3> = [5.0, 10.0, 15.0].into();
+    assert!(approx_eq_vec(&mid, &expected, 1e-6));
+  }
+
+  #[test]
+  fn distance_same_point() {
+    let a: Vector<f32, 3> = [1.0, 2.0, 3.0].into();
+    assert!(a.distance(&a) < 1e-6);
+  }
+
+  #[test]
+  fn distance_known() {
+    let a: Vector<f32, 3> = [0.0, 0.0, 0.0].into();
+    let b: Vector<f32, 3> = [3.0, 4.0, 0.0].into();
+    assert!((a.distance(&b) - 5.0).abs() < 1e-6);
+  }
+
+  #[test]
+  fn project_onto_axis() {
+    let v: Vector<f32, 3> = [3.0, 4.0, 0.0].into();
+    let x_axis: Vector<f32, 3> = [1.0, 0.0, 0.0].into();
+    let proj = v.project(&x_axis);
+    let expected: Vector<f32, 3> = [3.0, 0.0, 0.0].into();
+    assert!(approx_eq_vec(&proj, &expected, 1e-6));
+  }
+
+  #[test]
+  fn project_parallel() {
+    let v: Vector<f32, 3> = [5.0, 0.0, 0.0].into();
+    let dir: Vector<f32, 3> = [2.0, 0.0, 0.0].into();
+    let proj = v.project(&dir);
+    assert!(approx_eq_vec(&proj, &v, 1e-6));
+  }
+
+  #[test]
+  fn reflect_off_horizontal() {
+    // ray going down-right, reflecting off horizontal surface (normal = up)
+    let v: Vector<f32, 3> = [1.0, -1.0, 0.0].into();
+    let normal: Vector<f32, 3> = [0.0, 1.0, 0.0].into();
+    let r = v.reflect(&normal);
+    let expected: Vector<f32, 3> = [1.0, 1.0, 0.0].into();
+    assert!(approx_eq_vec(&r, &expected, 1e-6));
+  }
+
+  #[test]
+  fn reflect_perpendicular() {
+    // ray straight into surface reverses
+    let v: Vector<f32, 3> = [0.0, -1.0, 0.0].into();
+    let normal: Vector<f32, 3> = [0.0, 1.0, 0.0].into();
+    let r = v.reflect(&normal);
+    let expected: Vector<f32, 3> = [0.0, 1.0, 0.0].into();
+    assert!(approx_eq_vec(&r, &expected, 1e-6));
+  }
+
+  #[test]
+  fn dot_orthogonal_is_zero() {
+    let a: Vector<f32, 3> = [1.0, 0.0, 0.0].into();
+    let b: Vector<f32, 3> = [0.0, 1.0, 0.0].into();
+    assert!(a.dot(&b).abs() < 1e-6);
+  }
+
+  #[test]
+  fn dot_parallel() {
+    let a: Vector<f32, 3> = [2.0, 3.0, 4.0].into();
+    assert!((a.dot(&a) - a.magnitude() * a.magnitude()).abs() < 1e-4);
   }
 }

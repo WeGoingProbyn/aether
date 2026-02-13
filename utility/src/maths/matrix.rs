@@ -988,4 +988,181 @@ mod test {
     assert_eq!(res, known);
     assert_eq!(res_clone, known);
   }
+
+  fn approx_eq_mat<const C: usize, const R: usize>(
+    a: &Matrix<f32, C, R>, b: &Matrix<f32, C, R>, eps: f32,
+  ) -> bool {
+    for r in 0..R {
+      for c in 0..C {
+        if (a[r][c] - b[r][c]).abs() > eps { return false; }
+      }
+    }
+    true
+  }
+
+  #[test]
+  fn transpose_2x3() {
+    let m: Matrix<f32, 3, 2> = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]].into();
+    let t = m.transpose();
+    let expected: Matrix<f32, 2, 3> = [[1.0, 4.0], [2.0, 5.0], [3.0, 6.0]].into();
+    assert_eq!(t, expected);
+  }
+
+  #[test]
+  fn transpose_roundtrip() {
+    let m: Matrix<f32, 3, 3> = [
+      [1.0, 2.0, 3.0],
+      [4.0, 5.0, 6.0],
+      [7.0, 8.0, 9.0],
+    ].into();
+    assert_eq!(m.transpose().transpose(), m);
+  }
+
+  #[test]
+  fn determinant_2x2() {
+    let m: Matrix<f32, 2, 2> = [[3.0, 8.0], [4.0, 6.0]].into();
+    let det = m.determinant();
+    assert!((det - (-14.0)).abs() < 1e-6);
+  }
+
+  #[test]
+  fn determinant_3x3() {
+    let m: Matrix<f32, 3, 3> = [
+      [6.0, 1.0, 1.0],
+      [4.0, -2.0, 5.0],
+      [2.0, 8.0, 7.0],
+    ].into();
+    let det = m.determinant();
+    assert!((det - (-306.0)).abs() < 1e-4);
+  }
+
+  #[test]
+  fn determinant_4x4() {
+    let m: Matrix<f32, 4, 4> = [
+      [1.0, 2.0, 3.0, 4.0],
+      [5.0, 6.0, 7.0, 8.0],
+      [2.0, 6.0, 4.0, 8.0],
+      [3.0, 1.0, 1.0, 2.0],
+    ].into();
+    let det = m.determinant();
+    assert!((det - 72.0).abs() < 1e-3);
+  }
+
+  #[test]
+  fn determinant_identity_is_one() {
+    let i3 = Matrix::<f32, 3, 3>::identity(1.0);
+    let i4 = Matrix::<f32, 4, 4>::identity(1.0);
+    assert!((i3.determinant() - 1.0).abs() < 1e-6);
+    assert!((i4.determinant() - 1.0).abs() < 1e-6);
+  }
+
+  #[test]
+  fn determinant_singular_is_zero() {
+    let m: Matrix<f32, 3, 3> = [
+      [1.0, 2.0, 3.0],
+      [4.0, 5.0, 6.0],
+      [7.0, 8.0, 9.0],
+    ].into();
+    assert!(m.determinant().abs() < 1e-4);
+  }
+
+  #[test]
+  fn inverse_2x2() {
+    let m: Matrix<f32, 2, 2> = [[4.0, 7.0], [2.0, 6.0]].into();
+    let inv = m.inverse().unwrap();
+    let identity = Matrix::<f32, 2, 2>::identity(1.0);
+    let product = &m * &inv;
+    assert!(approx_eq_mat(&product, &identity, 1e-5));
+  }
+
+  #[test]
+  fn inverse_3x3() {
+    let m: Matrix<f32, 3, 3> = [
+      [3.0, 0.0, 2.0],
+      [2.0, 0.0, -2.0],
+      [0.0, 1.0, 1.0],
+    ].into();
+    let inv = m.inverse().unwrap();
+    let identity = Matrix::<f32, 3, 3>::identity(1.0);
+    let product = &m * &inv;
+    assert!(approx_eq_mat(&product, &identity, 1e-5));
+  }
+
+  #[test]
+  fn inverse_4x4() {
+    let m: Matrix<f32, 4, 4> = [
+      [1.0, 1.0, 1.0, -1.0],
+      [1.0, 1.0, -1.0, 1.0],
+      [1.0, -1.0, 1.0, 1.0],
+      [-1.0, 1.0, 1.0, 1.0],
+    ].into();
+    let inv = m.inverse().unwrap();
+    let identity = Matrix::<f32, 4, 4>::identity(1.0);
+    let product = &m * &inv;
+    assert!(approx_eq_mat(&product, &identity, 1e-5));
+  }
+
+  #[test]
+  fn inverse_singular_returns_none() {
+    let m: Matrix<f32, 3, 3> = [
+      [1.0, 2.0, 3.0],
+      [4.0, 5.0, 6.0],
+      [7.0, 8.0, 9.0],
+    ].into();
+    assert!(m.inverse().is_none());
+  }
+
+  #[test]
+  fn inverse_identity_is_identity() {
+    let i = Matrix::<f32, 4, 4>::identity(1.0);
+    let inv = i.inverse().unwrap();
+    assert!(approx_eq_mat(&i, &inv, 1e-6));
+  }
+
+  #[test]
+  fn scale_matrix() {
+    use crate::maths::vector::Vector;
+    let s: Vector<f32, 3> = [2.0, 3.0, 4.0].into();
+    let m = Matrix::<f32, 4, 4>::scale(&s);
+    assert!((m[0][0] - 2.0).abs() < 1e-6);
+    assert!((m[1][1] - 3.0).abs() < 1e-6);
+    assert!((m[2][2] - 4.0).abs() < 1e-6);
+    assert!((m[3][3] - 1.0).abs() < 1e-6);
+  }
+
+  #[test]
+  fn translation_matrix() {
+    let m = Matrix::<f32, 4, 4>::translation(&[5.0, 6.0, 7.0]);
+    assert!((m[0][3] - 5.0).abs() < 1e-6);
+    assert!((m[1][3] - 6.0).abs() < 1e-6);
+    assert!((m[2][3] - 7.0).abs() < 1e-6);
+    // diagonal is 1
+    assert!((m[0][0] - 1.0).abs() < 1e-6);
+    assert!((m[1][1] - 1.0).abs() < 1e-6);
+    assert!((m[2][2] - 1.0).abs() < 1e-6);
+    assert!((m[3][3] - 1.0).abs() < 1e-6);
+  }
+
+  #[test]
+  fn rotation_90_degrees_around_z() {
+    use crate::maths::vector::Vector;
+    let axis: Vector<f32, 3> = [0.0, 0.0, 1.0].into();
+    let angle = std::f32::consts::FRAC_PI_2;
+    let m = Matrix::<f32, 4, 4>::rotation(&axis, angle);
+    // Rotating (1,0,0) around Z by 90° gives (0,1,0)
+    // m * [1,0,0] = column 0 of rotation part
+    assert!((m[0][0] - 0.0).abs() < 1e-5); // cos(90) ≈ 0
+    assert!((m[1][0] - 1.0).abs() < 1e-5); // sin(90) ≈ 1
+    assert!((m[2][0] - 0.0).abs() < 1e-5);
+  }
+
+  #[test]
+  fn perspective_basic() {
+    let fov = std::f32::consts::FRAC_PI_2; // 90°
+    let m = Matrix::<f32, 4, 4>::perspective(fov, 1.0, 0.1, 100.0);
+    // f = 1/tan(45°) = 1.0, aspect = 1.0, so m[0][0] = 1.0
+    assert!((m[0][0] - 1.0).abs() < 1e-5);
+    assert!((m[1][1] - 1.0).abs() < 1e-5);
+    assert!((m[3][2] - (-1.0)).abs() < 1e-5);
+  }
 }
