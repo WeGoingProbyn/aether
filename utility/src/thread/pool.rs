@@ -1,6 +1,6 @@
 use std::{sync::{atomic::{AtomicBool, AtomicUsize, Ordering}, Arc, Condvar, Mutex}, thread::JoinHandle};
 
-use crate::{collections::graph::Graph, error::{AetherResult, Unpoison}, profiler::{Profiler, SpanGuard}, thread::{task::{Job, TaskHandle}, worker::Queue}};
+use crate::{collections::graph::Graph, error::{AetherResult, Unpoison}, profiler::Profiler, thread::{task::{Job, TaskHandle}, worker::Queue}};
 
 pub struct Context {
   pub(crate) workers: Vec<Arc<Queue>>,
@@ -9,31 +9,8 @@ pub struct Context {
   pub(crate) global_mutex: Mutex<()>,
 }
 
-impl Default for Context {
-  fn default() -> Self {
-    let n: usize = unsafe {
-      // This will never not be safe as 1usize can never be non zero or negative
-      std::thread::available_parallelism()
-        .unwrap_or(std::num::NonZero::new_unchecked(1usize))
-        .get() 
-    };
-    Context::new(n)
-  }
-}
-
-impl Context {
-  fn new(n: usize) -> Context {
-    Context {
-      workers: Vec::with_capacity(n),
-      shutdown: AtomicBool::new(false),
-      global_barrier: Condvar::new(),
-      global_mutex: Mutex::new(()),
-    }
-  }
-}
-
 pub struct Pool {
-  context: Arc<Context>,
+  pub(crate) context: Arc<Context>,
   next_worker: AtomicUsize,
   handles: Vec<JoinHandle<()>>,
 }
@@ -88,7 +65,56 @@ impl Pool {
     Ok(())
   }
 
-  fn new(n: usize) -> AetherResult<Pool> {
+  pub fn parallel_for<T, F>(&self, data: &mut [T], chunk_size: usize, f: F)
+where
+    T: Send + 'static,
+    F: Fn(&mut [T]) + Send + Sync,
+  {
+    if data.is_empty() { return; }
+
+    let remaining = Arc::new(AtomicUsize::new(0));
+    let done_mutex = Arc::new(Mutex::new(()));
+    let done_condvar = Arc::new(Condvar::new());
+
+    // we block until all jobs complete, so `f` and `data`
+    // outlive all submitted jobs. The transmute erases the lifetime
+    // bound but the blocking guarantee makes it sound.
+
+    #[allow(clippy::type_complexity)]
+    let f: Arc<dyn Fn(&mut [T]) + Send + Sync + 'static> = unsafe {
+      std::mem::transmute(Arc::new(f) as Arc<dyn Fn(&mut [T]) + Send + Sync>)
+    };
+
+    let chunks: Vec<&mut [T]> = data.chunks_mut(chunk_size).collect();
+    remaining.store(chunks.len(), Ordering::Release);
+
+    for chunk in chunks {
+      let f = Arc::clone(&f);
+      let remaining = Arc::clone(&remaining);
+      let done_condvar = Arc::clone(&done_condvar);
+
+      let ptr = chunk.as_mut_ptr() as usize;
+      let len = chunk.len();
+
+      self.submit(Box::new(move || {
+        // This will only truly be unsafe is chunks 
+        // overalp, which we've made sure that they don't
+        let chunk = unsafe { std::slice::from_raw_parts_mut(ptr as *mut T, len) };
+        f(chunk);
+
+        if remaining.fetch_sub(1, Ordering::AcqRel) == 1 {
+          done_condvar.notify_all();
+        }
+      }));
+    }
+
+    let mut guard = done_mutex.lock().unpoison();
+    while remaining.load(Ordering::Acquire) > 0 {
+      guard = done_condvar.wait(guard).unpoison();
+    }
+  }
+
+  pub fn new(n: usize) -> AetherResult<Pool> {
     let mut queues = Vec::with_capacity(n);
     for i in 0..n {
       queues.push(Arc::new(Queue::new(i)));
@@ -196,12 +222,12 @@ impl TaskGraph {
     TaskGraph::default()
   }
 
-  pub fn add<F>(&mut self, name: &'static str, f: F) -> usize
+  pub fn add<F>(&mut self, f: F) -> usize
 where
     F: FnOnce() + Send + 'static,
   {
     self.inner.add_node(TaskNode {
-      name,
+      //name,
       task: Some(Box::new(f)),
     })
   }
@@ -212,13 +238,13 @@ where
 }
 
 pub(crate) struct TaskNode {
-  name: &'static str,
+  //name: &'static str,
   task: Option<Job>,
 }
 
 struct GraphExecution {
   tasks: Mutex<Vec<Option<Job>>>,
-  names: Vec<&'static str>,             // for profiler spans
+  //names: Vec<&'static str>,             // for profiler spans
   dependents: Vec<Vec<usize>>,          // who to notify on completion
   remaining_deps: Vec<AtomicUsize>,     // per-task dep counter
   remaining_total: AtomicUsize,         // how many tasks left
@@ -229,13 +255,13 @@ struct GraphExecution {
 impl From<TaskGraph> for GraphExecution {
   fn from(graph: TaskGraph) -> Self {
     let count = graph.inner.next_node_id();
-    let mut names = Vec::with_capacity(count);
+    //let mut names = Vec::with_capacity(count);
     let mut dependents = vec![Vec::new(); count];
     let mut remaining_deps = Vec::with_capacity(count);
 
     dependents.iter_mut().enumerate().for_each(|(id, dep)| {
-      let node = graph.inner.get_node(id).unwrap();
-      names.push(node.data.name);
+      //let node = graph.inner.get_node(id).unwrap();
+      //names.push(node.data.name);
       remaining_deps.push(
         AtomicUsize::new(
           graph.inner.incoming_edges(id).len()
@@ -255,7 +281,7 @@ impl From<TaskGraph> for GraphExecution {
 
     GraphExecution {
       tasks: Mutex::new(tasks),
-      names,
+      //names,
       dependents,
       remaining_deps,
       remaining_total: AtomicUsize::new(count),
@@ -273,3 +299,6 @@ impl GraphExecution {
     }
   }
 }
+
+
+

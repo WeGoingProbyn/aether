@@ -2,7 +2,7 @@ use std::ops::{
   Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Sub, SubAssign
 };
 
-use crate::maths::matrix::Matrix;
+use crate::maths::{matrix::Matrix};
 
 #[derive(PartialEq)]
 pub struct Vector<T: Default, const C: usize> {
@@ -11,11 +11,47 @@ pub struct Vector<T: Default, const C: usize> {
 
 // ==================Lin alg functions=====================//
 
+macro_rules! impl_vector_float {
+($t:ty) => {
+  impl<const C: usize> Vector<$t, C> 
+  where
+    for<'x> &'x $t: Mul<&'x $t, Output = $t> + Add<&'x $t, Output = $t>,
+  {
+    pub fn lerp(&self, v1: &Vector<$t, C>, t: $t) -> Vector<$t, C> {
+      self * &(1.0 as $t - t) + v1 * &t
+    }
+
+    pub fn distance(&self, other: &Vector<$t, C>) -> $t {
+      (self - other).magnitude()
+    }
+
+    pub fn magnitude(&self) -> $t {
+      self.inner.dot(&self.inner).sqrt()
+    }
+
+    pub fn normalise(&self) -> Vector<$t, C> {
+      self / &self.magnitude()
+    }
+
+    pub fn project(&self, other: &Vector<$t, C>) -> Vector<$t, C> {
+       other * &(self.dot(other) / other.dot(self))
+    }
+
+    pub fn reflect(&self, normal: &Vector<$t, C>) -> Vector<$t, C> {
+      let d = self.dot(normal);
+      self - &(normal * &(2.0 as $t * d))  
+    }
+  }
+}
+}
+
+impl_vector_float!(f32);
+impl_vector_float!(f64);
+
 impl<T, const C: usize> Vector<T, C>
 where
   T: Default + Clone + AddAssign + Mul<Output = T>,
 {
-  #[allow(unused)]
   pub fn dot_clone(&self, rhs: &Vector<T, C>) -> T {
     self.inner.dot_clone(&rhs.inner)
   }
@@ -47,22 +83,6 @@ where
 {
   pub fn sum(&self) -> T {
     self.iter().fold(T::default(), |acc, x| &acc + x)
-  }
-}
-
-impl<const C: usize> Vector<f32, C>
-where
-  for<'x> &'x f32: Mul<&'x f32, Output = f32> + Add<&'x f32, Output = f32>,
-{
-  pub fn magnitude(&self) -> f32 {
-    self.inner.dot(&self.inner).sqrt()
-  }
-}
-
-impl<const C: usize> Vector<f32, C>
-{
-  pub fn normalise(&self) -> Vector<f32, C> {
-    self / &self.magnitude()
   }
 }
 

@@ -47,15 +47,18 @@ impl Queue {
       }
 
       // Drain other worker queues next: FIFO
+      let mut stolen = false;
       for worker in &context.workers {
         if self.index == worker.index { continue }
 
         if let Some(job) = worker.pop_front() {
           let _span = SpanGuard::new("worker::steal", "thread");
           job();
+          stolen = true;
           break;
         }
       }
+      if stolen { continue; }
 
       // Wait 1ms before trying again
       // let _span = SpanGuard::new("worker::barrier", "thread");

@@ -9,6 +9,148 @@ pub struct Matrix<T: Default, const C: usize, const R: usize> {
 
 // ================= Lin Alg functions ======================//
 
+  macro_rules! impl_matrix_float {                                                                                                                                                                                        
+  ($t:ty) => {
+    impl<const C: usize, const R: usize> Matrix<$t, C, R> {
+      pub fn transpose(&self) -> Matrix<$t, R, C> {
+        let mut result = [[0.0 as $t; R]; C];
+        for r in 0..R {
+          for c in 0..C {
+            result[c][r] = self[r][c];
+          }
+        }
+        result.into()
+      }
+    }
+
+    // 2x2
+    impl Matrix<$t, 2, 2> {
+      pub fn determinant(&self) -> $t {
+        self[0][0] * self[1][1] - self[0][1] * self[1][0]
+      }
+
+      pub fn inverse(&self) -> Option<Matrix<$t, 2, 2>> {
+        let det = self.determinant();
+        if det.abs() < 1e-10 as $t { return None; }
+        let inv_det = 1.0 as $t / det;
+        Some([
+          [ self[1][1] * inv_det, -self[0][1] * inv_det],
+          [-self[1][0] * inv_det,  self[0][0] * inv_det],
+        ].into())
+      }
+    }
+
+    // 3x3
+    impl Matrix<$t, 3, 3> {
+      pub fn determinant(&self) -> $t {
+        let m = |r: usize, c: usize| self[r][c];
+        m(0,0) * (m(1,1) * m(2,2) - m(1,2) * m(2,1))
+        - m(0,1) * (m(1,0) * m(2,2) - m(1,2) * m(2,0))
+        + m(0,2) * (m(1,0) * m(2,1) - m(1,1) * m(2,0))
+      }
+
+      pub fn inverse(&self) -> Option<Matrix<$t, 3, 3>> {
+        let det = self.determinant();
+        if det.abs() < 1e-10 as $t { return None; }
+        let inv = 1.0 as $t / det;
+        let m = |r: usize, c: usize| self[r][c];
+        Some([
+          [
+            (m(1,1)*m(2,2) - m(1,2)*m(2,1)) * inv,
+            (m(0,2)*m(2,1) - m(0,1)*m(2,2)) * inv,
+            (m(0,1)*m(1,2) - m(0,2)*m(1,1)) * inv,
+          ],
+          [
+            (m(1,2)*m(2,0) - m(1,0)*m(2,2)) * inv,
+            (m(0,0)*m(2,2) - m(0,2)*m(2,0)) * inv,
+            (m(0,2)*m(1,0) - m(0,0)*m(1,2)) * inv,
+          ],
+          [
+            (m(1,0)*m(2,1) - m(1,1)*m(2,0)) * inv,
+            (m(0,1)*m(2,0) - m(0,0)*m(2,1)) * inv,
+            (m(0,0)*m(1,1) - m(0,1)*m(1,0)) * inv,
+          ],
+        ].into())
+      }
+    }
+
+    // 4x4
+    impl Matrix<$t, 4, 4> {
+      pub fn determinant(&self) -> $t {
+        let m = |r: usize, c: usize| self[r][c];
+
+        let s0 = m(0,0)*m(1,1) - m(1,0)*m(0,1);
+        let s1 = m(0,0)*m(1,2) - m(1,0)*m(0,2);
+        let s2 = m(0,0)*m(1,3) - m(1,0)*m(0,3);
+        let s3 = m(0,1)*m(1,2) - m(1,1)*m(0,2);
+        let s4 = m(0,1)*m(1,3) - m(1,1)*m(0,3);
+        let s5 = m(0,2)*m(1,3) - m(1,2)*m(0,3);
+
+        let c5 = m(2,2)*m(3,3) - m(3,2)*m(2,3);
+        let c4 = m(2,1)*m(3,3) - m(3,1)*m(2,3);
+        let c3 = m(2,1)*m(3,2) - m(3,1)*m(2,2);
+        let c2 = m(2,0)*m(3,3) - m(3,0)*m(2,3);
+        let c1 = m(2,0)*m(3,2) - m(3,0)*m(2,2);
+        let c0 = m(2,0)*m(3,1) - m(3,0)*m(2,1);
+
+        s0*c5 - s1*c4 + s2*c3 + s3*c2 - s4*c1 + s5*c0
+      }
+
+      pub fn inverse(&self) -> Option<Matrix<$t, 4, 4>> {
+        let m = |r: usize, c: usize| self[r][c];
+
+        let s0 = m(0,0)*m(1,1) - m(1,0)*m(0,1);
+        let s1 = m(0,0)*m(1,2) - m(1,0)*m(0,2);
+        let s2 = m(0,0)*m(1,3) - m(1,0)*m(0,3);
+        let s3 = m(0,1)*m(1,2) - m(1,1)*m(0,2);
+        let s4 = m(0,1)*m(1,3) - m(1,1)*m(0,3);
+        let s5 = m(0,2)*m(1,3) - m(1,2)*m(0,3);
+
+        let c5 = m(2,2)*m(3,3) - m(3,2)*m(2,3);
+        let c4 = m(2,1)*m(3,3) - m(3,1)*m(2,3);
+        let c3 = m(2,1)*m(3,2) - m(3,1)*m(2,2);
+        let c2 = m(2,0)*m(3,3) - m(3,0)*m(2,3);
+        let c1 = m(2,0)*m(3,2) - m(3,0)*m(2,2);
+        let c0 = m(2,0)*m(3,1) - m(3,0)*m(2,1);
+
+        let det = s0*c5 - s1*c4 + s2*c3 + s3*c2 - s4*c1 + s5*c0;
+        if det.abs() < 1e-10 as $t { return None; }
+        let inv = 1.0 as $t / det;
+
+        Some([
+          [
+            ( m(1,1)*c5 - m(1,2)*c4 + m(1,3)*c3) * inv,
+            (-m(0,1)*c5 + m(0,2)*c4 - m(0,3)*c3) * inv,
+            ( m(3,1)*s5 - m(3,2)*s4 + m(3,3)*s3) * inv,
+            (-m(2,1)*s5 + m(2,2)*s4 - m(2,3)*s3) * inv,
+          ],
+          [
+            (-m(1,0)*c5 + m(1,2)*c2 - m(1,3)*c1) * inv,
+            ( m(0,0)*c5 - m(0,2)*c2 + m(0,3)*c1) * inv,
+            (-m(3,0)*s5 + m(3,2)*s2 - m(3,3)*s1) * inv,
+            ( m(2,0)*s5 - m(2,2)*s2 + m(2,3)*s1) * inv,
+          ],
+          [
+            ( m(1,0)*c4 - m(1,1)*c2 + m(1,3)*c0) * inv,
+            (-m(0,0)*c4 + m(0,1)*c2 - m(0,3)*c0) * inv,
+            ( m(3,0)*s4 - m(3,1)*s2 + m(3,3)*s0) * inv,
+            (-m(2,0)*s4 + m(2,1)*s2 - m(2,3)*s0) * inv,
+          ],
+          [
+            (-m(1,0)*c3 + m(1,1)*c1 - m(1,2)*c0) * inv,
+            ( m(0,0)*c3 - m(0,1)*c1 + m(0,2)*c0) * inv,
+            (-m(3,0)*s3 + m(3,1)*s1 - m(3,2)*s0) * inv,
+            ( m(2,0)*s3 - m(2,1)*s1 + m(2,2)*s0) * inv,
+          ],
+        ].into())
+      }
+    }
+  }
+  }
+
+impl_matrix_float!(f32);
+impl_matrix_float!(f64);
+
 impl<T, const C: usize, const R: usize> Matrix<T, C, R>
 where
   T: Default + Clone + AddAssign + Mul<Output = T>,

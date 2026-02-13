@@ -1,16 +1,15 @@
-use utility::error::{
-  AetherError, AetherResult, ErrorDomain 
-};
+use utility::error::AetherResult;
 
-use utility::logger::{Logger, StdSink, Level};
-use utility::maths::matrix::Matrix;
-use utility::maths::quaternion::Quaternion;
-use utility::maths::vector::Vector;
+use utility::logger::{Level, Logger, StdSink};
+//use utility::maths::quaternion::Quaternion;
+//use utility::maths::matrix::Matrix;
+//use utility::maths::vector::Vector;
+//use utility::logger::LogWriter;
 
-use utility::profiler::Profiler;
 use utility::thread::pool::{Pool, TaskGraph};
-use utility::{debug, error, info, trace, warn};
+use utility::profiler::Profiler;
 use utility::profile;
+use utility::info;
 
 #[profile]
 fn testing() {
@@ -52,38 +51,37 @@ fn main() -> AetherResult<()> {
 
   Profiler::init();
 
-  // Create pool with one worker per core
   let pool = Pool::default();
 
   let handle = pool.spawn(|| {
     testing3();
   });
-  handle.signal().wait(); // block until done
+  handle.signal().wait();
 
   let mut graph = TaskGraph::new();
 
   info!("submitting broadphase");
-  let broadphase  = graph.add("broadphase", || {
+  let broadphase  = graph.add(|| {
     testing2();
     info!("completed broadphase")
   });
   info!("submitting narrowphase a");
-  let narrow1 = graph.add("narrowphase_a", || {
+  let narrow1 = graph.add(|| {
     testing();
     info!("completed narrowphase a")
   });
   info!("submitting narrowphase b");
-  let narrow2 = graph.add("narrowphase_b", || {
+  let narrow2 = graph.add(|| {
     testing();
     info!("completed narrowphase b")
   });
   info!("submitting solver");
-  let solver = graph.add("solver", || {
+  let solver = graph.add(|| {
     testing2();
     info!("completed solver")
   });
   info!("submitting integrate");
-  let integrate = graph.add("integrate", || {
+  let integrate = graph.add(|| {
     testing3();
     info!("completed integrate")
   });
@@ -96,9 +94,24 @@ fn main() -> AetherResult<()> {
 
   pool.execute(graph)?;
 
+  let mut data = [1f32; 100];
+  pool.parallel_for(&mut data, 25, |chunk| {
+    for thing in chunk {
+      *thing *= 2.0;
+    }
+  });
+
+  info!("{:?}", data);
+
   pool.flush_profiler();
-  // drop(pool);
-  Profiler::print(&mut std::io::stdout());
+  //Profiler::print(&mut LogWriter::new(Level::Debug));
 
   Ok(())
 }
+
+
+
+
+
+
+

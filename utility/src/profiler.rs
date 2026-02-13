@@ -65,7 +65,11 @@ impl Drop for SpanGuard {
       STATE.with(|s|{
         let mut borrow = s.borrow_mut();
         if let Some(span) = borrow.stack.pop() {
-          let profiler = PROFILER.get().unwrap();
+          let profiler = match PROFILER.get() {
+            Some(p) => p,
+            None => return,
+          };
+
           borrow.complete.push(SpanEvent { 
             name: span.name, 
             category: span.category, 

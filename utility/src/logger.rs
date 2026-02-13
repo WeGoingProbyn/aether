@@ -310,6 +310,28 @@ where
   }
 }
 
+pub struct LogWriter {
+  level: Level,
+}                                                                                                                                                                                                                       
+
+impl LogWriter {
+  pub fn new(level: Level) -> LogWriter {
+    LogWriter { level }
+  }
+}
+
+impl std::io::Write for LogWriter {
+  fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+    let msg = std::str::from_utf8(buf).unwrap_or("<invalid utf8>");
+    utility::log!(self.level, "{}", msg);
+    Ok(buf.len())
+  }
+
+  fn flush(&mut self) -> std::io::Result<()> {
+    Ok(())
+  }
+}
+
 #[macro_export]
 macro_rules! log {
 ($lvl:expr, $fmt:literal $(, $arg:expr)* $(; $k:ident = $v:expr)* $(,)?) => {{
