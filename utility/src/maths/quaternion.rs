@@ -2,7 +2,7 @@ use std::ops::{
   Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign
 };
 
-use crate::maths::matrix::Matrix;
+use crate::maths::{matrix::Matrix, vector::Vector};
 
 /// [x, y, z, w]
 pub struct Quaternion<T>
@@ -33,6 +33,177 @@ impl<T: Default> Default for Quaternion<T> {
 }
 
 // ================ Lin alg impls ================//
+
+macro_rules! impl_quaternion_float {
+  ($t:ty) => {
+    impl Quaternion<$t> {
+      /// Create quaternion from axis (will be normalised) and angle in radians
+      pub fn from_axis_angle(axis: &Vector<$t, 3>, angle: $t) -> Quaternion<$t> {
+        let half = angle / 2.0 as $t;
+        let s = half.sin();
+        let n = axis.normalise();
+        [n[0] * s, n[1] * s, n[2] * s, half.cos()].into()
+      }
+
+      /// Create quaternion from euler angles (radians)
+      /// pitch = X, yaw = Y, roll = Z, applied as Z * Y * X
+      pub fn from_euler(pitch: $t, yaw: $t, roll: $t) -> Quaternion<$t> {
+        let hp = pitch / 2.0 as $t;
+        let hy = yaw / 2.0 as $t;
+        let hr = roll / 2.0 as $t;
+
+        let (sp, cp) = (hp.sin(), hp.cos());
+        let (sy, cy) = (hy.sin(), hy.cos());
+        let (sr, cr) = (hr.sin(), hr.cos());
+
+        [
+          cy*sp*cr + sy*cp*sr,
+          sy*cp*cr - cy*sp*sr,
+          cy*cp*sr - sy*sp*cr,
+          cy*cp*cr + sy*sp*sr,
+        ].into()
+      }
+
+      /// Extract rotation from a 4x4 matrix (Shepperd's method)
+      pub fn from_matrix(m: &Matrix<$t, 4, 4>) -> Quaternion<$t> {
+        let trace = m[0][0] + m[1][1] + m[2][2];
+
+        if trace > 0.0 as $t {
+          let s = (trace + 1.0 as $t).sqrt() * 2.0 as $t;
+          [
+            (m[2][1] - m[1][2]) / s,
+            (m[0][2] - m[2][0]) / s,
+            (m[1][0] - m[0][1]) / s,
+            s / 4.0 as $t,
+          ].into()
+        } else if m[0][0] > m[1][1] && m[0][0] > m[2][2] {
+          let s = (1.0 as $t + m[0][0] - m[1][1] - m[2][2]).sqrt() * 2.0 as $t;
+          [
+            s / 4.0 as $t,
+            (m[0][1] + m[1][0]) / s,
+            (m[0][2] + m[2][0]) / s,
+            (m[2][1] - m[1][2]) / s,
+          ].into()
+        } else if m[1][1] > m[2][2] {
+          let s = (1.0 as $t - m[0][0] + m[1][1] - m[2][2]).sqrt() * 2.0 as $t;
+          [
+            (m[0][1] + m[1][0]) / s,
+            s / 4.0 as $t,
+            (m[1][2] + m[2][1]) / s,
+            (m[0][2] - m[2][0]) / s,
+          ].into()
+        } else {
+          let s = (1.0 as $t - m[0][0] - m[1][1] + m[2][2]).sqrt() * 2.0 as $t;
+          [
+            (m[0][2] + m[2][0]) / s,
+            (m[1][2] + m[2][1]) / s,
+            s / 4.0 as $t,
+            (m[1][0] - m[0][1]) / s,
+          ].into()
+        }
+      }
+
+      /// Convert to 4x4 rotation matrix
+      pub fn to_matrix(&self) -> Matrix<$t, 4, 4> {
+        let x = self[0];
+        let y = self[1];
+        let z = self[2];
+        let w = self[3];
+
+        let x2 = x + x;
+        let y2 = y + y;
+        let z2 = z + z;
+
+        let xx = x * x2;
+        let xy = x * y2;
+        let xz = x * z2;
+        let yy = y * y2;
+        let yz = y * z2;
+        let zz = z * z2;
+        let wx = w * x2;
+        let wy = w * y2;
+        let wz = w * z2;
+
+        [
+          [1.0 as $t - (yy + zz), xy - wz,               xz + wy,               0.0 as $t],
+          [xy + wz,               1.0 as $t - (xx + zz),  yz - wx,               0.0 as $t],
+          [xz - wy,               yz + wx,               1.0 as $t - (xx + yy),  0.0 as $t],
+          [0.0 as $t,             0.0 as $t,             0.0 as $t,              1.0 as $t],
+        ].into()
+      }
+
+      /// Magnitude squared
+      pub fn magnitude_sq(&self) -> $t {
+        self[0]*self[0] + self[1]*self[1] + self[2]*self[2] + self[3]*self[3]
+      }
+
+      /// Magnitude
+      pub fn magnitude(&self) -> $t {
+        self.magnitude_sq().sqrt()
+      }
+
+      /// Inverse. Returns None for zero quaternions.
+      pub fn inverse(&self) -> Option<Quaternion<$t>> {
+        let mag_sq = self.magnitude_sq();
+        if mag_sq < 1e-10 as $t { return None; }
+        let inv = 1.0 as $t / mag_sq;
+        Some([-self[0]*inv, -self[1]*inv, -self[2]*inv, self[3]*inv].into())
+      }
+
+      /// Rotate a vector by this quaternion
+      pub fn rotate_vector(&self, v: &Vector<$t, 3>) -> Vector<$t, 3> {
+        let u: Vector<$t, 3> = [self[0], self[1], self[2]].into();
+        let w = self[3];
+
+        let uv = u.cross(v);
+        let uuv = u.cross(&uv);
+
+        v + &(&uv * &(2.0 as $t * w) + &uuv * &(2.0 as $t))
+      }
+
+      /// Spherical linear interpolation between two quaternions
+      pub fn slerp(&self, other: &Quaternion<$t>, t: $t) -> Quaternion<$t> {
+        let mut dot = self[0]*other[0] + self[1]*other[1]
+                    + self[2]*other[2] + self[3]*other[3];
+
+        // If dot is negative, negate one to take the shorter path
+        let mut other_sign = [other[0], other[1], other[2], other[3]];
+        if dot < 0.0 as $t {
+          dot = -dot;
+          other_sign[0] = -other_sign[0];
+          other_sign[1] = -other_sign[1];
+          other_sign[2] = -other_sign[2];
+          other_sign[3] = -other_sign[3];
+        }
+
+        // If quaternions are very close, fall back to lerp to avoid division by zero
+        if dot > 0.9995 as $t {
+          return [
+            self[0] + t * (other_sign[0] - self[0]),
+            self[1] + t * (other_sign[1] - self[1]),
+            self[2] + t * (other_sign[2] - self[2]),
+            self[3] + t * (other_sign[3] - self[3]),
+          ].into();
+        }
+
+        let theta = dot.acos();
+        let sin_theta = theta.sin();
+        let a = ((1.0 as $t - t) * theta).sin() / sin_theta;
+        let b = (t * theta).sin() / sin_theta;
+
+        [
+          a * self[0] + b * other_sign[0],
+          a * self[1] + b * other_sign[1],
+          a * self[2] + b * other_sign[2],
+          a * self[3] + b * other_sign[3],
+        ].into()
+      }
+    }
+  }
+}
+
+impl_quaternion_float!(f32);
+impl_quaternion_float!(f64);
 
 impl<T: Default> Quaternion<T>
 where          

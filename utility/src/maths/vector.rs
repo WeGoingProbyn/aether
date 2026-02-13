@@ -12,37 +12,37 @@ pub struct Vector<T: Default, const C: usize> {
 // ==================Lin alg functions=====================//
 
 macro_rules! impl_vector_float {
-($t:ty) => {
-  impl<const C: usize> Vector<$t, C> 
-  where
-    for<'x> &'x $t: Mul<&'x $t, Output = $t> + Add<&'x $t, Output = $t>,
-  {
-    pub fn lerp(&self, v1: &Vector<$t, C>, t: $t) -> Vector<$t, C> {
-      self * &(1.0 as $t - t) + v1 * &t
-    }
+  ($t:ty) => {
+    impl<const C: usize> Vector<$t, C> 
+    where
+      for<'x> &'x $t: Mul<&'x $t, Output = $t> + Add<&'x $t, Output = $t>,
+    {
+      pub fn lerp(&self, v1: &Vector<$t, C>, t: $t) -> Vector<$t, C> {
+        self * &(1.0 as $t - t) + v1 * &t
+      }
 
-    pub fn distance(&self, other: &Vector<$t, C>) -> $t {
-      (self - other).magnitude()
-    }
+      pub fn distance(&self, other: &Vector<$t, C>) -> $t {
+        (self - other).magnitude()
+      }
 
-    pub fn magnitude(&self) -> $t {
-      self.inner.dot(&self.inner).sqrt()
-    }
+      pub fn magnitude(&self) -> $t {
+        self.inner.dot(&self.inner).sqrt()
+      }
 
-    pub fn normalise(&self) -> Vector<$t, C> {
-      self / &self.magnitude()
-    }
+      pub fn normalise(&self) -> Vector<$t, C> {
+        self / &self.magnitude()
+      }
 
-    pub fn project(&self, other: &Vector<$t, C>) -> Vector<$t, C> {
-       other * &(self.dot(other) / other.dot(self))
-    }
+      pub fn project(&self, other: &Vector<$t, C>) -> Vector<$t, C> {
+         other * &(self.dot(other) / other.dot(self))
+      }
 
-    pub fn reflect(&self, normal: &Vector<$t, C>) -> Vector<$t, C> {
-      let d = self.dot(normal);
-      self - &(normal * &(2.0 as $t * d))  
+      pub fn reflect(&self, normal: &Vector<$t, C>) -> Vector<$t, C> {
+        let d = self.dot(normal);
+        self - &(normal * &(2.0 as $t * d))  
+      }
     }
   }
-}
 }
 
 impl_vector_float!(f32);

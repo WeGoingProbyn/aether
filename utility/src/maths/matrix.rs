@@ -9,7 +9,7 @@ pub struct Matrix<T: Default, const C: usize, const R: usize> {
 
 // ================= Lin Alg functions ======================//
 
-  macro_rules! impl_matrix_float {                                                                                                                                                                                        
+macro_rules! impl_matrix_float {
   ($t:ty) => {
     impl<const C: usize, const R: usize> Matrix<$t, C, R> {
       pub fn transpose(&self) -> Matrix<$t, R, C> {
@@ -145,8 +145,77 @@ pub struct Matrix<T: Default, const C: usize, const R: usize> {
         ].into())
       }
     }
+
+    impl Matrix<$t, 4, 4> {
+      pub fn scale(v: &utility::maths::vector::Vector<$t, 3>) -> Matrix<$t, 4, 4> {
+        [
+          [v[0], 0.0 as $t, 0.0 as $t, 0.0 as $t],
+          [0.0 as $t, v[1], 0.0 as $t, 0.0 as $t],
+          [0.0 as $t, 0.0 as $t, v[2], 0.0 as $t],
+          [0.0 as $t, 0.0 as $t, 0.0 as $t, 1.0 as $t],
+        ].into()
+      }
+
+      pub fn translation(v: &[$t; 3]) -> Matrix<$t, 4, 4> {
+        [
+          [1.0 as $t, 0.0 as $t, 0.0 as $t, v[0]],
+          [0.0 as $t, 1.0 as $t, 0.0 as $t, v[1]],
+          [0.0 as $t, 0.0 as $t, 1.0 as $t, v[2]],
+          [0.0 as $t, 0.0 as $t, 0.0 as $t, 1.0 as $t],
+        ].into()
+      }
+
+      /// Rotation around an arbitrary axis by `angle` radians (Rodrigues' formula)
+      pub fn rotation(axis: &utility::maths::vector::Vector<$t, 3>, angle: $t) -> Matrix<$t, 4, 4> {
+        let n = axis.normalise();
+        let c = angle.cos();
+        let s = angle.sin();
+        let t = 1.0 as $t - c;
+        let x = n[0];
+        let y = n[1];
+        let z = n[2];
+        [
+          [t*x*x + c,     t*x*y - s*z,   t*x*z + s*y,   0.0 as $t],
+          [t*x*y + s*z,   t*y*y + c,     t*y*z - s*x,   0.0 as $t],
+          [t*x*z - s*y,   t*y*z + s*x,   t*z*z + c,     0.0 as $t],
+          [0.0 as $t,     0.0 as $t,     0.0 as $t,     1.0 as $t],
+        ].into()
+      }
+
+      /// Right-handed look-at view matrix
+      pub fn look_at(
+        eye: &utility::maths::vector::Vector<$t, 3>,
+        target: &utility::maths::vector::Vector<$t, 3>,
+        up: &utility::maths::vector::Vector<$t, 3>,
+      ) -> Matrix<$t, 4, 4> {
+        let f = (target - eye).normalise();
+        let r = f.cross(up).normalise();
+        let u = r.cross(&f);
+
+        [
+          [ r[0],  r[1],  r[2], -r.dot(eye)],
+          [ u[0],  u[1],  u[2], -u.dot(eye)],
+          [-f[0], -f[1], -f[2],  f.dot(eye)],
+          [0.0 as $t, 0.0 as $t, 0.0 as $t, 1.0 as $t],
+        ].into()
+      }
+
+      /// Right-handed perspective projection matrix
+      /// `fov` is vertical field of view in radians
+      pub fn perspective(fov: $t, aspect: $t, near: $t, far: $t) -> Matrix<$t, 4, 4> {
+        let f = 1.0 as $t / (fov / 2.0 as $t).tan();
+        let nf = near - far;
+
+        [
+          [f / aspect, 0.0 as $t, 0.0 as $t,              0.0 as $t],
+          [0.0 as $t,  f,         0.0 as $t,              0.0 as $t],
+          [0.0 as $t,  0.0 as $t, (far + near) / nf,      (2.0 as $t * far * near) / nf],
+          [0.0 as $t,  0.0 as $t, -1.0 as $t,             0.0 as $t],
+        ].into()
+      }
+    }
   }
-  }
+}
 
 impl_matrix_float!(f32);
 impl_matrix_float!(f64);
