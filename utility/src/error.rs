@@ -18,17 +18,17 @@ impl<T> Unpoison<T> for Result<T, std::sync::PoisonError<T>> {
 pub struct AetherError {
   context: Vec<String>,
   locations: Vec<Location<'static>>,
-  domain: ErrorDomain,
+  domain: Box<dyn ErrorDomain>,
   parent: Option<Box<dyn Error + Send + Sync + 'static>>,
 }
 
 impl AetherError {
   #[track_caller]
-  pub fn new(domain: ErrorDomain) -> AetherError {
+  pub fn new(domain: impl ErrorDomain + 'static) -> AetherError {
     AetherError {
       context: vec![],
       locations: vec![*Location::caller()],
-      domain,
+      domain: Box::new(domain),
       parent: None,
     }
   }
@@ -38,15 +38,6 @@ impl AetherError {
     self.context.push(ctx.into());
     self.locations.push(*Location::caller());
     self
-  }
-
-  pub fn domain(self, domain: ErrorDomain) -> AetherError {
-    AetherError {
-      context: self.context,
-      locations: self.locations,
-      domain,
-      parent: self.parent,
-    }
   }
 
   pub fn parent(
@@ -126,7 +117,7 @@ impl std::fmt::Debug for AetherError {
 
 impl From<std::io::Error> for AetherError {
   fn from(value: std::io::Error) -> Self {
-    AetherError::new(ErrorDomain::Utility(UtilityErrorKind::IoError))
+    AetherError::new(ErrorKind::IoError)
       .context("io error")
       .parent(value)
   }
@@ -134,50 +125,50 @@ impl From<std::io::Error> for AetherError {
 
 impl From<std::string::FromUtf8Error> for AetherError {
   fn from(value: std::string::FromUtf8Error) -> Self {
-    AetherError::new(ErrorDomain::Utility(UtilityErrorKind::Utf8Decode))
+    AetherError::new(ErrorKind::Utf8Decode)
       .context("utf8 decode error")
       .parent(value)
   }
 }
 
-pub enum ErrorDomain {
-  Utility(UtilityErrorKind),
+pub trait ErrorDomain: std::fmt::Display + Send + Sync {
+  fn domain(&self) -> &str;
 }
 
-impl std::fmt::Display for ErrorDomain {
-  fn fmt(
-    &self,
-    f: &mut std::fmt::Formatter<'_>,
-  ) -> Result<(), std::fmt::Error> {
-    write!(f, "domain:\t")?;
-    match self {
-      ErrorDomain::Utility(m) => write!(f, "utility\n  kind:\t{}", m)?,
-    }
-    Ok(())
-  }
-}
+// impl std::fmt::Display for ErrorDomain {
+//   fn fmt(
+//     &self,
+//     f: &mut std::fmt::Formatter<'_>,
+//   ) -> Result<(), std::fmt::Error> {
+//     write!(f, "domain:\t")?;
+//     match self {
+//       ErrorDomain::Utility(m) => write!(f, "utility\n  kind:\t{}", m)?,
+//     }
+//     Ok(())
+//   }
+// }
 
-pub enum UtilityErrorKind {
+pub enum ErrorKind {
   Unknown,
   IoError,
   Utf8Decode,
-  UnexpectedEof,
-  UnexpectedByte,
-  JsonDeserializer,
 }
 
-impl std::fmt::Display for UtilityErrorKind {
+impl ErrorDomain for ErrorKind {
+  fn domain(&self) -> &str {
+    "utility"
+  }
+}
+
+impl std::fmt::Display for ErrorKind {
   fn fmt(
     &self,
     f: &mut std::fmt::Formatter<'_>,
   ) -> Result<(), std::fmt::Error> {
     let string = match self {
-      UtilityErrorKind::Unknown => "an unknown error has occured",
-      UtilityErrorKind::UnexpectedByte => "a reader has encountered an unexpected byte",
-      UtilityErrorKind::UnexpectedEof => "a reader has encountered an unexpected end of file",
-      UtilityErrorKind::IoError => "encountered a std::io::Error",
-      UtilityErrorKind::Utf8Decode => "encountered a std::string::FromUtf8Error",
-      UtilityErrorKind::JsonDeserializer => "an error occured while deserializing json format",
+      ErrorKind::Unknown => "an unknown error has occured",
+      ErrorKind::IoError => "encountered a std::io::Error",
+      ErrorKind::Utf8Decode => "encountered a std::string::FromUtf8Error",
     };
 
     write!(f, "{}", string)?;

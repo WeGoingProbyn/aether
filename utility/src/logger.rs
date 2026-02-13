@@ -124,7 +124,7 @@ pub struct Record {
 
 impl std::fmt::Display for Record {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    let prefix1 = format!("[{}] ", Logger::iso_timestamp(self.ts));
+    let prefix1 = format!("[{}] [{}] ", Logger::iso_timestamp(self.ts), std::thread::current().name().unwrap_or("main"));
     let mut prefix2 = format!("{}:{}", self.meta.target, self.meta.line);
     let pad = " ".repeat(prefix1.len() + prefix2.len() + self.meta.level.display_len() + 1);
     prefix2.insert_str(0, &format!("{} ", self.meta.level));

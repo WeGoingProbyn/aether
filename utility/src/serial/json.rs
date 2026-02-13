@@ -1,4 +1,4 @@
-use crate::{error::{AetherError, ErrorDomain, UtilityErrorKind}, serial::{TextReader, deserialize::Deserializer, serialize::Serializer}};
+use crate::{error::{AetherError, ErrorDomain}, serial::{reader::TextReader, deserialize::Deserializer, serialize::Serializer}};
 
 pub struct JsonSerializer<W: std::io::Write> {
   writer: W,
@@ -173,7 +173,7 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
     self.reader.skip_whitespace()?;
     let s = self.reader.read_while(|b| b.is_ascii_digit() )?;
     s.parse::<u8>().map_err(|_|
-      AetherError::new(ErrorDomain::Utility(UtilityErrorKind::JsonDeserializer))
+      AetherError::new(ErrorKind::TypeConversion)
         .context(format!("failed to parse '{}' as u8", s))
     )
   }
@@ -182,7 +182,7 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
     self.reader.skip_whitespace()?;
     let s = self.reader.read_while(|b| b.is_ascii_digit() || b == b'-')?;
     s.parse::<i8>().map_err(|_|
-      AetherError::new(ErrorDomain::Utility(UtilityErrorKind::JsonDeserializer))
+      AetherError::new(ErrorKind::TypeConversion)
         .context(format!("failed to parse '{}' as i8", s))
     )
   }
@@ -191,7 +191,7 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
     self.reader.skip_whitespace()?;
     let s = self.reader.read_while(|b| b.is_ascii_digit() )?;
     s.parse::<u16>().map_err(|_|
-      AetherError::new(ErrorDomain::Utility(UtilityErrorKind::JsonDeserializer))
+      AetherError::new(ErrorKind::TypeConversion)
         .context(format!("failed to parse '{}' as u16", s))
     )
   }
@@ -200,7 +200,7 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
     self.reader.skip_whitespace()?;
     let s = self.reader.read_while(|b| b.is_ascii_digit() || b == b'-')?;
     s.parse::<i16>().map_err(|_|
-      AetherError::new(ErrorDomain::Utility(UtilityErrorKind::JsonDeserializer))
+      AetherError::new(ErrorKind::TypeConversion)
         .context(format!("failed to parse '{}' as i16", s))
     )
   }
@@ -209,7 +209,7 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
     self.reader.skip_whitespace()?;
     let s = self.reader.read_while(|b| b.is_ascii_digit() )?;
     s.parse::<u32>().map_err(|_|
-      AetherError::new(ErrorDomain::Utility(UtilityErrorKind::JsonDeserializer))
+      AetherError::new(ErrorKind::TypeConversion)
         .context(format!("failed to parse '{}' as u32", s))
     )
   }
@@ -218,7 +218,7 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
     self.reader.skip_whitespace()?;
     let s = self.reader.read_while(|b| b.is_ascii_digit() || b == b'-' )?;
     s.parse::<i32>().map_err(|_|
-      AetherError::new(ErrorDomain::Utility(UtilityErrorKind::JsonDeserializer))
+      AetherError::new(ErrorKind::TypeConversion)
         .context(format!("failed to parse '{}' as i32", s))
     )
   }
@@ -227,7 +227,7 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
     self.reader.skip_whitespace()?;
     let s = self.reader.read_while(|b| b.is_ascii_digit() )?;
     s.parse::<u64>().map_err(|_|
-      AetherError::new(ErrorDomain::Utility(UtilityErrorKind::JsonDeserializer))
+      AetherError::new(ErrorKind::TypeConversion)
         .context(format!("failed to parse '{}' as u64", s))
     )
   }
@@ -236,7 +236,7 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
     self.reader.skip_whitespace()?;
     let s = self.reader.read_while(|b| b.is_ascii_digit() || b == b'-' )?;
     s.parse::<i64>().map_err(|_|
-      AetherError::new(ErrorDomain::Utility(UtilityErrorKind::JsonDeserializer))
+      AetherError::new(ErrorKind::TypeConversion)
         .context(format!("failed to parse '{}' as i64", s))
     )
   }
@@ -245,7 +245,7 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
     self.reader.skip_whitespace()?;
     let s = self.reader.read_while(|b| b.is_ascii_digit() || b == b'.' || b == b'-' || b == b'e' || b == b'E')?;
     s.parse::<f32>().map_err(|_|
-      AetherError::new(ErrorDomain::Utility(UtilityErrorKind::JsonDeserializer))
+      AetherError::new(ErrorKind::TypeConversion)
         .context(format!("failed to parse '{}' as f32", s))
     )
   }
@@ -254,7 +254,7 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
     self.reader.skip_whitespace()?;
     let s = self.reader.read_while(|b| b.is_ascii_digit() || b == b'.' || b == b'-' || b == b'e' || b == b'E')?;
     s.parse::<f64>().map_err(|_|
-      AetherError::new(ErrorDomain::Utility(UtilityErrorKind::JsonDeserializer))
+      AetherError::new(ErrorKind::TypeConversion)
         .context(format!("failed to parse '{}' as f64", s))
     )
   }
@@ -271,8 +271,8 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
       "true" => Ok(true),
       "false" => Ok(false),
       _ => Err(
-        AetherError::new(ErrorDomain::Utility(UtilityErrorKind::JsonDeserializer))
-        .context(format!("expected 'true' or 'false', got '{}'", s))
+        AetherError::new(ErrorKind::TypeConversion)
+          .context(format!("expected 'true' or 'false', got '{}'", s))
       )
     }  
   }
@@ -283,7 +283,7 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
     match s.as_str() {
       "null" => Ok(()),
       _ => Err(
-        AetherError::new(ErrorDomain::Utility(UtilityErrorKind::JsonDeserializer))
+        AetherError::new(ErrorKind::TypeConversion)
         .context(format!("expected null, got '{}'", s))
       )
     }
@@ -312,12 +312,12 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
         Some(_) => {
           let s = self.reader.read_while(|b| b.is_ascii_digit())?;
           bytes.push(s.parse::<u8>().map_err(|_|
-            AetherError::new(ErrorDomain::Utility(UtilityErrorKind::JsonDeserializer))
+            AetherError::new(ErrorKind::TypeConversion)
               .context(format!("failed to parse '{}' as u8 in bytes array", s))
           )?);
         }
         None => return Err(
-          AetherError::new(ErrorDomain::Utility(UtilityErrorKind::JsonDeserializer))
+          AetherError::new(ErrorKind::UnexpectedEof)
             .context("unexpected EOF in bytes array")
         ),
       }
@@ -347,7 +347,7 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
       Some(b']') => Ok(false),
       Some(_) => Ok(true),
       None => Err(
-        AetherError::new(ErrorDomain::Utility(UtilityErrorKind::JsonDeserializer))
+        AetherError::new(ErrorKind::UnexpectedEof)
           .context("unexpected EOF while reading sequence")
       ),
     }
@@ -396,7 +396,7 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
     self.reader.expect_byte(b':')?;
     // find the variant index
     variants.iter().position(|&v| v == variant_name).ok_or_else(||
-      AetherError::new(ErrorDomain::Utility(UtilityErrorKind::JsonDeserializer))
+      AetherError::new(ErrorKind::UnknownVariant)
         .context(format!("unknown variant '{}', expected one of {:?}", variant_name, variants))
     )
   }
@@ -404,6 +404,34 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
   fn deserialize_enum_end(&mut self) -> Result<(), Self::Error> {
     self.reader.skip_whitespace()?;
     self.reader.expect_byte(b'}')?;
+    Ok(())
+  }
+}
+
+pub enum ErrorKind {
+  UnknownVariant,
+  UnexpectedEof,
+  TypeConversion,
+}
+
+impl ErrorDomain for ErrorKind {
+  fn domain(&self) -> &str {
+    "json serial"
+  }
+}
+
+impl std::fmt::Display for ErrorKind {
+  fn fmt(
+    &self,
+    f: &mut std::fmt::Formatter<'_>,
+  ) -> Result<(), std::fmt::Error> {
+    let string = match self {
+      ErrorKind::UnexpectedEof => "json serializer has encountered an unexpected EOF",
+      ErrorKind::UnknownVariant => "json serializer encountered an unknown variant when deserializing an enum",
+      ErrorKind::TypeConversion => "json serializer encountered an error when trying to convert between types",
+    };
+
+    write!(f, "{}", string)?;
     Ok(())
   }
 }

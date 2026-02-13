@@ -1,5 +1,5 @@
 use std::{
-  cell::RefCell, sync::{Mutex, OnceLock, atomic::{AtomicBool, Ordering}}, time::Instant,
+  cell::RefCell, sync::{atomic::{AtomicBool, Ordering}, Mutex, OnceLock}, time::Instant
 };
 
 use crate::debug;
@@ -12,7 +12,7 @@ struct SpanEvent {
   category: &'static str,
   start: u64,
   duration: u64,
-  thread_id: u64,
+  thread_id: String,
 }
 
 struct OpenSpan {
@@ -71,7 +71,7 @@ impl Drop for SpanGuard {
             category: span.category, 
             start: span.start.duration_since(profiler.epoch).as_micros() as u64, 
             duration: end.duration_since(span.start).as_micros() as u64,
-            thread_id: 0, 
+            thread_id: std::thread::current().name().unwrap_or("main").to_string(), 
           });
 
           if borrow.complete.len() >= 4096 {
@@ -96,13 +96,13 @@ impl Profiler {
     ENABLED.load(Ordering::Relaxed)
   }
 
-  pub fn print() {
+  pub fn print(writer: &mut impl std::io::Write) {
     let profiler = PROFILER.get().unwrap();
-    Profiler::flush(&mut std::io::stdout());
+    Profiler::flush(writer);
     debug!("{}", profiler);
   }
 
-  pub fn flush(writer: &mut dyn std::io::Write) {
+  pub fn flush(writer: &mut impl std::io::Write) {
     let profiler = match PROFILER.get() {
       Some(p) => p,
       None => return,
@@ -128,6 +128,19 @@ impl Profiler {
       );
     }
     let _ = write!(writer, "]}}\n\n");
+  }
+
+  pub fn flush_local() {
+    let profiler = match PROFILER.get() {
+      Some(p) => p,
+      None => return,
+    };
+    STATE.with(|s| {
+      let mut borrow = s.borrow_mut();
+      let mut events = profiler.events.lock().unwrap();
+
+      events.extend(borrow.complete.drain(..));
+    });
   }
 }
 
