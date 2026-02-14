@@ -2,7 +2,7 @@ use utility::maths::vector::Vector;
 
 use crate::topology::BoundaryTag;
 
-pub trait BoundaryCondition<const D: usize, const N: usize> {
+pub trait BoundaryCondition<const D: usize, const N: usize>: Send + Sync {
   fn ghost_state(&self, interior: &[f64; N], normal: &Vector<f64, D>) -> [f64; N];
 }
 

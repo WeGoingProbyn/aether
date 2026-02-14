@@ -1,6 +1,8 @@
+use utility::profile;
+
 use crate::geometry::CellId;
 
-pub trait FieldStorage<const N: usize> {
+pub trait FieldStorage<const N: usize>: Send + Sync {
   type CellView<'a>: CellView<N> where Self: 'a;
   type ComponentView<'a>: AsRef<[f64]> where Self: 'a;
 
@@ -61,6 +63,7 @@ impl<const N: usize> FieldStorage<N> for SoaField<N> {
     self.state[0].is_empty()
   }
 
+  #[profile]
   fn axpy(&mut self, alpha: f64, other: &Self) {
     for i in 0..N { 
       for (a, b) in self.state[i].iter_mut().zip(&other.state[i]) { 
@@ -69,6 +72,7 @@ impl<const N: usize> FieldStorage<N> for SoaField<N> {
     }
   }
 
+  #[profile]
   fn weighted_sum(&mut self, a: f64, x: &Self, b: f64, y: &Self) {
     for i in 0..N {
       for j in 0..self.state[i].len() {
@@ -133,6 +137,7 @@ impl<const N: usize> FieldStorage<N> for AosField<N> {
     self.state.is_empty()
   }
 
+  #[profile]
   fn axpy(&mut self, alpha: f64, other: &Self) {
     for (a, b) in self.state.iter_mut().zip(&other.state) { 
       for i in 0..N { 
@@ -141,6 +146,7 @@ impl<const N: usize> FieldStorage<N> for AosField<N> {
     }
   }
 
+  #[profile]
   fn weighted_sum(&mut self, a: f64, x: &Self, b: f64, y: &Self) {
     for j in 0..self.state.len() {
       for i in 0..N {

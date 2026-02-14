@@ -32,14 +32,14 @@ impl From<usize> for FaceId {
   }
 }
 
-pub trait CellGeometry<const D: usize> {
+pub trait CellGeometry<const D: usize>: Send + Sync {
   fn cell_centroid(&self, cell: CellId) -> &Point<D>;
   fn cell_volume(&self, cell: CellId) -> f64;
   fn cell_metrics(&self, cell: CellId) -> &CellMetrics<D>;
   fn cell_count(&self) -> usize;
 }
 
-pub trait FaceGeometry<const D: usize> {
+pub trait FaceGeometry<const D: usize>: Send + Sync {
   fn face_centroid(&self, face: FaceId) -> &Point<D>;
   fn face_area_vector(&self, face: FaceId) -> Vector<f64, D>;
   fn face_area(&self, face: FaceId) -> f64;

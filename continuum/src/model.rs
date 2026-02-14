@@ -1,4 +1,4 @@
-use utility::maths::vector::Vector;
+use utility::{maths::vector::Vector, profile};
 use crate::geometry::{CellMetrics, Point};
 
 pub trait ConservationLaw<const D: usize, const N: usize> {
@@ -21,6 +21,7 @@ pub trait NumericalFlux<const D: usize, const N: usize> {
 pub struct RusanovFlux;
 
 impl<const D: usize, const N: usize> NumericalFlux<D, N> for RusanovFlux {
+  #[profile]
   fn compute(
     &self,
     law: &dyn ConservationLaw<D, N>,
@@ -99,6 +100,7 @@ impl ConservationLaw<2, 4> for Euler2D {
     [0.0; 4] // no source terms for basic Euler
   }
 
+  #[profile]
   fn fix_state(&self, state: &mut [f64; 4]) {
     let floor = 1e-8;
     if state[0] < floor { state[0] = floor; }

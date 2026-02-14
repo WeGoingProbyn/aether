@@ -27,7 +27,7 @@ pub enum FaceConnection {
   Boundary { owner: CellId, tag: BoundaryTag, out_sign: f64 },
 }
 
-pub trait Topology {
+pub trait Topology: Send + Sync {
   fn face_connection(&self, face: FaceId) -> &FaceConnection;
   fn cell_faces(&self, cell: CellId) -> &[FaceId];
   // fn face_count(&self) -> usize;

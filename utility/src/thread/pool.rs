@@ -164,6 +164,37 @@ where
       guard = barrier.2.wait(guard).unpoison();
     }
   }
+
+  pub fn dispatch<F>(&self, tasks: Vec<F>)
+where
+    F: FnOnce() + Send,
+  {
+    if tasks.is_empty() { return; }
+    let remaining = Arc::new(AtomicUsize::new(tasks.len()));
+    let done_mutex = Arc::new(Mutex::new(()));
+    let done_condvar = Arc::new(Condvar::new());
+
+    for task in tasks {
+      let remaining = Arc::clone(&remaining);
+      let done_condvar = Arc::clone(&done_condvar);
+
+      // Safe: we block below, so task's captures outlive the job
+      let task: Box<dyn FnOnce() + Send + 'static> = unsafe {
+        std::mem::transmute(Box::new(task) as Box<dyn FnOnce() + Send>)
+      };
+      self.submit(Box::new(move || {
+        task();
+        if remaining.fetch_sub(1, Ordering::AcqRel) == 1 {
+          done_condvar.notify_all();
+        }
+      }));
+    }
+
+    let mut guard = done_mutex.lock().unpoison();
+    while remaining.load(Ordering::Acquire) > 0 {
+      guard = done_condvar.wait(guard).unpoison();
+    }
+  }
 }
 
 impl Drop for Pool {

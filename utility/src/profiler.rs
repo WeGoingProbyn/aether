@@ -119,19 +119,19 @@ impl Profiler {
       events.extend(borrow.complete.drain(..));
     });
 
-    let events = profiler.events.lock().unwrap();
-    let pid = std::process::id();
+    // let events = profiler.events.lock().unwrap();
+    // let pid = std::process::id();
 
-    let _ = write!(writer, "{{\"traceEvents\":[");
-    for (i, ev) in events.iter().enumerate() {
-      if i > 0 { let _ = write!(writer, ","); }
-      let _ = write!(
-        writer,
-        "{{\"name\":\"{}\",\"cat\":\"{}\",\"ph\":\"X\",\"ts\":{},\"dur\":{},\"pid\":{},\"tid\":{}}}",
-        ev.name, ev.category, ev.start, ev.duration, pid, ev.thread_id,
-      );
-    }
-    let _ = write!(writer, "]}}\n\n");
+    // let _ = write!(writer, "{{\"traceEvents\":[");
+    // for (i, ev) in events.iter().enumerate() {
+    //   if i > 0 { let _ = write!(writer, ","); }
+    //   let _ = write!(
+    //     writer,
+    //     "{{\"name\":\"{}\",\"cat\":\"{}\",\"ph\":\"X\",\"ts\":{},\"dur\":{},\"pid\":{},\"tid\":{}}}",
+    //     ev.name, ev.category, ev.start, ev.duration, pid, ev.thread_id,
+    //   );
+    // }
+    // let _ = write!(writer, "]}}\n\n");
   }
 
   pub fn flush_local() {

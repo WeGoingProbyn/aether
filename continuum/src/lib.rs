@@ -5,3 +5,4 @@ pub mod solver;
 pub mod boundary;
 pub mod geometry;
 pub mod topology;
+pub mod partition;

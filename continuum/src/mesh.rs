@@ -10,7 +10,7 @@ pub enum Axis {
 }
 
 pub struct StructuredBlock<const D: usize> {
-  // dims: [usize; D], // x, y, z
+  dims: [usize; D], // x, y, z
 
   // Geometry - per cell
   cell_centroids: Vec<Point<D>>,
@@ -46,7 +46,7 @@ impl<const D: usize> StructuredBlock<D> {
     dims.iter().product()
   }
 
-  fn face_count_for_axis(dims: &[usize; D], axis: usize) -> usize {
+  pub fn face_count_for_axis(dims: &[usize; D], axis: usize) -> usize {
     (0..D).map(|d| if d == axis { dims[d] + 1 } else { dims[d] }).product()
   }
 
@@ -66,7 +66,7 @@ impl<const D: usize> StructuredBlock<D> {
     ijk
   }
 
-  fn cell_index(dims: &[usize; D], ijk: &[usize; D]) -> usize {
+  pub fn cell_index(dims: &[usize; D], ijk: &[usize; D]) -> usize {
     let mut idx = 0;
     let mut stride = 1;
     for d in 0..D {
@@ -77,7 +77,7 @@ impl<const D: usize> StructuredBlock<D> {
   }
 
   // Face ijk within an axis's face set. Along `axis`, size is dims[axis]+1; others are dims[d]
-  fn face_indices(dims: &[usize; D], axis: usize, local: usize) -> [usize; D] {
+  pub fn face_indices(dims: &[usize; D], axis: usize, local: usize) -> [usize; D] {
     let mut ijk = [0; D];
     let mut remaining = local;
     for d in 0..D {
@@ -88,7 +88,7 @@ impl<const D: usize> StructuredBlock<D> {
     ijk
   }
 
-  fn boundary_tag(axis: usize, side: usize) -> BoundaryTag {
+  pub fn boundary_tag(axis: usize, side: usize) -> BoundaryTag {
     match (axis, side) {
       (0, 0) => BoundaryTag::Left,
       (0, 1) => BoundaryTag::Right,
@@ -283,7 +283,7 @@ impl<const D: usize> StructuredBlock<D> {
     );
 
     StructuredBlock {
-      // dims,
+      dims,
       cell_centroids,
       cell_volumes,
       cell_metrics,
@@ -297,6 +297,10 @@ impl<const D: usize> StructuredBlock<D> {
       boundary_face_lists,
       // coord_map,
     }
+  }
+
+  pub fn dims(&self) -> &[usize; D] {
+    &self.dims
   }
 }
 
