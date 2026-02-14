@@ -1,5 +1,5 @@
 use std::{
-  cell::RefCell, sync::{atomic::{AtomicBool, Ordering}, Mutex, OnceLock}, time::Instant
+  cell::RefCell, collections::HashMap, sync::{atomic::{AtomicBool, Ordering}, Mutex, OnceLock}, time::Instant
 };
 
 use crate::debug;
@@ -7,48 +7,42 @@ use crate::debug;
 static PROFILER: OnceLock<Profiler> = OnceLock::new();
 static ENABLED: AtomicBool = AtomicBool::new(true);
 
-struct SpanEvent {
-  name: &'static str,
-  category: &'static str,
-  start: u64,
-  duration: u64,
-  thread_id: String,
+struct SpanStats {
+  total_us: u64,
+  count: u64,
 }
 
 struct OpenSpan {
   name: &'static str,
-  category: &'static str,
   start: Instant,
 }
 
 struct ThreadState {
   stack: Vec<OpenSpan>,
-  complete: Vec<SpanEvent>,
+  stats: HashMap<&'static str, SpanStats>,
 }
 
 thread_local! {
   static STATE: RefCell<ThreadState> = RefCell::new(
-    ThreadState { 
+    ThreadState {
       stack: Vec::with_capacity(64),
-      complete: Vec::with_capacity(4096), 
+      stats: HashMap::new(),
     })
 }
 
 pub struct Profiler {
-  epoch: Instant,
-  events: Mutex<Vec<SpanEvent>>,
+  stats: Mutex<HashMap<&'static str, SpanStats>>,
 }
 
 pub struct SpanGuard;
 
 impl SpanGuard {
-  pub fn new(name: &'static str, category: &'static str) -> SpanGuard {
+  pub fn new(name: &'static str, _category: &'static str) -> SpanGuard {
     if Profiler::enabled() {
       STATE.with(|s| {
-        let mut borrow = s.borrow_mut(); 
+        let mut borrow = s.borrow_mut();
         borrow.stack.push(OpenSpan {
           name,
-          category,
           start: Instant::now(),
         });
       })
@@ -65,23 +59,13 @@ impl Drop for SpanGuard {
       STATE.with(|s|{
         let mut borrow = s.borrow_mut();
         if let Some(span) = borrow.stack.pop() {
-          let profiler = match PROFILER.get() {
-            Some(p) => p,
-            None => return,
-          };
-
-          borrow.complete.push(SpanEvent { 
-            name: span.name, 
-            category: span.category, 
-            start: span.start.duration_since(profiler.epoch).as_micros() as u64, 
-            duration: end.duration_since(span.start).as_micros() as u64,
-            thread_id: std::thread::current().name().unwrap_or("main").to_string(), 
+          let duration = end.duration_since(span.start).as_micros() as u64;
+          let entry = borrow.stats.entry(span.name).or_insert(SpanStats {
+            total_us: 0,
+            count: 0,
           });
-
-          if borrow.complete.len() >= 4096 {
-            let mut events = profiler.events.lock().unwrap();
-            events.extend(borrow.complete.drain(..));
-          }
+          entry.total_us += duration;
+          entry.count += 1;
         }
       })
     }
@@ -91,8 +75,7 @@ impl Drop for SpanGuard {
 impl Profiler {
   pub fn init() {
     let _ = PROFILER.set(Profiler {
-      epoch: Instant::now(),
-      events: Mutex::new(Vec::with_capacity(8192)),
+      stats: Mutex::new(HashMap::new()),
     });
   }
 
@@ -106,32 +89,8 @@ impl Profiler {
     debug!("{}", profiler);
   }
 
-  pub fn flush(writer: &mut impl std::io::Write) {
-    let profiler = match PROFILER.get() {
-      Some(p) => p,
-      None => return,
-    };
-
-    STATE.with(|s| {
-      let mut borrow = s.borrow_mut();
-      let mut events = profiler.events.lock().unwrap();
-
-      events.extend(borrow.complete.drain(..));
-    });
-
-    // let events = profiler.events.lock().unwrap();
-    // let pid = std::process::id();
-
-    // let _ = write!(writer, "{{\"traceEvents\":[");
-    // for (i, ev) in events.iter().enumerate() {
-    //   if i > 0 { let _ = write!(writer, ","); }
-    //   let _ = write!(
-    //     writer,
-    //     "{{\"name\":\"{}\",\"cat\":\"{}\",\"ph\":\"X\",\"ts\":{},\"dur\":{},\"pid\":{},\"tid\":{}}}",
-    //     ev.name, ev.category, ev.start, ev.duration, pid, ev.thread_id,
-    //   );
-    // }
-    // let _ = write!(writer, "]}}\n\n");
+  pub fn flush(_writer: &mut impl std::io::Write) {
+    Profiler::flush_local();
   }
 
   pub fn flush_local() {
@@ -141,29 +100,28 @@ impl Profiler {
     };
     STATE.with(|s| {
       let mut borrow = s.borrow_mut();
-      let mut events = profiler.events.lock().unwrap();
+      let mut global = profiler.stats.lock().unwrap();
 
-      events.extend(borrow.complete.drain(..));
+      for (name, local) in borrow.stats.drain() {
+        let entry = global.entry(name).or_insert(SpanStats {
+          total_us: 0,
+          count: 0,
+        });
+        entry.total_us += local.total_us;
+        entry.count += local.count;
+      }
     });
   }
 }
 
 impl std::fmt::Display for Profiler {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    let events = self.events.lock().unwrap();
+    let stats = self.stats.lock().unwrap();
 
-    // aggregate: name -> (total_duration_us, count)
-    let mut agg: Vec<(&str, u64, u64)> = Vec::new();
-    for ev in events.iter() {
-      if let Some(entry) = agg.iter_mut().find(|(n, _, _)| *n == ev.name) {
-        entry.1 += ev.duration;
-        entry.2 += 1;
-      } else {
-        agg.push((ev.name, ev.duration, 1));
-      }
-    }
+    let mut agg: Vec<(&str, u64, u64)> = stats.iter()
+      .map(|(&name, s)| (name, s.total_us, s.count))
+      .collect();
 
-    // sort by avg duration descending
     agg.sort_by(|a, b| (b.1 / b.2).cmp(&(a.1 / a.2)));
 
     let max_name = agg.iter().map(|(n, _, _)| n.len()).max().unwrap_or(0);

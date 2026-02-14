@@ -1,4 +1,3 @@
-use core::f64;
 use std::sync::Arc;
 
 use continuum::field::{SoaField, CellView, FieldStorage};
@@ -28,7 +27,7 @@ fn main() -> AetherResult<()> {
 
   let pool = Pool::default();
 
-  let dims = [100000, 1];
+  let dims = [10000, 1];
   let mesh = Arc::new(StructuredBlock::uniform(
     [0.0, 0.0].into(),
     [1.0, 0.01],
@@ -65,7 +64,7 @@ fn main() -> AetherResult<()> {
   bcs.register(BoundaryTag::Bottom, ReflectiveWall);
   bcs.register(BoundaryTag::Top, ReflectiveWall);
 
-  let config = SolverConfig::new(0.5, 1e-7, TimeIntegration::ForwardEuler);
+  let config = SolverConfig::new(0.5, 1e-2, TimeIntegration::ForwardEuler);
   let solver = FvmSolver::new(config, Euler2D::new(1.4), RusanovFlux);
 
   let mut time = 0.0;
