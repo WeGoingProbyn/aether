@@ -713,7 +713,6 @@ where
 mod test {
   use crate::maths::quaternion::Quaternion;
   use crate::maths::vector::Vector;
-  use crate::maths::matrix::Matrix;
 
   fn approx_eq_quat(a: &Quaternion<f32>, b: &Quaternion<f32>, eps: f32) -> bool {
     for i in 0..4 {
@@ -725,15 +724,6 @@ mod test {
   fn approx_eq_vec3(a: &Vector<f32, 3>, b: &Vector<f32, 3>, eps: f32) -> bool {
     for i in 0..3 {
       if (a[i] - b[i]).abs() > eps { return false; }
-    }
-    true
-  }
-
-  fn approx_eq_mat4(a: &Matrix<f32, 4, 4>, b: &Matrix<f32, 4, 4>, eps: f32) -> bool {
-    for r in 0..4 {
-      for c in 0..4 {
-        if (a[r][c] - b[r][c]).abs() > eps { return false; }
-      }
     }
     true
   }

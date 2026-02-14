@@ -4,7 +4,7 @@ use std::ops::{
 
 use crate::maths::{matrix::Matrix};
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 pub struct Vector<T: Default, const C: usize> {
   inner: Matrix<T, C, 1>,
 }
@@ -268,6 +268,17 @@ where
   fn from(item: Matrix<T, C, 1>) -> Vector<T, C> {
     Vector {
       inner: item.inner.into(),
+    }
+  }
+}
+
+impl<T, const C: usize> From<&Vector<T, C>> for Vector<T, C>
+where
+  T: Default + Clone,
+{
+  fn from(item: &Vector<T, C>) -> Vector<T, C> {
+    Vector {
+      inner: item.inner.clone(),
     }
   }
 }

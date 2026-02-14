@@ -1,7 +1,8 @@
 [workspace]
-members = ["sandbox",
+members = [
   "utility",
-  "sandbox",
+  "sandbox", 
+  "continuum",
 ]
 
   resolver = "2"
