@@ -1,7 +1,5 @@
 use std::{sync::{atomic::{AtomicBool, AtomicUsize, Ordering}, Arc, Condvar, Mutex}, thread::JoinHandle};
 
-use utility_macros::profile;
-
 use crate::{collections::graph::Graph, error::{AetherResult, Unpoison}, profiler::Profiler, thread::{task::{Job, TaskHandle}, worker::Queue}};
 
 pub struct Context {
@@ -170,7 +168,6 @@ impl Pool {
     }
   }
 
-  #[profile]
   pub fn dispatch<F>(&self, tasks: Vec<F>)
   where
     F: FnOnce() + Send,
