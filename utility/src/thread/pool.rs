@@ -1,5 +1,7 @@
 use std::{sync::{atomic::{AtomicBool, AtomicUsize, Ordering}, Arc, Condvar, Mutex}, thread::JoinHandle};
 
+use utility_macros::profile;
+
 use crate::{collections::graph::Graph, error::{AetherResult, Unpoison}, profiler::Profiler, thread::{task::{Job, TaskHandle}, worker::Queue}};
 
 pub struct Context {
@@ -66,7 +68,7 @@ impl Pool {
   }
 
   pub fn parallel_for<T, F>(&self, data: &mut [T], chunk_size: usize, f: F)
-where
+  where
     T: Send + 'static,
     F: Fn(&mut [T]) + Send + Sync,
   {
@@ -165,8 +167,9 @@ where
     }
   }
 
+  #[profile]
   pub fn dispatch<F>(&self, tasks: Vec<F>)
-where
+  where
     F: FnOnce() + Send,
   {
     if tasks.is_empty() { return; }

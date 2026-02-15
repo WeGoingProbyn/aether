@@ -6,3 +6,4 @@ pub mod boundary;
 pub mod geometry;
 pub mod topology;
 pub mod partition;
+pub mod cube_sphere;

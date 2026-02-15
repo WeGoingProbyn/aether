@@ -81,6 +81,7 @@ impl<const N: usize> FieldStorage<N> for SoaField<N> {
     }
   }
 
+  #[profile]
   fn clone_state(&self) -> Self {
     SoaField {
       state: std::array::from_fn(|i| self.state[i].clone())
@@ -155,6 +156,7 @@ impl<const N: usize> FieldStorage<N> for AosField<N> {
     }
   }
 
+  #[profile]
   fn clone_state(&self) -> Self {
     AosField {
       state: self.state.clone()

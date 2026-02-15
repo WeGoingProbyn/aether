@@ -1,14 +1,14 @@
 use utility::{maths::vector::Vector, profile};
 use crate::geometry::{CellMetrics, Point};
 
-pub trait ConservationLaw<const D: usize, const N: usize> {
+pub trait ConservationLaw<const D: usize, const N: usize>: Send + Sync {
   fn fix_state(&self, state: &mut [f64; N]);
   fn flux(&self, state: &[f64; N]) -> [[f64; N]; D];
   fn max_wave_speed(&self, state: &[f64; N]) -> f64;
   fn source(&self, state: &[f64; N], centroid: &Point<D>, metrics: &CellMetrics<D>) -> [f64; N];
 }
 
-pub trait NumericalFlux<const D: usize, const N: usize> {
+pub trait NumericalFlux<const D: usize, const N: usize>: Send + Sync {
   fn compute(
     &self,
     law: &dyn ConservationLaw<D, N>,

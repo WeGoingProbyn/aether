@@ -2,11 +2,13 @@ use utility::{profile, thread::pool::Pool};
 
 use crate::{boundary::BoundaryRegistry, field::{CellView, FieldStorage}, geometry::{CellGeometry, CellId, FaceGeometry}, model::{ConservationLaw, NumericalFlux}, partition::Decomposition, topology::{FaceConnection, Topology}};
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TimeIntegration {
   ForwardEuler,
   Rk2,
 }
 
+#[derive(Clone)]
 pub struct SolverConfig {
   cfl: f64,
   dt_max: f64,
@@ -27,7 +29,8 @@ impl SolverConfig {
   }
 }
 
-pub struct FvmSolver<const D: usize, const N: usize, L, F> 
+#[derive(Clone)]
+pub struct FvmSolver<const D: usize, const N: usize, L, F>
 where 
   L: ConservationLaw<D, N>,
   F: NumericalFlux<D, N>,
@@ -227,63 +230,65 @@ where
     self.step += 1;
     dt
   }
-}
 
-#[profile]
-pub fn parallel_step<const D: usize, const N: usize, L, F, S>(
-  pool: &Pool,
-  solver: &FvmSolver<D, N, L, F>,
-  decomp: &Decomposition<D, impl CellGeometry<D> + FaceGeometry<D> + Topology>,
-  states: &mut [S],
-  residuals: &mut [S],
-  bcs: &BoundaryRegistry<D, N>,
-) -> f64
- where
-  L: ConservationLaw<D, N> + Sync,
-  F: NumericalFlux<D, N> + Sync,
-  S: FieldStorage<N>,
-{
-  // 1. Exchange ghost cell data
-  decomp.exchange_ghosts(states);
+  #[profile]
+  pub fn parallel_step<S>(
+    &self,
+    pool: &Pool,
+    decomp: &Decomposition<D, impl CellGeometry<D> + FaceGeometry<D> + Topology>,
+    states: &mut [S],
+    residuals: &mut [S],
+    bcs: &BoundaryRegistry<D, N>,
+  ) -> f64
+where
+    L: ConservationLaw<D, N> + Sync,
+    F: NumericalFlux<D, N> + Sync,
+    S: FieldStorage<N>,
+  {
+    // 1. Exchange ghost cell data
+    decomp.exchange_ghosts(states);
 
-  // 2. Compute global dt (sequential — it's a min-reduction, fast)
-  let dt = decomp.partitions.iter().enumerate()
-    .map(|(i, p)| solver.compute_dt(&states[i], p))
-    .fold(solver.config().dt_max, f64::min);
+    // 2. Compute global dt (sequential — it's a min-reduction, fast)
+    let dt = decomp.partitions.iter().enumerate()
+      .map(|(i, p)| self.compute_dt(&states[i], p))
+      .fold(self.config.dt_max, f64::min);
 
-  // 3. Compute residuals per partition (parallel via dispatch)
-  let tasks: Vec<_> = states.iter()
-    .zip(residuals.iter_mut())
-    .zip(decomp.partitions.iter())
-    .map(|((state, residual), partition)| {
-      move || {
-        solver.compute_residual(state, residual, partition, bcs);
-      }
-    }).collect();
-  pool.dispatch(tasks);
-
-  // 4. Update state: state += dt * residual (parallel via dispatch)
-  let tasks: Vec<_> = states.iter_mut()
-    .zip(residuals.iter())
-    .map(|(state, residual)| {
-      move || { state.axpy(dt, residual); }
-    }).collect();
-  pool.dispatch(tasks);
-
-  // 5. Fix state per partition (parallel via dispatch)
-  let tasks: Vec<_> = states.iter_mut()
-    .zip(decomp.partitions.iter())
-    .map(|(state, partition)| {
-      move || {
-        for i in 0..partition.num_owned() {
-          let cell = CellId::from(i);
-          let mut s = *state.state(cell).as_state();
-          solver.law().fix_state(&mut s);
-          state.write(cell, &s);
+    // 3. Compute residuals per partition (parallel via dispatch)
+    let tasks: Vec<_> = states.iter()
+      .zip(residuals.iter_mut())
+      .zip(decomp.partitions.iter())
+      .map(|((state, residual), partition)| {
+        move || {
+          self.compute_residual(state, residual, partition, bcs);
         }
-      }
-    }).collect();
-  pool.dispatch(tasks);
+      }).collect();
+    pool.dispatch(tasks);
 
-  dt
+    // 4. Update state: state += dt * residual (parallel via dispatch)
+    let tasks: Vec<_> = states.iter_mut()
+      .zip(residuals.iter())
+      .map(|(state, residual)| {
+        move || { state.axpy(dt, residual); }
+      }).collect();
+    pool.dispatch(tasks);
+
+    // 5. Fix state per partition (parallel via dispatch)
+    let tasks: Vec<_> = states.iter_mut()
+      .zip(decomp.partitions.iter())
+      .map(|(state, partition)| {
+        move || {
+          for i in 0..partition.num_owned() {
+            let cell = CellId::from(i);
+            let mut s = *state.state(cell).as_state();
+            self.law.fix_state(&mut s);
+            state.write(cell, &s);
+          }
+        }
+      }).collect();
+    pool.dispatch(tasks);
+
+    dt
+  }
 }
+
+

@@ -5,7 +5,7 @@ use continuum::geometry::{CellId, IdentityMap, CellGeometry};
 use continuum::mesh::StructuredBlock;
 use continuum::boundary::{BoundaryRegistry, ReflectiveWall, Transmissive};
 use continuum::model::{Euler2D, RusanovFlux};
-use continuum::solver::{FvmSolver, SolverConfig, TimeIntegration, parallel_step};
+use continuum::solver::{FvmSolver, SolverConfig, TimeIntegration};
 use continuum::partition::decompose_structured;
 use continuum::topology::BoundaryTag;
 
@@ -27,7 +27,7 @@ fn main() -> AetherResult<()> {
 
   let pool = Pool::default();
 
-  let dims = [10000, 1];
+  let dims = [6000000, 1];
   let mesh = Arc::new(StructuredBlock::uniform(
     [0.0, 0.0].into(),
     [1.0, 0.01],
@@ -55,8 +55,10 @@ fn main() -> AetherResult<()> {
       }
     })).collect();
 
-  let mut residuals: Vec<SoaField<4>> = decomp.partitions.iter()
-    .map(|p| SoaField::zeros(p.cell_count())).collect();
+  let mut residuals = decomp.partitions.iter()
+    .map(|p| 
+      SoaField::zeros(p.cell_count()
+      )).collect::<Vec<SoaField<4>>>();
 
   let mut bcs = BoundaryRegistry::new();
   bcs.register(BoundaryTag::Left, Transmissive);
@@ -64,13 +66,13 @@ fn main() -> AetherResult<()> {
   bcs.register(BoundaryTag::Bottom, ReflectiveWall);
   bcs.register(BoundaryTag::Top, ReflectiveWall);
 
-  let config = SolverConfig::new(0.5, 1e-2, TimeIntegration::ForwardEuler);
+  let config = SolverConfig::new(0.5, 1e-8, TimeIntegration::ForwardEuler);
   let solver = FvmSolver::new(config, Euler2D::new(1.4), RusanovFlux);
 
   let mut time = 0.0;
   let mut step = 0;
-  while time < 0.2 {
-    let dt = parallel_step(&pool, &solver, &decomp, &mut states, &mut residuals, &bcs);
+  while step < 20 {
+    let dt = solver.parallel_step(&pool, &decomp, &mut states, &mut residuals, &bcs);
     time += dt;
     step += 1;
     info!("step={}, t={:.6}, dt={:.6}", step, time, dt);
