@@ -27,7 +27,7 @@ fn main() -> AetherResult<()> {
 
   let pool = Pool::default();
 
-  let dims = [6000000, 1];
+  let dims = [1000, 1];
   let mesh = Arc::new(StructuredBlock::uniform(
     [0.0, 0.0].into(),
     [1.0, 0.01],
@@ -36,7 +36,7 @@ fn main() -> AetherResult<()> {
   ));
 
   let gamma = 1.4;
-  let num_partitions = 16;
+  let num_partitions = 12;
   let decomp = decompose_structured(Arc::clone(&mesh), dims, num_partitions, 1);
 
   // Create per-partition fields
@@ -71,7 +71,7 @@ fn main() -> AetherResult<()> {
 
   let mut time = 0.0;
   let mut step = 0;
-  while step < 20 {
+  while time < 0.2 {
     let dt = solver.parallel_step(&pool, &decomp, &mut states, &mut residuals, &bcs);
     time += dt;
     step += 1;

@@ -93,18 +93,20 @@ impl Pool {
     for chunk in chunks {
       let f = Arc::clone(&f);
       let remaining = Arc::clone(&remaining);
+      let done_mutex = Arc::clone(&done_mutex);
       let done_condvar = Arc::clone(&done_condvar);
 
       let ptr = chunk.as_mut_ptr() as usize;
       let len = chunk.len();
 
       self.submit(Box::new(move || {
-        // This will only truly be unsafe is chunks 
+        // This will only truly be unsafe is chunks
         // overalp, which we've made sure that they don't
         let chunk = unsafe { std::slice::from_raw_parts_mut(ptr as *mut T, len) };
         f(chunk);
 
         if remaining.fetch_sub(1, Ordering::AcqRel) == 1 {
+          let _guard = done_mutex.lock().unpoison();
           done_condvar.notify_all();
         }
       }));
@@ -155,6 +157,7 @@ impl Pool {
       worker.push(Box::new(move || {
         Profiler::flush_local();
         if b.0.fetch_sub(1, Ordering::AcqRel) == 1 {
+          let _guard = b.1.lock().unpoison();
           b.2.notify_all();
         }
       }));
@@ -179,6 +182,7 @@ impl Pool {
 
     for task in tasks {
       let remaining = Arc::clone(&remaining);
+      let done_mutex = Arc::clone(&done_mutex);
       let done_condvar = Arc::clone(&done_condvar);
 
       // Safe: we block below, so task's captures outlive the job
@@ -188,6 +192,7 @@ impl Pool {
       self.submit(Box::new(move || {
         task();
         if remaining.fetch_sub(1, Ordering::AcqRel) == 1 {
+          let _guard = done_mutex.lock().unpoison();
           done_condvar.notify_all();
         }
       }));
@@ -228,6 +233,7 @@ fn enqueue_graph_task(id: usize, exec: &Arc<GraphExecution>, ctx: &Arc<Context>)
     }
 
     if exec.remaining_total.fetch_sub(1, Ordering::AcqRel) == 1 {
+      let _guard = exec.done_mutex.lock().unpoison();
       exec.done_condvar.notify_all();
     }
   });
