@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use utility::{maths::vector::Vector, profile};
 
-use crate::{field::{CellView, FieldStorage}, geometry::{CellGeometry, CellId, CellMetrics, FaceGeometry, FaceId, FaceMetrics, Point}, mesh::StructuredBlock, topology::{BoundaryTag, FaceConnection, Topology}};
+use crate::{field::{CellView, FieldStorage}, geometry::{CellGeometry, CellId, CellMetrics, FaceGeometry, FaceId, FaceMetrics, Point}, mesh::{Mesh, StructuredBlock}, topology::{BoundaryTag, FaceConnection, Topology}};
 
 /// Describes a ghost cell in a partition
 pub struct GhostDescriptor {
@@ -35,7 +35,10 @@ where
   boundary_face_lists: Vec<(BoundaryTag, Vec<(FaceId, CellId)>)>,
 }
 
-impl<const D: usize, M: CellGeometry<D> + FaceGeometry<D>> PartitionMesh<D, M> {
+impl<const D: usize, M> PartitionMesh<D, M> 
+where 
+  M: Mesh<D>
+{
   pub fn num_owned(&self) -> usize {                                  
     self.num_owned
   }                                                                   
@@ -71,7 +74,7 @@ where
 
 impl<const D: usize, M> FaceGeometry<D> for PartitionMesh<D, M>
 where
-  M: CellGeometry<D> + FaceGeometry<D>,
+  M: Mesh<D>,
 {
   fn face_centroid(&self, face: FaceId) -> &Point<D> {
     let global = self.local_to_global_face[face.index()];
@@ -100,7 +103,7 @@ where
 
 impl<const D: usize, M> Topology for PartitionMesh<D, M>
 where
-  M: CellGeometry<D> + FaceGeometry<D>,
+  M: Mesh<D>,
 {
   fn face_connection(&self, face: FaceId) -> &FaceConnection {
     &self.face_connections[face.index()]

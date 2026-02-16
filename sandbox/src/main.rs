@@ -66,7 +66,7 @@ fn main() -> AetherResult<()> {
   bcs.register(BoundaryTag::Bottom, ReflectiveWall);
   bcs.register(BoundaryTag::Top, ReflectiveWall);
 
-  let config = SolverConfig::new(0.5, 1e-2, TimeIntegration::ForwardEuler);
+  let config = SolverConfig::new(0.5, 1e-4, TimeIntegration::ForwardEuler);
   let solver = FvmSolver::new(config, Euler2D::new(1.4), RusanovFlux);
 
   let mut time = 0.0;

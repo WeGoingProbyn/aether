@@ -9,6 +9,13 @@ pub enum Axis {
   Z = 2,
 }
 
+pub trait Mesh<const D: usize>: CellGeometry<D> + FaceGeometry<D> + Topology {}
+
+impl<const D: usize, T> Mesh<D> for T
+where
+  T: CellGeometry<D> + FaceGeometry<D> + Topology,
+{}
+
 pub struct StructuredBlock<const D: usize> {
   dims: [usize; D], // x, y, z
 

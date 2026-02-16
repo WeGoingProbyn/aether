@@ -1,6 +1,6 @@
 use utility::{profile, thread::pool::Pool};
 
-use crate::{boundary::BoundaryRegistry, field::{CellView, FieldStorage}, geometry::{CellGeometry, CellId, FaceGeometry}, model::{ConservationLaw, NumericalFlux}, partition::Decomposition, topology::{FaceConnection, Topology}};
+use crate::{boundary::BoundaryRegistry, field::{CellView, FieldStorage}, geometry::{CellGeometry, CellId, FaceGeometry}, mesh::Mesh, model::{ConservationLaw, NumericalFlux}, partition::Decomposition, topology::{FaceConnection, Topology}};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TimeIntegration {
@@ -77,7 +77,7 @@ where
   pub fn compute_dt(
     &self,
     state: &impl FieldStorage<N>,
-    mesh: &(impl CellGeometry<D> + Topology),
+    mesh: &impl Mesh<D>,
   ) -> f64 {
     let mut dt_min = self.config.dt_max;
 
@@ -96,13 +96,16 @@ where
   } 
 
   #[profile]
-  pub fn compute_residual<S: FieldStorage<N>>(
+  pub fn compute_residual<S>(
     &self,
     state: &S,
     residual: &mut S,
-    mesh: &(impl CellGeometry<D> + FaceGeometry<D> + Topology),
+    mesh: &impl Mesh<D>,
     bcs: &BoundaryRegistry<D, N>,
-  ) {
+  ) 
+  where
+    S: FieldStorage<N>
+  {
     // Zero residual
     for i in 0..mesh.cell_count() {
       residual.write(CellId::from(i), &[0.0; N]);
@@ -235,7 +238,7 @@ where
   pub fn parallel_step<S>(
     &self,
     pool: &Pool,
-    decomp: &Decomposition<D, impl CellGeometry<D> + FaceGeometry<D> + Topology>,
+    decomp: &Decomposition<D, impl Mesh<D>>,
     states: &mut [S],
     residuals: &mut [S],
     bcs: &BoundaryRegistry<D, N>,
