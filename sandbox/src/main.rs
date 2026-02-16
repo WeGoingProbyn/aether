@@ -36,7 +36,7 @@ fn main() -> AetherResult<()> {
   ));
 
   let gamma = 1.4;
-  let num_partitions = 2;
+  let num_partitions = 4;
   let decomp = decompose_structured(Arc::clone(&mesh), dims, num_partitions, 1);
 
   // Create per-partition fields
