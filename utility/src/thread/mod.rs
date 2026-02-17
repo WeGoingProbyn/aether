@@ -152,4 +152,51 @@ mod test {
     std::thread::sleep(Duration::from_millis(100));
     assert_eq!(counter.load(Ordering::Relaxed), 100);
   }
+
+  fn panic_task() {
+    panic!("intentional panic for dispatch test");
+  }
+
+  fn noop_task() {}
+
+  #[test]
+  fn dispatch_panic_propagates_without_deadlock() {
+    let pool = Pool::new(2).unwrap();
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+      pool.dispatch(vec![panic_task as fn(), noop_task as fn()]);
+    }));
+
+    assert!(result.is_err());
+
+    // Pool should remain usable after panic propagation.
+    let flag = Arc::new(AtomicBool::new(false));
+    let f = Arc::clone(&flag);
+    let handle = pool.spawn(move || f.store(true, Ordering::Release));
+    handle.signal().wait();
+    assert!(flag.load(Ordering::Acquire));
+  }
+
+  #[test]
+  fn parallel_for_panic_propagates_without_deadlock() {
+    let pool = Pool::new(4).unwrap();
+    let mut data: Vec<u32> = (0..128).collect();
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+      pool.parallel_for(&mut data, 16, |_| {
+        panic!("intentional panic for parallel_for test");
+      });
+    }));
+
+    assert!(result.is_err());
+
+    // Pool should remain usable after panic propagation.
+    let counter = Arc::new(AtomicUsize::new(0));
+    let c = Arc::clone(&counter);
+    let handle = pool.spawn(move || {
+      c.fetch_add(1, Ordering::Relaxed);
+    });
+    handle.signal().wait();
+    assert_eq!(counter.load(Ordering::Relaxed), 1);
+  }
 }

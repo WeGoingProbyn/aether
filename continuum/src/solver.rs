@@ -234,29 +234,20 @@ where
     dt
   }
 
-  #[profile]
-  pub fn parallel_step<S>(
+  fn parallel_compute_residuals<M, S>(
     &self,
     pool: &Pool,
-    decomp: &Decomposition<D, impl Mesh<D>>,
-    states: &mut [S],
+    decomp: &Decomposition<D, M>,
+    states: &[S],
     residuals: &mut [S],
     bcs: &BoundaryRegistry<D, N>,
-  ) -> f64
+  )
 where
+    M: Mesh<D>,
     L: ConservationLaw<D, N> + Sync,
     F: NumericalFlux<D, N> + Sync,
     S: FieldStorage<N>,
   {
-    // 1. Exchange ghost cell data
-    decomp.exchange_ghosts(states);
-
-    // 2. Compute global dt (sequential — it's a min-reduction, fast)
-    let dt = decomp.partitions.iter().enumerate()
-      .map(|(i, p)| self.compute_dt(&states[i], p))
-      .fold(self.config.dt_max, f64::min);
-
-    // 3. Compute residuals per partition (parallel via dispatch)
     let tasks: Vec<_> = states.iter()
       .zip(residuals.iter_mut())
       .zip(decomp.partitions.iter())
@@ -266,16 +257,38 @@ where
         }
       }).collect();
     pool.dispatch(tasks);
+  }
 
-    // 4. Update state: state += dt * residual (parallel via dispatch)
+  fn parallel_axpy<S>(
+    &self,
+    pool: &Pool,
+    states: &mut [S],
+    residuals: &[S],
+    alpha: f64,
+  )
+where
+    S: FieldStorage<N>,
+  {
     let tasks: Vec<_> = states.iter_mut()
       .zip(residuals.iter())
       .map(|(state, residual)| {
-        move || { state.axpy(dt, residual); }
+        move || { state.axpy(alpha, residual); }
       }).collect();
     pool.dispatch(tasks);
+  }
 
-    // 5. Fix state per partition (parallel via dispatch)
+  fn parallel_fix_owned<M, S>(
+    &self,
+    pool: &Pool,
+    decomp: &Decomposition<D, M>,
+    states: &mut [S],
+  )
+where
+    M: Mesh<D>,
+    L: ConservationLaw<D, N> + Sync,
+    F: NumericalFlux<D, N> + Sync,
+    S: FieldStorage<N>,
+  {
     let tasks: Vec<_> = states.iter_mut()
       .zip(decomp.partitions.iter())
       .map(|(state, partition)| {
@@ -289,9 +302,74 @@ where
         }
       }).collect();
     pool.dispatch(tasks);
+  }
+
+  #[profile]
+  pub fn parallel_step<M, S>(
+    &mut self,
+    pool: &Pool,
+    decomp: &Decomposition<D, M>,
+    states: &mut [S],
+    residuals: &mut [S],
+    bcs: &BoundaryRegistry<D, N>,
+  ) -> f64
+where
+    M: Mesh<D>,
+    L: ConservationLaw<D, N> + Sync,
+    F: NumericalFlux<D, N> + Sync,
+    S: FieldStorage<N>,
+  {
+    // 1. Exchange ghost cell data
+    decomp.exchange_ghosts(states);
+
+    // 2. Compute global dt (sequential — it's a min-reduction, fast)
+    let dt = decomp.partitions.iter().enumerate()
+      .map(|(i, p)| self.compute_dt(&states[i], p))
+      .fold(self.config.dt_max, f64::min);
+
+    match self.config.integrator {
+      TimeIntegration::ForwardEuler => {
+        // 3. Compute residuals per partition (parallel via dispatch)
+        self.parallel_compute_residuals(pool, decomp, states, residuals, bcs);
+
+        // 4. Update state: state += dt * residual (parallel via dispatch)
+        self.parallel_axpy(pool, states, residuals, dt);
+      }
+
+      TimeIntegration::Rk2 => {
+        let u_old: Vec<S> = states.iter()
+          .map(|state| state.clone_state())
+          .collect();
+
+        // Stage 1: state = u + dt * R(u)
+        self.parallel_compute_residuals(pool, decomp, states, residuals, bcs);
+        self.parallel_axpy(pool, states, residuals, dt);
+
+        // Stage 2: state = u* + dt * R(u*)
+        decomp.exchange_ghosts(states);
+        self.parallel_compute_residuals(pool, decomp, states, residuals, bcs);
+        self.parallel_axpy(pool, states, residuals, dt);
+
+        // Combine stages: state = 0.5 * u_old + 0.5 * state
+        let tasks: Vec<_> = states.iter_mut()
+          .zip(u_old.iter())
+          .map(|(state, old_state)| {
+            move || {
+              let stage2 = state.clone_state();
+              state.weighted_sum(0.5, old_state, 0.5, &stage2);
+            }
+          }).collect();
+        pool.dispatch(tasks);
+      }
+    }
+
+    // 5. Fix state per partition (parallel via dispatch)
+    self.parallel_fix_owned(pool, decomp, states);
+
+    self.time += dt;
+    self.step += 1;
 
     dt
   }
 }
-
 

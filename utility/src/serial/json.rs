@@ -68,7 +68,7 @@ impl<W: std::io::Write> Serializer for JsonSerializer<W> {
   }
 
   fn serialize_str(&mut self, v: &str) -> Result<(), Self::Error> {
-    write!(self.writer, "\"{}\"", v)?;
+    write_json_string(&mut self.writer, v)?;
     Ok(())
   }
 
@@ -137,14 +137,17 @@ impl<W: std::io::Write> Serializer for JsonSerializer<W> {
     if self.needs_comma {
       write!(self.writer, ",")?;
     }
-    write!(self.writer, "\"{}\":", key)?;
+    write_json_string(&mut self.writer, key)?;
+    write!(self.writer, ":")?;
     v.serialize(self)?;
     self.needs_comma = true;
     Ok(())
   }
 
   fn serialize_enum_begin(&mut self, variant: &str) -> Result<(), Self::Error> {
-    write!(self.writer, "{{\"{}\":", variant)?;
+    write!(self.writer, "{{")?;
+    write_json_string(&mut self.writer, variant)?;
+    write!(self.writer, ":")?;
     Ok(())
   }
 
@@ -293,8 +296,15 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
     self.reader.skip_whitespace()?;                   
     match self.reader.peek_byte()? {
       Some(b'n') => {
-        self.reader.read_while(|b| b.is_ascii_alphabetic())?;
-        Ok(None)
+        let literal = self.reader.read_while(|b| b.is_ascii_alphabetic())?;
+        if literal == "null" {
+          Ok(None)
+        } else {
+          Err(
+            AetherError::new(ErrorKind::TypeConversion)
+              .context(format!("expected null, got '{}'", literal))
+          )
+        }
       }
       _ => Ok(Some(T::deserialize(self)?)),
     }
@@ -365,15 +375,21 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
     Ok(0)
   }
 
-  fn deserialize_struct_field<T: super::deserialize::Deserialize>(&mut self, _key: &str) -> Result<T, Self::Error> {
+  fn deserialize_struct_field<T: super::deserialize::Deserialize>(&mut self, key: &str) -> Result<T, Self::Error> {
     self.reader.skip_whitespace()?;
     // consume comma if present
     if let Some(b',') = self.reader.peek_byte()? {
       self.reader.read_byte()?;
     }
-    // read and discard the key
+    // read and validate the key
     self.reader.skip_whitespace()?;
-    self.reader.read_string_lit()?;
+    let found_key = self.reader.read_string_lit()?;
+    if found_key != key {
+      return Err(
+        AetherError::new(ErrorKind::UnexpectedField)
+          .context(format!("expected struct field '{}', found '{}'", key, found_key))
+      );
+    }
     // consume the colon
     self.reader.skip_whitespace()?;
     self.reader.expect_byte(b':')?;
@@ -412,6 +428,7 @@ pub enum ErrorKind {
   UnknownVariant,
   UnexpectedEof,
   TypeConversion,
+  UnexpectedField,
 }
 
 impl ErrorDomain for ErrorKind {
@@ -429,9 +446,73 @@ impl std::fmt::Display for ErrorKind {
       ErrorKind::UnexpectedEof => "json serializer has encountered an unexpected EOF",
       ErrorKind::UnknownVariant => "json serializer encountered an unknown variant when deserializing an enum",
       ErrorKind::TypeConversion => "json serializer encountered an error when trying to convert between types",
+      ErrorKind::UnexpectedField => "json serializer encountered an unexpected field while deserializing a struct",
     };
 
     write!(f, "{}", string)?;
     Ok(())
+  }
+}
+
+fn write_json_string<W: std::io::Write>(writer: &mut W, value: &str) -> Result<(), std::io::Error> {
+  write!(writer, "\"")?;
+
+  for c in value.chars() {
+    match c {
+      '"' => write!(writer, "\\\"")?,
+      '\\' => write!(writer, "\\\\")?,
+      '\u{08}' => write!(writer, "\\b")?,
+      '\u{0C}' => write!(writer, "\\f")?,
+      '\n' => write!(writer, "\\n")?,
+      '\r' => write!(writer, "\\r")?,
+      '\t' => write!(writer, "\\t")?,
+      c if c < '\u{20}' => write!(writer, "\\u{:04X}", c as u32)?,
+      c => write!(writer, "{}", c)?,
+    }
+  }
+
+  write!(writer, "\"")?;
+  Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use crate::serial::{deserialize::Deserializer, serialize::Serializer};
+
+  use super::{JsonDeserializer, JsonSerializer};
+
+  #[test]
+  fn string_escape_round_trip() {
+    let original = "line1\nline2\t\"quote\" and slash \\ and \u{2603}";
+
+    let mut out = Vec::new();
+    let mut serializer = JsonSerializer::new(&mut out);
+    serializer.serialize_str(original).unwrap();
+
+    let mut deserializer = JsonDeserializer::new(out.as_slice());
+    let decoded = deserializer.deserialize_str().unwrap();
+    assert_eq!(decoded, original);
+  }
+
+  #[test]
+  fn option_requires_strict_null() {
+    let mut valid = JsonDeserializer::new("null".as_bytes());
+    let none = valid.deserialize_option::<u32>().unwrap();
+    assert!(none.is_none());
+
+    let mut invalid = JsonDeserializer::new("nope".as_bytes());
+    assert!(invalid.deserialize_option::<u32>().is_err());
+  }
+
+  #[test]
+  fn struct_field_name_is_validated() {
+    let mut deserializer = JsonDeserializer::new("{\"b\":1}".as_bytes());
+    deserializer.deserialize_struct_begin("Dummy").unwrap();
+    let err = deserializer.deserialize_struct_field::<u32>("a").unwrap_err();
+    assert!(
+      format!("{:?}", err).contains("expected struct field 'a', found 'b'"),
+      "unexpected error: {:?}",
+      err,
+    );
   }
 }

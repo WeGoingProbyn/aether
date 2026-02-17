@@ -67,7 +67,7 @@ fn main() -> AetherResult<()> {
   bcs.register(BoundaryTag::Top, ReflectiveWall);
 
   let config = SolverConfig::new(0.5, 1e-4, TimeIntegration::ForwardEuler);
-  let solver = FvmSolver::new(config, Euler2D::new(1.4), RusanovFlux);
+  let mut solver = FvmSolver::new(config, Euler2D::new(1.4), RusanovFlux);
 
   let mut time = 0.0;
   let mut step = 0;
@@ -92,7 +92,6 @@ fn main() -> AetherResult<()> {
   Profiler::print(&mut LogWriter::new(Level::Info));
   Ok(())
 }
-
 
 
 

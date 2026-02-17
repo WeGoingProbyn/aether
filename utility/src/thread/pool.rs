@@ -1,4 +1,4 @@
-use std::{sync::{atomic::{AtomicBool, AtomicUsize, Ordering}, Arc, Condvar, Mutex}, thread::JoinHandle};
+use std::{any::Any, panic::{self, AssertUnwindSafe}, sync::{atomic::{AtomicBool, AtomicUsize, Ordering}, Arc, Condvar, Mutex}, thread::JoinHandle};
 
 use crate::{collections::graph::Graph, error::{AetherResult, Unpoison}, profiler::Profiler, thread::{task::{Job, TaskHandle}, worker::Queue}};
 
@@ -75,6 +75,7 @@ impl Pool {
     let remaining = Arc::new(AtomicUsize::new(0));
     let done_mutex = Arc::new(Mutex::new(()));
     let done_condvar = Arc::new(Condvar::new());
+    let panic_payload = Arc::new(Mutex::new(None::<Box<dyn Any + Send + 'static>>));
 
     // we block until all jobs complete, so `f` and `data`
     // outlive all submitted jobs. The transmute erases the lifetime
@@ -93,6 +94,7 @@ impl Pool {
       let remaining = Arc::clone(&remaining);
       let done_mutex = Arc::clone(&done_mutex);
       let done_condvar = Arc::clone(&done_condvar);
+      let panic_payload = Arc::clone(&panic_payload);
 
       let ptr = chunk.as_mut_ptr() as usize;
       let len = chunk.len();
@@ -101,7 +103,13 @@ impl Pool {
         // This will only truly be unsafe is chunks
         // overalp, which we've made sure that they don't
         let chunk = unsafe { std::slice::from_raw_parts_mut(ptr as *mut T, len) };
-        f(chunk);
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+          f(chunk);
+        }));
+
+        if let Err(payload) = result {
+          record_panic(&panic_payload, payload);
+        }
 
         if remaining.fetch_sub(1, Ordering::AcqRel) == 1 {
           let _guard = done_mutex.lock().unpoison();
@@ -113,6 +121,10 @@ impl Pool {
     let mut guard = done_mutex.lock().unpoison();
     while remaining.load(Ordering::Acquire) > 0 {
       guard = done_condvar.wait(guard).unpoison();
+    }
+
+    if let Some(payload) = panic_payload.lock().unpoison().take() {
+      panic::resume_unwind(payload);
     }
   }
 
@@ -176,18 +188,26 @@ impl Pool {
     let remaining = Arc::new(AtomicUsize::new(tasks.len()));
     let done_mutex = Arc::new(Mutex::new(()));
     let done_condvar = Arc::new(Condvar::new());
+    let panic_payload = Arc::new(Mutex::new(None::<Box<dyn Any + Send + 'static>>));
 
     for task in tasks {
       let remaining = Arc::clone(&remaining);
       let done_mutex = Arc::clone(&done_mutex);
       let done_condvar = Arc::clone(&done_condvar);
+      let panic_payload = Arc::clone(&panic_payload);
 
       // Safe: we block below, so task's captures outlive the job
       let task: Box<dyn FnOnce() + Send + 'static> = unsafe {
         std::mem::transmute(Box::new(task) as Box<dyn FnOnce() + Send>)
       };
       self.submit(Box::new(move || {
-        task();
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+          task();
+        }));
+        if let Err(payload) = result {
+          record_panic(&panic_payload, payload);
+        }
+
         if remaining.fetch_sub(1, Ordering::AcqRel) == 1 {
           let _guard = done_mutex.lock().unpoison();
           done_condvar.notify_all();
@@ -198,6 +218,10 @@ impl Pool {
     let mut guard = done_mutex.lock().unpoison();
     while remaining.load(Ordering::Acquire) > 0 {
       guard = done_condvar.wait(guard).unpoison();
+    }
+
+    if let Some(payload) = panic_payload.lock().unpoison().take() {
+      panic::resume_unwind(payload);
     }
   }
 }
@@ -337,5 +361,14 @@ impl GraphExecution {
   }
 }
 
+fn record_panic(
+  slot: &Arc<Mutex<Option<Box<dyn Any + Send + 'static>>>>,
+  payload: Box<dyn Any + Send + 'static>,
+) {
+  let mut first = slot.lock().unpoison();
+  if first.is_none() {
+    *first = Some(payload);
+  }
+}
 
 
