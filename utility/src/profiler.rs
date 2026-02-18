@@ -1,5 +1,11 @@
 use std::{
-  cell::RefCell, collections::HashMap, sync::{atomic::{AtomicBool, Ordering}, Mutex, OnceLock}, time::Instant
+  cell::RefCell,
+  collections::HashMap,
+  sync::{
+    Mutex, OnceLock,
+    atomic::{AtomicBool, Ordering},
+  },
+  time::Instant,
 };
 
 use crate::debug;
@@ -56,7 +62,7 @@ impl Drop for SpanGuard {
   fn drop(&mut self) {
     if Profiler::enabled() {
       let end = Instant::now();
-      STATE.with(|s|{
+      STATE.with(|s| {
         let mut borrow = s.borrow_mut();
         if let Some(span) = borrow.stack.pop() {
           let duration = end.duration_since(span.start).as_micros() as u64;
@@ -118,7 +124,8 @@ impl std::fmt::Display for Profiler {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     let stats = self.stats.lock().unwrap();
 
-    let mut agg: Vec<(&str, u64, u64)> = stats.iter()
+    let mut agg: Vec<(&str, u64, u64)> = stats
+      .iter()
       .map(|(&name, s)| (name, s.total_us, s.count))
       .collect();
 
@@ -131,12 +138,22 @@ impl std::fmt::Display for Profiler {
     writeln!(f, "── Profiler Diagnostics ──")?;
     for (name, total, count) in &agg {
       let avg = total / count;
-      let filled = if max_avg > 0 { (avg * bar_width) / max_avg } else { 0 };
+      let filled = if max_avg > 0 {
+        (avg * bar_width) / max_avg
+      } else {
+        0
+      };
       let bar: String = "█".repeat(filled as usize);
       let pad = " ".repeat((bar_width - filled) as usize);
 
-      writeln!(f, "{:<width$}  {}{}  {}  ×{}",
-        name, bar, pad, format_duration(avg), count,
+      writeln!(
+        f,
+        "{:<width$}  {}{}  {}  ×{}",
+        name,
+        bar,
+        pad,
+        format_duration(avg),
+        count,
         width = max_name,
       )?;
     }

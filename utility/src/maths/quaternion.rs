@@ -1,5 +1,6 @@
 use std::ops::{
-  Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign
+  Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub,
+  SubAssign,
 };
 
 use crate::maths::{matrix::Matrix, vector::Vector};
@@ -38,7 +39,10 @@ macro_rules! impl_quaternion_float {
   ($t:ty) => {
     impl Quaternion<$t> {
       /// Create quaternion from axis (will be normalised) and angle in radians
-      pub fn from_axis_angle(axis: &Vector<$t, 3>, angle: $t) -> Quaternion<$t> {
+      pub fn from_axis_angle(
+        axis: &Vector<$t, 3>,
+        angle: $t,
+      ) -> Quaternion<$t> {
         let half = angle / 2.0 as $t;
         let s = half.sin();
         let n = axis.normalise();
@@ -57,11 +61,12 @@ macro_rules! impl_quaternion_float {
         let (sr, cr) = (hr.sin(), hr.cos());
 
         [
-          cy*sp*cr + sy*cp*sr,
-          sy*cp*cr - cy*sp*sr,
-          cy*cp*sr - sy*sp*cr,
-          cy*cp*cr + sy*sp*sr,
-        ].into()
+          cy * sp * cr + sy * cp * sr,
+          sy * cp * cr - cy * sp * sr,
+          cy * cp * sr - sy * sp * cr,
+          cy * cp * cr + sy * sp * sr,
+        ]
+        .into()
       }
 
       /// Extract rotation from a 4x4 matrix (Shepperd's method)
@@ -75,7 +80,8 @@ macro_rules! impl_quaternion_float {
             (m[0][2] - m[2][0]) / s,
             (m[1][0] - m[0][1]) / s,
             s / 4.0 as $t,
-          ].into()
+          ]
+          .into()
         } else if m[0][0] > m[1][1] && m[0][0] > m[2][2] {
           let s = (1.0 as $t + m[0][0] - m[1][1] - m[2][2]).sqrt() * 2.0 as $t;
           [
@@ -83,7 +89,8 @@ macro_rules! impl_quaternion_float {
             (m[0][1] + m[1][0]) / s,
             (m[0][2] + m[2][0]) / s,
             (m[2][1] - m[1][2]) / s,
-          ].into()
+          ]
+          .into()
         } else if m[1][1] > m[2][2] {
           let s = (1.0 as $t - m[0][0] + m[1][1] - m[2][2]).sqrt() * 2.0 as $t;
           [
@@ -91,7 +98,8 @@ macro_rules! impl_quaternion_float {
             s / 4.0 as $t,
             (m[1][2] + m[2][1]) / s,
             (m[0][2] - m[2][0]) / s,
-          ].into()
+          ]
+          .into()
         } else {
           let s = (1.0 as $t - m[0][0] - m[1][1] + m[2][2]).sqrt() * 2.0 as $t;
           [
@@ -99,7 +107,8 @@ macro_rules! impl_quaternion_float {
             (m[1][2] + m[2][1]) / s,
             s / 4.0 as $t,
             (m[1][0] - m[0][1]) / s,
-          ].into()
+          ]
+          .into()
         }
       }
 
@@ -125,16 +134,20 @@ macro_rules! impl_quaternion_float {
         let wz = w * z2;
 
         [
-          [1.0 as $t - (yy + zz), xy - wz,               xz + wy,               0.0 as $t],
-          [xy + wz,               1.0 as $t - (xx + zz),  yz - wx,               0.0 as $t],
-          [xz - wy,               yz + wx,               1.0 as $t - (xx + yy),  0.0 as $t],
-          [0.0 as $t,             0.0 as $t,             0.0 as $t,              1.0 as $t],
-        ].into()
+          [1.0 as $t - (yy + zz), xy - wz, xz + wy, 0.0 as $t],
+          [xy + wz, 1.0 as $t - (xx + zz), yz - wx, 0.0 as $t],
+          [xz - wy, yz + wx, 1.0 as $t - (xx + yy), 0.0 as $t],
+          [0.0 as $t, 0.0 as $t, 0.0 as $t, 1.0 as $t],
+        ]
+        .into()
       }
 
       /// Magnitude squared
       pub fn magnitude_sq(&self) -> $t {
-        self[0]*self[0] + self[1]*self[1] + self[2]*self[2] + self[3]*self[3]
+        self[0] * self[0]
+          + self[1] * self[1]
+          + self[2] * self[2]
+          + self[3] * self[3]
       }
 
       /// Magnitude
@@ -145,9 +158,19 @@ macro_rules! impl_quaternion_float {
       /// Inverse. Returns None for zero quaternions.
       pub fn inverse(&self) -> Option<Quaternion<$t>> {
         let mag_sq = self.magnitude_sq();
-        if mag_sq < 1e-10 as $t { return None; }
+        if mag_sq < 1e-10 as $t {
+          return None;
+        }
         let inv = 1.0 as $t / mag_sq;
-        Some([-self[0]*inv, -self[1]*inv, -self[2]*inv, self[3]*inv].into())
+        Some(
+          [
+            -self[0] * inv,
+            -self[1] * inv,
+            -self[2] * inv,
+            self[3] * inv,
+          ]
+          .into(),
+        )
       }
 
       /// Rotate a vector by this quaternion
@@ -163,8 +186,10 @@ macro_rules! impl_quaternion_float {
 
       /// Spherical linear interpolation between two quaternions
       pub fn slerp(&self, other: &Quaternion<$t>, t: $t) -> Quaternion<$t> {
-        let mut dot = self[0]*other[0] + self[1]*other[1]
-                    + self[2]*other[2] + self[3]*other[3];
+        let mut dot = self[0] * other[0]
+          + self[1] * other[1]
+          + self[2] * other[2]
+          + self[3] * other[3];
 
         // If dot is negative, negate one to take the shorter path
         let mut other_sign = [other[0], other[1], other[2], other[3]];
@@ -183,7 +208,8 @@ macro_rules! impl_quaternion_float {
             self[1] + t * (other_sign[1] - self[1]),
             self[2] + t * (other_sign[2] - self[2]),
             self[3] + t * (other_sign[3] - self[3]),
-          ].into();
+          ]
+          .into();
         }
 
         let theta = dot.acos();
@@ -196,17 +222,18 @@ macro_rules! impl_quaternion_float {
           a * self[1] + b * other_sign[1],
           a * self[2] + b * other_sign[2],
           a * self[3] + b * other_sign[3],
-        ].into()
+        ]
+        .into()
       }
     }
-  }
+  };
 }
 
 impl_quaternion_float!(f32);
 impl_quaternion_float!(f64);
 
 impl<T: Default> Quaternion<T>
-where          
+where
   for<'x> &'x T: Neg<Output = T>,
 {
   pub fn conjugate(&self) -> Quaternion<T> {
@@ -218,9 +245,9 @@ where
   }
 }
 
-impl<T> Quaternion<T> 
-where 
-  T: Default + Neg<Output = T> + Clone
+impl<T> Quaternion<T>
+where
+  T: Default + Neg<Output = T> + Clone,
 {
   pub fn conjugate_clone(&self) -> Quaternion<T> {
     let mut out = Quaternion {
@@ -461,13 +488,14 @@ where
 
 impl<'a, T: Default> Mul<&'a Quaternion<T>> for &Quaternion<T>
 where
-  for<'x> &'x T: Mul<&'x T, Output = T> + Sub<&'x T, Output = T> + Add<&'x T, Output = T>,
+  for<'x> &'x T:
+    Mul<&'x T, Output = T> + Sub<&'x T, Output = T> + Add<&'x T, Output = T>,
 {
   type Output = Quaternion<T>;
 
   fn mul(self, rhs: &'a Quaternion<T>) -> Self::Output {
     let mut out = Quaternion::default();
-    
+
     let a = &(&self[3] * &rhs[0]) + &(&self[0] * &rhs[3]);
     let b = &(&self[1] * &rhs[2]) - &(&self[2] * &rhs[1]);
     out[0] = &a + &b;
@@ -490,13 +518,13 @@ where
 
 impl<T> Mul for Quaternion<T>
 where
-  T: Mul<Output = T> + Sub<Output = T> + Add<Output =T> + Default + Clone,
+  T: Mul<Output = T> + Sub<Output = T> + Add<Output = T> + Default + Clone,
 {
   type Output = Self;
 
   fn mul(self, rhs: Self) -> Self {
     let mut out = Quaternion::default();
-    
+
     let a = self[3].clone() * rhs[0].clone() + self[0].clone() * rhs[3].clone();
     let b = self[1].clone() * rhs[2].clone() - self[2].clone() * rhs[1].clone();
     out[0] = a + b;
@@ -523,7 +551,7 @@ where
 {
   fn mul_assign(&mut self, rhs: Self) {
     let mut out = Quaternion::default();
-    
+
     let a = self[3].clone() * rhs[0].clone() + self[0].clone() * rhs[3].clone();
     let b = self[1].clone() * rhs[2].clone() - self[2].clone() * rhs[1].clone();
     out[0] = a + b;
@@ -607,14 +635,14 @@ where
 
 // ================ Iterator impls =================//
 
-pub struct QuatIter<'a, T> 
-where 
+pub struct QuatIter<'a, T>
+where
   T: Default,
 {
   inner: &'a Matrix<T, 4, 1>,
 }
 
-impl<'a, T> Iterator for QuatIter<'a, T> 
+impl<'a, T> Iterator for QuatIter<'a, T>
 where
   T: Default,
 {
@@ -624,21 +652,23 @@ where
   }
 }
 
-pub struct QuatIterMut<'a, T> 
-where 
+pub struct QuatIterMut<'a, T>
+where
   T: Default,
 {
   inner: &'a mut Matrix<T, 4, 1>,
   col: usize,
 }
 
-impl<'a, T> Iterator for QuatIterMut<'a, T> 
+impl<'a, T> Iterator for QuatIterMut<'a, T>
 where
   T: Default,
 {
   type Item = &'a mut T;
   fn next(&mut self) -> Option<Self::Item> {
-    if self.col >= 4 { return None }
+    if self.col >= 4 {
+      return None;
+    }
 
     let next = &mut self.inner[0][self.col] as *mut T;
     self.col += 1;
@@ -649,21 +679,23 @@ where
   }
 }
 
-pub struct QuatIterInto<T> 
-where 
+pub struct QuatIterInto<T>
+where
   T: Default + Clone,
 {
   inner: Matrix<T, 4, 1>,
   col: usize,
 }
 
-impl<T> Iterator for QuatIterInto<T> 
+impl<T> Iterator for QuatIterInto<T>
 where
   T: Default + Clone,
 {
   type Item = T;
   fn next(&mut self) -> Option<Self::Item> {
-    if self.col >= 4 { return None }
+    if self.col >= 4 {
+      return None;
+    }
 
     let next = self.inner[0][self.col].clone();
     self.col += 1;
@@ -674,14 +706,12 @@ where
   }
 }
 
-impl<T> Quaternion<T> 
-where 
+impl<T> Quaternion<T>
+where
   T: Default,
 {
   pub fn iter(&self) -> QuatIter<'_, T> {
-    QuatIter {
-      inner: &self.inner,
-    }
+    QuatIter { inner: &self.inner }
   }
 
   pub fn iter_mut(&mut self) -> QuatIterMut<'_, T> {
@@ -692,8 +722,8 @@ where
   }
 }
 
-impl<T> IntoIterator for Quaternion<T> 
-where 
+impl<T> IntoIterator for Quaternion<T>
+where
   T: Default + Clone,
 {
   type Item = T;
@@ -714,16 +744,24 @@ mod test {
   use crate::maths::quaternion::Quaternion;
   use crate::maths::vector::Vector;
 
-  fn approx_eq_quat(a: &Quaternion<f32>, b: &Quaternion<f32>, eps: f32) -> bool {
+  fn approx_eq_quat(
+    a: &Quaternion<f32>,
+    b: &Quaternion<f32>,
+    eps: f32,
+  ) -> bool {
     for i in 0..4 {
-      if (a[i] - b[i]).abs() > eps { return false; }
+      if (a[i] - b[i]).abs() > eps {
+        return false;
+      }
     }
     true
   }
 
   fn approx_eq_vec3(a: &Vector<f32, 3>, b: &Vector<f32, 3>, eps: f32) -> bool {
     for i in 0..3 {
-      if (a[i] - b[i]).abs() > eps { return false; }
+      if (a[i] - b[i]).abs() > eps {
+        return false;
+      }
     }
     true
   }
@@ -787,7 +825,8 @@ mod test {
   #[test]
   fn rotate_vector_90_around_z() {
     let axis: Vector<f32, 3> = [0.0, 0.0, 1.0].into();
-    let q = Quaternion::<f32>::from_axis_angle(&axis, std::f32::consts::FRAC_PI_2);
+    let q =
+      Quaternion::<f32>::from_axis_angle(&axis, std::f32::consts::FRAC_PI_2);
     let v: Vector<f32, 3> = [1.0, 0.0, 0.0].into();
     let rotated = q.rotate_vector(&v);
     let expected: Vector<f32, 3> = [0.0, 1.0, 0.0].into();
@@ -825,10 +864,11 @@ mod test {
     // rotate via matrix: extract 3x3 rotation from 4x4
     let m = q.to_matrix();
     let r2: Vector<f32, 3> = [
-      m[0][0]*v[0] + m[0][1]*v[1] + m[0][2]*v[2],
-      m[1][0]*v[0] + m[1][1]*v[1] + m[1][2]*v[2],
-      m[2][0]*v[0] + m[2][1]*v[1] + m[2][2]*v[2],
-    ].into();
+      m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+      m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+      m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
+    ]
+    .into();
 
     assert!(approx_eq_vec3(&r1, &r2, 1e-4));
   }
@@ -849,11 +889,14 @@ mod test {
   #[test]
   fn from_euler_pitch_only() {
     // pitch 90° around X should be same as axis_angle(X, 90°)
-    let q = Quaternion::<f32>::from_euler(std::f32::consts::FRAC_PI_2, 0.0, 0.0);
+    let q =
+      Quaternion::<f32>::from_euler(std::f32::consts::FRAC_PI_2, 0.0, 0.0);
     let axis: Vector<f32, 3> = [1.0, 0.0, 0.0].into();
-    let expected = Quaternion::<f32>::from_axis_angle(&axis, std::f32::consts::FRAC_PI_2);
+    let expected =
+      Quaternion::<f32>::from_axis_angle(&axis, std::f32::consts::FRAC_PI_2);
     let same = approx_eq_quat(&q, &expected, 1e-5);
-    let neg: Quaternion<f32> = [-expected[0], -expected[1], -expected[2], -expected[3]].into();
+    let neg: Quaternion<f32> =
+      [-expected[0], -expected[1], -expected[2], -expected[3]].into();
     let same_neg = approx_eq_quat(&q, &neg, 1e-5);
     assert!(same || same_neg);
   }

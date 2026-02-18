@@ -1,4 +1,6 @@
-use continuum::geometry::{CellGeometry, CellId, FaceGeometry, FaceId, IdentityMap};
+use continuum::geometry::{
+  CellGeometry, CellId, FaceGeometry, FaceId, IdentityMap,
+};
 use continuum::mesh::StructuredBlock;
 
 fn assert_close(lhs: f64, rhs: f64, eps: f64, context: &str) {
@@ -59,7 +61,12 @@ fn assert_identity_metrics<const D: usize>(dims: [usize; D], extent: [f64; D]) {
       eps,
       "face area and comp_area mismatch",
     );
-    assert_close(metrics.normal.magnitude(), 1.0, eps, "face normal magnitude");
+    assert_close(
+      metrics.normal.magnitude(),
+      1.0,
+      eps,
+      "face normal magnitude",
+    );
 
     for d in 0..D {
       assert_close(

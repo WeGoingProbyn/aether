@@ -1,4 +1,4 @@
-use std::sync::{Condvar, Mutex, Arc};
+use std::sync::{Arc, Condvar, Mutex};
 
 pub type Job = Box<dyn FnOnce() + Send>;
 
@@ -48,4 +48,3 @@ impl TaskSignal {
     self.barrier.notify_all();
   }
 }
-

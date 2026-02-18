@@ -1,8 +1,13 @@
-use crate::{error::{AetherError, ErrorDomain}, serial::{reader::TextReader, deserialize::Deserializer, serialize::Serializer}};
+use crate::{
+  error::{AetherError, ErrorDomain},
+  serial::{
+    deserialize::Deserializer, reader::TextReader, serialize::Serializer,
+  },
+};
 
 pub struct JsonSerializer<W: std::io::Write> {
   writer: W,
-  needs_comma: bool
+  needs_comma: bool,
 }
 
 impl<W: std::io::Write> JsonSerializer<W> {
@@ -87,7 +92,10 @@ impl<W: std::io::Write> Serializer for JsonSerializer<W> {
     Ok(())
   }
 
-  fn serialize_some<T: super::serialize::Serialize>(&mut self, v: &T) -> Result<(), Self::Error> {
+  fn serialize_some<T: super::serialize::Serialize>(
+    &mut self,
+    v: &T,
+  ) -> Result<(), Self::Error> {
     v.serialize(self)?;
     Ok(())
   }
@@ -95,7 +103,7 @@ impl<W: std::io::Write> Serializer for JsonSerializer<W> {
   fn serialize_bytes(&mut self, v: &[u8]) -> Result<(), Self::Error> {
     self.serialize_seq_begin(v.len())?;
     for byte in v {
-      self.serialize_seq_element(byte)?;            
+      self.serialize_seq_element(byte)?;
     }
     self.serialize_seq_end()
   }
@@ -112,7 +120,10 @@ impl<W: std::io::Write> Serializer for JsonSerializer<W> {
     Ok(())
   }
 
-  fn serialize_seq_element<T: super::serialize::Serialize>(&mut self, v: &T) -> Result<(), Self::Error> {
+  fn serialize_seq_element<T: super::serialize::Serialize>(
+    &mut self,
+    v: &T,
+  ) -> Result<(), Self::Error> {
     if self.needs_comma {
       write!(self.writer, ",")?;
     }
@@ -127,13 +138,21 @@ impl<W: std::io::Write> Serializer for JsonSerializer<W> {
     Ok(())
   }
 
-  fn serialize_struct_begin(&mut self, _: &str, _: usize) -> Result<(), Self::Error> {
-    write!(self.writer, "{{")?;    
+  fn serialize_struct_begin(
+    &mut self,
+    _: &str,
+    _: usize,
+  ) -> Result<(), Self::Error> {
+    write!(self.writer, "{{")?;
     self.needs_comma = false;
     Ok(())
   }
 
-  fn serialize_struct_field<T: super::serialize::Serialize>(&mut self, key: &str, v: &T) -> Result<(), Self::Error> {
+  fn serialize_struct_field<T: super::serialize::Serialize>(
+    &mut self,
+    key: &str,
+    v: &T,
+  ) -> Result<(), Self::Error> {
     if self.needs_comma {
       write!(self.writer, ",")?;
     }
@@ -174,92 +193,104 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
 
   fn deserialize_u8(&mut self) -> Result<u8, Self::Error> {
     self.reader.skip_whitespace()?;
-    let s = self.reader.read_while(|b| b.is_ascii_digit() )?;
-    s.parse::<u8>().map_err(|_|
+    let s = self.reader.read_while(|b| b.is_ascii_digit())?;
+    s.parse::<u8>().map_err(|_| {
       AetherError::new(ErrorKind::TypeConversion)
         .context(format!("failed to parse '{}' as u8", s))
-    )
+    })
   }
 
   fn deserialize_i8(&mut self) -> Result<i8, Self::Error> {
     self.reader.skip_whitespace()?;
-    let s = self.reader.read_while(|b| b.is_ascii_digit() || b == b'-')?;
-    s.parse::<i8>().map_err(|_|
+    let s = self
+      .reader
+      .read_while(|b| b.is_ascii_digit() || b == b'-')?;
+    s.parse::<i8>().map_err(|_| {
       AetherError::new(ErrorKind::TypeConversion)
         .context(format!("failed to parse '{}' as i8", s))
-    )
+    })
   }
 
   fn deserialize_u16(&mut self) -> Result<u16, Self::Error> {
     self.reader.skip_whitespace()?;
-    let s = self.reader.read_while(|b| b.is_ascii_digit() )?;
-    s.parse::<u16>().map_err(|_|
+    let s = self.reader.read_while(|b| b.is_ascii_digit())?;
+    s.parse::<u16>().map_err(|_| {
       AetherError::new(ErrorKind::TypeConversion)
         .context(format!("failed to parse '{}' as u16", s))
-    )
+    })
   }
 
   fn deserialize_i16(&mut self) -> Result<i16, Self::Error> {
     self.reader.skip_whitespace()?;
-    let s = self.reader.read_while(|b| b.is_ascii_digit() || b == b'-')?;
-    s.parse::<i16>().map_err(|_|
+    let s = self
+      .reader
+      .read_while(|b| b.is_ascii_digit() || b == b'-')?;
+    s.parse::<i16>().map_err(|_| {
       AetherError::new(ErrorKind::TypeConversion)
         .context(format!("failed to parse '{}' as i16", s))
-    )
+    })
   }
 
   fn deserialize_u32(&mut self) -> Result<u32, Self::Error> {
     self.reader.skip_whitespace()?;
-    let s = self.reader.read_while(|b| b.is_ascii_digit() )?;
-    s.parse::<u32>().map_err(|_|
+    let s = self.reader.read_while(|b| b.is_ascii_digit())?;
+    s.parse::<u32>().map_err(|_| {
       AetherError::new(ErrorKind::TypeConversion)
         .context(format!("failed to parse '{}' as u32", s))
-    )
+    })
   }
 
   fn deserialize_i32(&mut self) -> Result<i32, Self::Error> {
     self.reader.skip_whitespace()?;
-    let s = self.reader.read_while(|b| b.is_ascii_digit() || b == b'-' )?;
-    s.parse::<i32>().map_err(|_|
+    let s = self
+      .reader
+      .read_while(|b| b.is_ascii_digit() || b == b'-')?;
+    s.parse::<i32>().map_err(|_| {
       AetherError::new(ErrorKind::TypeConversion)
         .context(format!("failed to parse '{}' as i32", s))
-    )
+    })
   }
 
   fn deserialize_u64(&mut self) -> Result<u64, Self::Error> {
     self.reader.skip_whitespace()?;
-    let s = self.reader.read_while(|b| b.is_ascii_digit() )?;
-    s.parse::<u64>().map_err(|_|
+    let s = self.reader.read_while(|b| b.is_ascii_digit())?;
+    s.parse::<u64>().map_err(|_| {
       AetherError::new(ErrorKind::TypeConversion)
         .context(format!("failed to parse '{}' as u64", s))
-    )
+    })
   }
 
   fn deserialize_i64(&mut self) -> Result<i64, Self::Error> {
     self.reader.skip_whitespace()?;
-    let s = self.reader.read_while(|b| b.is_ascii_digit() || b == b'-' )?;
-    s.parse::<i64>().map_err(|_|
+    let s = self
+      .reader
+      .read_while(|b| b.is_ascii_digit() || b == b'-')?;
+    s.parse::<i64>().map_err(|_| {
       AetherError::new(ErrorKind::TypeConversion)
         .context(format!("failed to parse '{}' as i64", s))
-    )
+    })
   }
 
   fn deserialize_f32(&mut self) -> Result<f32, Self::Error> {
     self.reader.skip_whitespace()?;
-    let s = self.reader.read_while(|b| b.is_ascii_digit() || b == b'.' || b == b'-' || b == b'e' || b == b'E')?;
-    s.parse::<f32>().map_err(|_|
+    let s = self.reader.read_while(|b| {
+      b.is_ascii_digit() || b == b'.' || b == b'-' || b == b'e' || b == b'E'
+    })?;
+    s.parse::<f32>().map_err(|_| {
       AetherError::new(ErrorKind::TypeConversion)
         .context(format!("failed to parse '{}' as f32", s))
-    )
+    })
   }
 
   fn deserialize_f64(&mut self) -> Result<f64, Self::Error> {
     self.reader.skip_whitespace()?;
-    let s = self.reader.read_while(|b| b.is_ascii_digit() || b == b'.' || b == b'-' || b == b'e' || b == b'E')?;
-    s.parse::<f64>().map_err(|_|
+    let s = self.reader.read_while(|b| {
+      b.is_ascii_digit() || b == b'.' || b == b'-' || b == b'e' || b == b'E'
+    })?;
+    s.parse::<f64>().map_err(|_| {
       AetherError::new(ErrorKind::TypeConversion)
         .context(format!("failed to parse '{}' as f64", s))
-    )
+    })
   }
 
   fn deserialize_str(&mut self) -> Result<String, Self::Error> {
@@ -269,31 +300,33 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
 
   fn deserialize_bool(&mut self) -> Result<bool, Self::Error> {
     self.reader.skip_whitespace()?;
-    let s = self.reader.read_while(|b| b.is_ascii_alphabetic() )?;
-    match s.as_str() {                                
+    let s = self.reader.read_while(|b| b.is_ascii_alphabetic())?;
+    match s.as_str() {
       "true" => Ok(true),
       "false" => Ok(false),
       _ => Err(
         AetherError::new(ErrorKind::TypeConversion)
-          .context(format!("expected 'true' or 'false', got '{}'", s))
-      )
-    }  
+          .context(format!("expected 'true' or 'false', got '{}'", s)),
+      ),
+    }
   }
 
   fn deserialize_unit(&mut self) -> Result<(), Self::Error> {
     self.reader.skip_whitespace()?;
-    let s = self.reader.read_while(|b| b.is_ascii_alphabetic() )?;
+    let s = self.reader.read_while(|b| b.is_ascii_alphabetic())?;
     match s.as_str() {
       "null" => Ok(()),
       _ => Err(
         AetherError::new(ErrorKind::TypeConversion)
-        .context(format!("expected null, got '{}'", s))
-      )
+          .context(format!("expected null, got '{}'", s)),
+      ),
     }
   }
 
-  fn deserialize_option<T: super::deserialize::Deserialize>(&mut self) -> Result<Option<T>, Self::Error> {
-    self.reader.skip_whitespace()?;                   
+  fn deserialize_option<T: super::deserialize::Deserialize>(
+    &mut self,
+  ) -> Result<Option<T>, Self::Error> {
+    self.reader.skip_whitespace()?;
     match self.reader.peek_byte()? {
       Some(b'n') => {
         let literal = self.reader.read_while(|b| b.is_ascii_alphabetic())?;
@@ -302,7 +335,7 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
         } else {
           Err(
             AetherError::new(ErrorKind::TypeConversion)
-              .context(format!("expected null, got '{}'", literal))
+              .context(format!("expected null, got '{}'", literal)),
           )
         }
       }
@@ -317,19 +350,26 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
     loop {
       self.reader.skip_whitespace()?;
       match self.reader.peek_byte()? {
-        Some(b']') => { self.reader.read_byte()?; break; }
-        Some(b',') => { self.reader.read_byte()?; }
+        Some(b']') => {
+          self.reader.read_byte()?;
+          break;
+        }
+        Some(b',') => {
+          self.reader.read_byte()?;
+        }
         Some(_) => {
           let s = self.reader.read_while(|b| b.is_ascii_digit())?;
-          bytes.push(s.parse::<u8>().map_err(|_|
+          bytes.push(s.parse::<u8>().map_err(|_| {
             AetherError::new(ErrorKind::TypeConversion)
               .context(format!("failed to parse '{}' as u8 in bytes array", s))
-          )?);
+          })?);
         }
-        None => return Err(
-          AetherError::new(ErrorKind::UnexpectedEof)
-            .context("unexpected EOF in bytes array")
-        ),
+        None => {
+          return Err(
+            AetherError::new(ErrorKind::UnexpectedEof)
+              .context("unexpected EOF in bytes array"),
+          );
+        }
       }
     }
     Ok(bytes)
@@ -342,7 +382,9 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
     Ok(0)
   }
 
-  fn deserialize_seq_element<T: super::deserialize::Deserialize>(&mut self) -> Result<T, Self::Error> {
+  fn deserialize_seq_element<T: super::deserialize::Deserialize>(
+    &mut self,
+  ) -> Result<T, Self::Error> {
     self.reader.skip_whitespace()?;
     // consume comma if present
     if let Some(b',') = self.reader.peek_byte()? {
@@ -358,7 +400,7 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
       Some(_) => Ok(true),
       None => Err(
         AetherError::new(ErrorKind::UnexpectedEof)
-          .context("unexpected EOF while reading sequence")
+          .context("unexpected EOF while reading sequence"),
       ),
     }
   }
@@ -369,13 +411,19 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
     Ok(())
   }
 
-  fn deserialize_struct_begin(&mut self, _name: &str) -> Result<usize, Self::Error> {
+  fn deserialize_struct_begin(
+    &mut self,
+    _name: &str,
+  ) -> Result<usize, Self::Error> {
     self.reader.skip_whitespace()?;
     self.reader.expect_byte(b'{')?;
     Ok(0)
   }
 
-  fn deserialize_struct_field<T: super::deserialize::Deserialize>(&mut self, key: &str) -> Result<T, Self::Error> {
+  fn deserialize_struct_field<T: super::deserialize::Deserialize>(
+    &mut self,
+    key: &str,
+  ) -> Result<T, Self::Error> {
     self.reader.skip_whitespace()?;
     // consume comma if present
     if let Some(b',') = self.reader.peek_byte()? {
@@ -385,10 +433,9 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
     self.reader.skip_whitespace()?;
     let found_key = self.reader.read_string_lit()?;
     if found_key != key {
-      return Err(
-        AetherError::new(ErrorKind::UnexpectedField)
-          .context(format!("expected struct field '{}', found '{}'", key, found_key))
-      );
+      return Err(AetherError::new(ErrorKind::UnexpectedField).context(
+        format!("expected struct field '{}', found '{}'", key, found_key),
+      ));
     }
     // consume the colon
     self.reader.skip_whitespace()?;
@@ -403,7 +450,10 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
     Ok(())
   }
 
-  fn deserialize_enum_begin(&mut self, variants: &[&str]) -> Result<usize, Self::Error> {
+  fn deserialize_enum_begin(
+    &mut self,
+    variants: &[&str],
+  ) -> Result<usize, Self::Error> {
     self.reader.skip_whitespace()?;
     self.reader.expect_byte(b'{')?;
     self.reader.skip_whitespace()?;
@@ -411,10 +461,15 @@ impl<R: std::io::Read> Deserializer for JsonDeserializer<R> {
     self.reader.skip_whitespace()?;
     self.reader.expect_byte(b':')?;
     // find the variant index
-    variants.iter().position(|&v| v == variant_name).ok_or_else(||
-      AetherError::new(ErrorKind::UnknownVariant)
-        .context(format!("unknown variant '{}', expected one of {:?}", variant_name, variants))
-    )
+    variants
+      .iter()
+      .position(|&v| v == variant_name)
+      .ok_or_else(|| {
+        AetherError::new(ErrorKind::UnknownVariant).context(format!(
+          "unknown variant '{}', expected one of {:?}",
+          variant_name, variants
+        ))
+      })
   }
 
   fn deserialize_enum_end(&mut self) -> Result<(), Self::Error> {
@@ -443,10 +498,18 @@ impl std::fmt::Display for ErrorKind {
     f: &mut std::fmt::Formatter<'_>,
   ) -> Result<(), std::fmt::Error> {
     let string = match self {
-      ErrorKind::UnexpectedEof => "json serializer has encountered an unexpected EOF",
-      ErrorKind::UnknownVariant => "json serializer encountered an unknown variant when deserializing an enum",
-      ErrorKind::TypeConversion => "json serializer encountered an error when trying to convert between types",
-      ErrorKind::UnexpectedField => "json serializer encountered an unexpected field while deserializing a struct",
+      ErrorKind::UnexpectedEof => {
+        "json serializer has encountered an unexpected EOF"
+      }
+      ErrorKind::UnknownVariant => {
+        "json serializer encountered an unknown variant when deserializing an enum"
+      }
+      ErrorKind::TypeConversion => {
+        "json serializer encountered an error when trying to convert between types"
+      }
+      ErrorKind::UnexpectedField => {
+        "json serializer encountered an unexpected field while deserializing a struct"
+      }
     };
 
     write!(f, "{}", string)?;
@@ -454,7 +517,10 @@ impl std::fmt::Display for ErrorKind {
   }
 }
 
-fn write_json_string<W: std::io::Write>(writer: &mut W, value: &str) -> Result<(), std::io::Error> {
+fn write_json_string<W: std::io::Write>(
+  writer: &mut W,
+  value: &str,
+) -> Result<(), std::io::Error> {
   write!(writer, "\"")?;
 
   for c in value.chars() {
@@ -508,7 +574,9 @@ mod tests {
   fn struct_field_name_is_validated() {
     let mut deserializer = JsonDeserializer::new("{\"b\":1}".as_bytes());
     deserializer.deserialize_struct_begin("Dummy").unwrap();
-    let err = deserializer.deserialize_struct_field::<u32>("a").unwrap_err();
+    let err = deserializer
+      .deserialize_struct_field::<u32>("a")
+      .unwrap_err();
     assert!(
       format!("{:?}", err).contains("expected struct field 'a', found 'b'"),
       "unexpected error: {:?}",

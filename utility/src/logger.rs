@@ -1,6 +1,6 @@
 use std::{
   sync::atomic::{AtomicU8, Ordering},
-  sync::{OnceLock, Mutex},
+  sync::{Mutex, OnceLock},
   time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -24,8 +24,8 @@ impl std::fmt::Display for Level {
     let string = match self {
       Level::Trace => "\x1b[2mTrace",
       Level::Debug => "\x1b[36mDebug",
-      Level::Info  => "\x1b[32mInfo ",
-      Level::Warn  => "\x1b[33mWarn ",
+      Level::Info => "\x1b[32mInfo ",
+      Level::Warn => "\x1b[33mWarn ",
       Level::Error => "\x1b[31mError",
       Level::Fatal => "\x1b[1;31mFatal",
     };
@@ -41,8 +41,8 @@ impl Level {
     match self {
       Level::Trace => "Trace".len(),
       Level::Debug => "Debug".len(),
-      Level::Info  => "Info ".len(),
-      Level::Warn  => "Warn ".len(),
+      Level::Info => "Info ".len(),
+      Level::Warn => "Warn ".len(),
       Level::Error => "Error".len(),
       Level::Fatal => "Fatal".len(),
     }
@@ -103,7 +103,7 @@ impl std::fmt::Display for Value {
       Value::F64(v) => write!(f, "{}", v)?,
       Value::Bool(v) => write!(f, "{}", v)?,
     }
-    
+
     Ok(())
   }
 }
@@ -124,9 +124,15 @@ pub struct Record {
 
 impl std::fmt::Display for Record {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    let prefix1 = format!("[{}] [{}] ", Logger::iso_timestamp(self.ts), std::thread::current().name().unwrap_or("main"));
+    let prefix1 = format!(
+      "[{}] [{}] ",
+      Logger::iso_timestamp(self.ts),
+      std::thread::current().name().unwrap_or("main")
+    );
     let mut prefix2 = format!("{}:{}", self.meta.target, self.meta.line);
-    let pad = " ".repeat(prefix1.len() + prefix2.len() + self.meta.level.display_len() + 1);
+    let pad = " ".repeat(
+      prefix1.len() + prefix2.len() + self.meta.level.display_len() + 1,
+    );
     prefix2.insert_str(0, &format!("{} ", self.meta.level));
     prefix2.insert_str(0, &prefix1);
     let lines: Vec<&str> = self.message.lines().collect();
@@ -179,13 +185,11 @@ impl Logger {
   }
 
   pub fn flush(&self) {
-    self.sinks.iter().for_each(|s| s.flush() );
+    self.sinks.iter().for_each(|s| s.flush());
   }
 
   pub fn init(sinks: Vec<Box<dyn Sink>>, max_level: Level) {
-    let _ = LOGGER.set(Logger {
-      sinks,
-    });
+    let _ = LOGGER.set(Logger { sinks });
 
     MAX_LEVEL.store(max_level as u8, Ordering::Relaxed);
   }
@@ -245,8 +249,7 @@ impl Logger {
   }
 
   fn is_leap(y: u64) -> bool {
-    (y.is_multiple_of(4) && !y.is_multiple_of(100)) 
-    || y.is_multiple_of(400)
+    (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
   }
 }
 
@@ -255,8 +258,8 @@ pub trait Sink: Send + Sync {
   fn flush(&self);
 }
 
-pub struct StdSink<T> 
-where 
+pub struct StdSink<T>
+where
   T: std::io::Write + Send + Sync,
 {
   writer: Mutex<T>,
@@ -264,29 +267,29 @@ where
   buffer_capacity: usize,
 }
 
-impl<T> StdSink<T> 
-where 
+impl<T> StdSink<T>
+where
   T: std::io::Write + Send + Sync,
 {
   pub fn new(sink: T) -> StdSink<T> {
-    StdSink { 
-      writer: Mutex::new(sink), 
-      buffer: Mutex::new(vec![]), 
-      buffer_capacity: 8 
+    StdSink {
+      writer: Mutex::new(sink),
+      buffer: Mutex::new(vec![]),
+      buffer_capacity: 8,
     }
   }
 
   pub fn capacity(self, cap: usize) -> StdSink<T> {
-    StdSink { 
+    StdSink {
       writer: self.writer,
-      buffer: self.buffer, 
-      buffer_capacity: cap, 
+      buffer: self.buffer,
+      buffer_capacity: cap,
     }
   }
 }
 
-impl<T> Sink for StdSink<T> 
-where 
+impl<T> Sink for StdSink<T>
+where
   T: std::io::Write + Send + Sync,
 {
   fn write(&self, record: Record) {
@@ -312,7 +315,7 @@ where
 
 pub struct LogWriter {
   level: Level,
-}                                                                                                                                                                                                                       
+}
 
 impl LogWriter {
   pub fn new(level: Level) -> LogWriter {

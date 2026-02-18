@@ -50,22 +50,29 @@ fn parallel_rk2_matches_serial_and_updates_solver_state() {
   });
   let mut serial_residual = SoaField::zeros(mesh.cell_count());
 
-  let mut partition_states: Vec<SoaField<4>> = decomp.partitions.iter()
+  let mut partition_states: Vec<SoaField<4>> = decomp
+    .partitions
+    .iter()
     .map(|partition| {
       SoaField::from_fn(partition.cell_count(), |local| {
         let global = partition.local_to_global(local);
         let x = mesh.cell_centroid(global)[0];
         initial_state(x, gamma)
       })
-    }).collect();
-  let mut partition_residuals: Vec<SoaField<4>> = decomp.partitions.iter()
+    })
+    .collect();
+  let mut partition_residuals: Vec<SoaField<4>> = decomp
+    .partitions
+    .iter()
     .map(|partition| SoaField::zeros(partition.cell_count()))
     .collect();
 
   let bcs = transmissive_bcs();
   let config = SolverConfig::new(0.5, 1e-4, TimeIntegration::Rk2);
-  let mut serial_solver = FvmSolver::new(config.clone(), Euler2D::new(gamma), RusanovFlux);
-  let mut parallel_solver = FvmSolver::new(config, Euler2D::new(gamma), RusanovFlux);
+  let mut serial_solver =
+    FvmSolver::new(config.clone(), Euler2D::new(gamma), RusanovFlux);
+  let mut parallel_solver =
+    FvmSolver::new(config, Euler2D::new(gamma), RusanovFlux);
   let pool = Pool::new(2).unwrap();
 
   let dt_serial = serial_solver.step(
@@ -88,7 +95,8 @@ fn parallel_rk2_matches_serial_and_updates_solver_state() {
     for j in 0..partition.num_owned() {
       let local = CellId::from(j);
       let global = partition.local_to_global(local);
-      gathered_parallel[global.index()] = *partition_states[pi].state(local).as_state();
+      gathered_parallel[global.index()] =
+        *partition_states[pi].state(local).as_state();
     }
   }
 

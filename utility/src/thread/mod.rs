@@ -1,7 +1,7 @@
 use crate::error::ErrorDomain;
 
-pub mod task;
 pub mod pool;
+pub mod task;
 pub mod worker;
 
 pub enum ErrorKind {
@@ -21,8 +21,12 @@ impl std::fmt::Display for ErrorKind {
     f: &mut std::fmt::Formatter<'_>,
   ) -> Result<(), std::fmt::Error> {
     let string = match self {
-      ErrorKind::ThreadPoolPanic => "a task inside the threading pool has panicked",
-      ErrorKind::ThreadPoolShutdown => "a task has been submitted to a dropped pool",
+      ErrorKind::ThreadPoolPanic => {
+        "a task inside the threading pool has panicked"
+      }
+      ErrorKind::ThreadPoolShutdown => {
+        "a task has been submitted to a dropped pool"
+      }
     };
 
     write!(f, "{}", string)?;
@@ -32,10 +36,13 @@ impl std::fmt::Display for ErrorKind {
 
 #[cfg(test)]
 mod test {
+  use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+  };
+  use std::time::Duration;
   use utility::error::Unpoison;
   use utility::thread::pool::{Pool, TaskGraph};
-  use std::sync::{atomic::{AtomicBool, AtomicUsize, Ordering}, Arc, Mutex};
-  use std::time::Duration;
 
   #[test]
   fn spawn_wait() {
@@ -55,10 +62,14 @@ mod test {
 
     for _ in 0..100 {
       let c = Arc::clone(&counter);
-      handles.push(pool.spawn(move || { c.fetch_add(1, Ordering::Relaxed); }));
+      handles.push(pool.spawn(move || {
+        c.fetch_add(1, Ordering::Relaxed);
+      }));
     }
 
-    for h in handles { h.signal().wait(); }
+    for h in handles {
+      h.signal().wait();
+    }
     assert_eq!(counter.load(Ordering::Relaxed), 100);
   }
 
@@ -67,7 +78,8 @@ mod test {
     let pool = Pool::new(2).unwrap();
     let order = Arc::new(Mutex::new(Vec::new()));
     let mut graph = TaskGraph::new();
-    let (o1, o2, o3) = (Arc::clone(&order), Arc::clone(&order), Arc::clone(&order));
+    let (o1, o2, o3) =
+      (Arc::clone(&order), Arc::clone(&order), Arc::clone(&order));
     let a = graph.add(move || o1.lock().unpoison().push('A'));
     let b = graph.add(move || o2.lock().unpoison().push('B'));
     let c = graph.add(move || o3.lock().unpoison().push('C'));
@@ -83,10 +95,10 @@ mod test {
     let order = Arc::new(Mutex::new(Vec::new()));
     let mut graph = TaskGraph::new();
     let (o1, o2, o3, o4) = (
-      Arc::clone(&order), 
-      Arc::clone(&order), 
-      Arc::clone(&order), 
-      Arc::clone(&order)
+      Arc::clone(&order),
+      Arc::clone(&order),
+      Arc::clone(&order),
+      Arc::clone(&order),
     );
 
     let a = graph.add(move || o1.lock().unpoison().push('A'));
@@ -101,8 +113,8 @@ mod test {
     pool.execute(graph).unwrap();
     let result = order.lock().unpoison();
 
-    assert_eq!(result[0], 'A');          // A first
-    assert_eq!(result[3], 'D');          // D last
+    assert_eq!(result[0], 'A'); // A first
+    assert_eq!(result[3], 'D'); // D last
     assert!(result[1..3].contains(&'B')); // B and C in middle, any order
     assert!(result[1..3].contains(&'C'));
   }
@@ -123,7 +135,9 @@ mod test {
     let pool = Pool::new(4).unwrap();
     let mut data: Vec<u32> = (0..1000).collect();
     pool.parallel_for(&mut data, 64, |chunk| {
-      for x in chunk { *x *= 2; }
+      for x in chunk {
+        *x *= 2;
+      }
     });
     for (i, val) in data.iter().enumerate() {
       assert_eq!(*val, (i as u32) * 2);

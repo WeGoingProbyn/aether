@@ -1,26 +1,24 @@
 use std::sync::Arc;
 
-use continuum::field::{SoaField, CellView, FieldStorage};
-use continuum::geometry::{CellId, IdentityMap, CellGeometry};
-use continuum::mesh::StructuredBlock;
 use continuum::boundary::{BoundaryRegistry, ReflectiveWall, Transmissive};
+use continuum::field::{CellView, FieldStorage, SoaField};
+use continuum::geometry::{CellGeometry, CellId, IdentityMap};
+use continuum::mesh::StructuredBlock;
 use continuum::model::{Euler2D, RusanovFlux};
-use continuum::solver::{FvmSolver, SolverConfig, TimeIntegration};
 use continuum::partition::decompose_structured;
+use continuum::solver::{FvmSolver, SolverConfig, TimeIntegration};
 use continuum::topology::BoundaryTag;
 
 use utility::error::AetherResult;
 use utility::info;
 use utility::logger::{Level, LogWriter, Logger, StdSink};
-use utility::thread::pool::Pool;
 use utility::profiler::Profiler;
+use utility::thread::pool::Pool;
 
 fn main() -> AetherResult<()> {
   Logger::init(
-    vec![
-      Box::new(StdSink::new(std::io::stdout()).capacity(1)),
-    ],
-    Level::Trace
+    vec![Box::new(StdSink::new(std::io::stdout()).capacity(1))],
+    Level::Trace,
   );
 
   Profiler::init();
@@ -40,25 +38,31 @@ fn main() -> AetherResult<()> {
   let decomp = decompose_structured(Arc::clone(&mesh), dims, num_partitions, 1);
 
   // Create per-partition fields
-  let mut states: Vec<SoaField<4>> = decomp.partitions.iter()
-    .map(|p| SoaField::from_fn(p.cell_count(), |cell| {
-      let global = p.local_to_global(cell);
-      let x = mesh.cell_centroid(global)[0];
-      if x < 0.5 {
-        let rho = 1.0;
-        let p = 1.0;
-        [rho, 0.0, 0.0, p / (gamma - 1.0)]
-      } else {
-        let rho = 0.125;
-        let p = 0.1;
-        [rho, 0.0, 0.0, p / (gamma - 1.0)]
-      }
-    })).collect();
+  let mut states: Vec<SoaField<4>> = decomp
+    .partitions
+    .iter()
+    .map(|p| {
+      SoaField::from_fn(p.cell_count(), |cell| {
+        let global = p.local_to_global(cell);
+        let x = mesh.cell_centroid(global)[0];
+        if x < 0.5 {
+          let rho = 1.0;
+          let p = 1.0;
+          [rho, 0.0, 0.0, p / (gamma - 1.0)]
+        } else {
+          let rho = 0.125;
+          let p = 0.1;
+          [rho, 0.0, 0.0, p / (gamma - 1.0)]
+        }
+      })
+    })
+    .collect();
 
-  let mut residuals = decomp.partitions.iter()
-    .map(|p| 
-      SoaField::zeros(p.cell_count()
-      )).collect::<Vec<SoaField<4>>>();
+  let mut residuals = decomp
+    .partitions
+    .iter()
+    .map(|p| SoaField::zeros(p.cell_count()))
+    .collect::<Vec<SoaField<4>>>();
 
   let mut bcs = BoundaryRegistry::new();
   bcs.register(BoundaryTag::Left, Transmissive);
@@ -72,7 +76,8 @@ fn main() -> AetherResult<()> {
   let mut time = 0.0;
   let mut step = 0;
   while time < 0.2 {
-    let dt = solver.parallel_step(&pool, &decomp, &mut states, &mut residuals, &bcs);
+    let dt =
+      solver.parallel_step(&pool, &decomp, &mut states, &mut residuals, &bcs);
     time += dt;
     step += 1;
     info!("step={}, t={:.6}, dt={:.6}", step, time, dt);
@@ -84,7 +89,11 @@ fn main() -> AetherResult<()> {
       let cell = CellId::from(j);
       let global = partition.local_to_global(cell);
       let s = states[i].state(cell);
-      info!("{:.4} {:.4}", mesh.cell_centroid(global)[0], s.as_state()[0]);
+      info!(
+        "{:.4} {:.4}",
+        mesh.cell_centroid(global)[0],
+        s.as_state()[0]
+      );
     }
   }
 
@@ -92,7 +101,3 @@ fn main() -> AetherResult<()> {
   Profiler::print(&mut LogWriter::new(Level::Info));
   Ok(())
 }
-
-
-
-

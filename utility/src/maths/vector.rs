@@ -1,8 +1,9 @@
 use std::ops::{
-  Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Sub, SubAssign
+  Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Sub,
+  SubAssign,
 };
 
-use crate::maths::{matrix::Matrix};
+use crate::maths::matrix::Matrix;
 
 #[derive(PartialEq, Clone)]
 pub struct Vector<T: Default, const C: usize> {
@@ -13,7 +14,7 @@ pub struct Vector<T: Default, const C: usize> {
 
 macro_rules! impl_vector_float {
   ($t:ty) => {
-    impl<const C: usize> Vector<$t, C> 
+    impl<const C: usize> Vector<$t, C>
     where
       for<'x> &'x $t: Mul<&'x $t, Output = $t> + Add<&'x $t, Output = $t>,
     {
@@ -34,15 +35,15 @@ macro_rules! impl_vector_float {
       }
 
       pub fn project(&self, other: &Vector<$t, C>) -> Vector<$t, C> {
-         other * &(self.dot(other) / other.dot(other))
+        other * &(self.dot(other) / other.dot(other))
       }
 
       pub fn reflect(&self, normal: &Vector<$t, C>) -> Vector<$t, C> {
         let d = self.dot(normal);
-        self - &(normal * &(2.0 as $t * d))  
+        self - &(normal * &(2.0 as $t * d))
       }
     }
-  }
+  };
 }
 
 impl_vector_float!(f32);
@@ -67,8 +68,8 @@ where
   }
 }
 
-impl<T, const C: usize> Vector<T, C> 
-where 
+impl<T, const C: usize> Vector<T, C>
+where
   T: Default + Clone + Add<Output = T>,
 {
   pub fn into_sum(self) -> T {
@@ -76,8 +77,8 @@ where
   }
 }
 
-impl<T, const C: usize> Vector<T, C> 
-where 
+impl<T, const C: usize> Vector<T, C>
+where
   T: Default,
   for<'x> &'x T: Add<&'x T, Output = T>,
 {
@@ -124,14 +125,14 @@ where
 
 // ============= Iterators =========================//
 
-pub struct VectorIter<'a, T, const C: usize> 
-where 
+pub struct VectorIter<'a, T, const C: usize>
+where
   T: Default,
 {
   inner: &'a Matrix<T, C, 1>,
 }
 
-impl<'a, T, const C: usize> Iterator for VectorIter<'a, T, C> 
+impl<'a, T, const C: usize> Iterator for VectorIter<'a, T, C>
 where
   T: Default,
 {
@@ -142,7 +143,7 @@ where
 }
 
 // impl<'a, T, const C: usize> Sum<&'a Vector<T, C>> for Vector<T, C>
-// where 
+// where
 //   T: Default,
 //   for<'x> &'x T: Add<&'x T, Output = T>,
 // {
@@ -166,21 +167,23 @@ where
 //   }
 // }
 
-pub struct VectorIterMut<'a, T, const C: usize> 
-where 
+pub struct VectorIterMut<'a, T, const C: usize>
+where
   T: Default,
 {
   inner: &'a mut Matrix<T, C, 1>,
   col: usize,
 }
 
-impl<'a, T, const C: usize> Iterator for VectorIterMut<'a, T, C> 
+impl<'a, T, const C: usize> Iterator for VectorIterMut<'a, T, C>
 where
   T: Default,
 {
   type Item = &'a mut T;
   fn next(&mut self) -> Option<Self::Item> {
-    if self.col >= C { return None }
+    if self.col >= C {
+      return None;
+    }
 
     let next = &mut self.inner[0][self.col] as *mut T;
     self.col += 1;
@@ -191,21 +194,23 @@ where
   }
 }
 
-pub struct VectorIterInto<T, const C: usize> 
-where 
+pub struct VectorIterInto<T, const C: usize>
+where
   T: Default + Clone,
 {
   inner: Matrix<T, C, 1>,
   col: usize,
 }
 
-impl<T, const C: usize> Iterator for VectorIterInto<T, C> 
+impl<T, const C: usize> Iterator for VectorIterInto<T, C>
 where
   T: Default + Clone,
 {
   type Item = T;
   fn next(&mut self) -> Option<Self::Item> {
-    if self.col >= C { return None }
+    if self.col >= C {
+      return None;
+    }
 
     let next = self.inner[0][self.col].clone();
     self.col += 1;
@@ -216,14 +221,12 @@ where
   }
 }
 
-impl<T, const C: usize> Vector<T, C> 
-where 
+impl<T, const C: usize> Vector<T, C>
+where
   T: Default,
 {
   pub fn iter(&self) -> VectorIter<'_, T, C> {
-    VectorIter {
-      inner: &self.inner,
-    }
+    VectorIter { inner: &self.inner }
   }
 
   pub fn iter_mut(&mut self) -> VectorIterMut<'_, T, C> {
@@ -234,8 +237,8 @@ where
   }
 }
 
-impl<T, const C: usize> IntoIterator for Vector<T, C> 
-where 
+impl<T, const C: usize> IntoIterator for Vector<T, C>
+where
   T: Default + Clone,
 {
   type Item = T;
@@ -577,7 +580,8 @@ where
   }
 }
 
-impl<T, const K: usize, const N: usize> MulAssign<Matrix<T, N, K>> for Vector<T, K>
+impl<T, const K: usize, const N: usize> MulAssign<Matrix<T, N, K>>
+  for Vector<T, K>
 where
   T: Default + Clone + Mul<T, Output = T> + Add<T, Output = T>,
 {
@@ -659,9 +663,15 @@ mod test {
     assert_eq!(res_clone, known);
   }
 
-  fn approx_eq_vec<const C: usize>(a: &Vector<f32, C>, b: &Vector<f32, C>, eps: f32) -> bool {
+  fn approx_eq_vec<const C: usize>(
+    a: &Vector<f32, C>,
+    b: &Vector<f32, C>,
+    eps: f32,
+  ) -> bool {
     for i in 0..C {
-      if (a[i] - b[i]).abs() > eps { return false; }
+      if (a[i] - b[i]).abs() > eps {
+        return false;
+      }
     }
     true
   }

@@ -1,6 +1,14 @@
 use utility::{profile, thread::pool::Pool};
 
-use crate::{boundary::BoundaryRegistry, field::{CellView, FieldStorage}, geometry::{CellGeometry, CellId, FaceGeometry}, mesh::Mesh, model::{ConservationLaw, NumericalFlux}, partition::Decomposition, topology::{FaceConnection, Topology}};
+use crate::{
+  boundary::BoundaryRegistry,
+  field::FieldStorage,
+  geometry::{CellGeometry, CellId, FaceGeometry},
+  mesh::Mesh,
+  model::{ConservationLaw, NumericalFlux},
+  partition::Decomposition,
+  topology::{FaceConnection, Topology},
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TimeIntegration {
@@ -16,7 +24,11 @@ pub struct SolverConfig {
 }
 
 impl SolverConfig {
-  pub fn new(cfl: f64, dt_max: f64, integrator: TimeIntegration) -> SolverConfig {
+  pub fn new(
+    cfl: f64,
+    dt_max: f64,
+    integrator: TimeIntegration,
+  ) -> SolverConfig {
     SolverConfig {
       cfl,
       dt_max,
@@ -24,14 +36,42 @@ impl SolverConfig {
     }
   }
 
-   pub fn dt_max(&self) -> f64 { 
-    self.dt_max 
+  pub fn dt_max(&self) -> f64 {
+    self.dt_max
+  }
+}
+
+#[derive(Clone)]
+struct SolverScratch<const N: usize> {
+  state_cache: Vec<[f64; N]>,
+  residual_accum: Vec<[f64; N]>,
+  cell_state: [f64; N],
+}
+
+impl<const N: usize> Default for SolverScratch<N> {
+  fn default() -> Self {
+    SolverScratch {
+      state_cache: Vec::new(),
+      residual_accum: Vec::new(),
+      cell_state: [0.0; N],
+    }
+  }
+}
+
+impl<const N: usize> SolverScratch<N> {
+  fn ensure_len(&mut self, count: usize) {
+    if self.state_cache.len() != count {
+      self.state_cache.resize(count, [0.0; N]);
+    }
+    if self.residual_accum.len() != count {
+      self.residual_accum.resize(count, [0.0; N]);
+    }
   }
 }
 
 #[derive(Clone)]
 pub struct FvmSolver<const D: usize, const N: usize, L, F>
-where 
+where
   L: ConservationLaw<D, N>,
   F: NumericalFlux<D, N>,
 {
@@ -40,20 +80,22 @@ where
   step: usize,
   law: L,
   flux: F,
+  scratches: Vec<SolverScratch<N>>,
 }
 
-impl<const D: usize, const N: usize, L, F> FvmSolver<D, N, L, F> 
-where 
+impl<const D: usize, const N: usize, L, F> FvmSolver<D, N, L, F>
+where
   L: ConservationLaw<D, N>,
   F: NumericalFlux<D, N>,
 {
-  pub fn new(config: SolverConfig, law: L, flux: F) -> Self {      
-    FvmSolver { 
-      config, 
-      time: 0.0, 
-      step: 0, 
-      law, 
-      flux 
+  pub fn new(config: SolverConfig, law: L, flux: F) -> Self {
+    FvmSolver {
+      config,
+      time: 0.0,
+      step: 0,
+      law,
+      flux,
+      scratches: vec![SolverScratch::default()],
     }
   }
 
@@ -65,12 +107,143 @@ where
     self.step
   }
 
-  pub fn law(&self) -> &L { 
-    &self.law 
+  pub fn law(&self) -> &L {
+    &self.law
   }
-  
-  pub fn config(&self) -> &SolverConfig { 
-    &self.config 
+
+  pub fn config(&self) -> &SolverConfig {
+    &self.config
+  }
+
+  fn gather_state_cache<S, G>(
+    state: &S,
+    geometry: &G,
+    cache: &mut Vec<[f64; N]>,
+  ) where
+    S: FieldStorage<N>,
+    G: CellGeometry<D>,
+  {
+    let cell_count = geometry.cell_count();
+    if cache.len() != cell_count {
+      cache.resize(cell_count, [0.0; N]);
+    }
+
+    for (i, cell_state) in cache.iter_mut().enumerate().take(cell_count) {
+      state.state_into(CellId::from(i), cell_state);
+    }
+  }
+
+  fn compute_dt_from_cache<G>(
+    config: &SolverConfig,
+    law: &L,
+    state_cache: &[[f64; N]],
+    mesh: &G,
+  ) -> f64
+  where
+    G: CellGeometry<D>,
+  {
+    let mut dt_min = config.dt_max;
+
+    for (i, cell_state) in
+      state_cache.iter().enumerate().take(mesh.cell_count())
+    {
+      let speed = law.max_wave_speed(cell_state);
+      if speed > 1e-14 {
+        let vol = mesh.cell_volume(CellId::from(i));
+        let dx = vol.powf(1.0 / D as f64);
+        let dt_local = config.cfl * dx / speed;
+        dt_min = dt_min.min(dt_local);
+      }
+    }
+
+    dt_min
+  }
+
+  fn compute_residual_from_cache_with_accum<S, M>(
+    law: &L,
+    flux_solver: &F,
+    state_cache: &[[f64; N]],
+    accumulated: &mut Vec<[f64; N]>,
+    residual: &mut S,
+    mesh: &M,
+    bcs: &BoundaryRegistry<D, N>,
+  ) where
+    S: FieldStorage<N>,
+    M: Mesh<D>,
+  {
+    let cell_count = mesh.cell_count();
+    debug_assert_eq!(state_cache.len(), cell_count);
+
+    if accumulated.len() != cell_count {
+      accumulated.resize(cell_count, [0.0; N]);
+    }
+    accumulated.fill([0.0; N]);
+
+    // Interior faces
+    for &(face, owner, neighbour) in mesh.interior_faces() {
+      let area_vec = mesh.face_area_vector(face);
+      let area = mesh.face_area(face);
+      let normal = &area_vec / &area;
+
+      let flux = flux_solver.compute(
+        law,
+        &state_cache[owner.index()],
+        &state_cache[neighbour.index()],
+        &normal,
+      );
+
+      let owner_index = owner.index();
+      let neighbour_index = neighbour.index();
+      let face_scale = area * mesh.face_metrics(face).sqrt_metric;
+
+      for i in 0..N {
+        let scaled = flux[i] * face_scale;
+        accumulated[owner_index][i] -= scaled;
+        accumulated[neighbour_index][i] += scaled;
+      }
+    }
+
+    // Boundary faces
+    for tag in mesh.boundary_tags() {
+      if let Some(bc) = bcs.get(tag) {
+        for &(face, owner) in mesh.boundary_faces(tag) {
+          let area_vec = mesh.face_area_vector(face);
+          let area = mesh.face_area(face);
+          let out_sign = match mesh.face_connection(face) {
+            FaceConnection::Boundary { out_sign, .. } => *out_sign,
+            _ => unreachable!(),
+          };
+          let normal = &area_vec / &area * out_sign;
+
+          let owner_index = owner.index();
+          let interior = &state_cache[owner_index];
+          let ghost = bc.ghost_state(interior, &normal);
+          let flux = flux_solver.compute(law, interior, &ghost, &normal);
+          let face_scale = area * mesh.face_metrics(face).sqrt_metric;
+
+          for i in 0..N {
+            accumulated[owner_index][i] -= flux[i] * face_scale;
+          }
+        }
+      }
+    }
+
+    // Divide by volume + add source terms
+    for (i, accum_state) in accumulated.iter().enumerate().take(cell_count) {
+      let cell = CellId::from(i);
+      let vol = mesh.cell_volume(cell);
+      let metrics = mesh.cell_metrics(cell);
+
+      let source =
+        law.source(&state_cache[i], mesh.cell_centroid(cell), metrics);
+
+      let mut out = [0.0; N];
+      for j in 0..N {
+        out[j] = accum_state[j] / vol + source[j] * metrics.sqrt_metric;
+      }
+
+      residual.write(cell, &out);
+    }
   }
 
   #[profile]
@@ -80,11 +253,13 @@ where
     mesh: &impl Mesh<D>,
   ) -> f64 {
     let mut dt_min = self.config.dt_max;
+    let mut cell_state = [0.0; N];
 
     for i in 0..mesh.cell_count() {
       let cell = CellId::from(i);
-      let s = state.state(cell);
-      let speed = self.law.max_wave_speed(s.as_state());
+      state.state_into(cell, &mut cell_state);
+
+      let speed = self.law.max_wave_speed(&cell_state);
       if speed > 1e-14 {
         let vol = mesh.cell_volume(cell);
         let dx = vol.powf(1.0 / D as f64);
@@ -92,8 +267,9 @@ where
         dt_min = dt_min.min(dt_local);
       }
     }
+
     dt_min
-  } 
+  }
 
   #[profile]
   pub fn compute_residual<S>(
@@ -102,91 +278,21 @@ where
     residual: &mut S,
     mesh: &impl Mesh<D>,
     bcs: &BoundaryRegistry<D, N>,
-  ) 
-  where
-    S: FieldStorage<N>
+  ) where
+    S: FieldStorage<N>,
   {
-    // Zero residual
-    for i in 0..mesh.cell_count() {
-      residual.write(CellId::from(i), &[0.0; N]);
-    }
-
-    // Interior faces
-    for &(face, owner, neighbour) in mesh.interior_faces() {
-      let left = state.state(owner);
-      let right = state.state(neighbour);
-
-      let area_vec = mesh.face_area_vector(face);
-      let area = mesh.face_area(face);
-      let normal = &area_vec / &area;
-
-      let flux = self.flux.compute(
-        &self.law,
-        left.as_state(),
-        right.as_state(),
-        &normal,
-      );
-
-      // Owner loses flux, neighbour gains flux
-      let mut res_l = *residual.state(owner).as_state();
-      let mut res_r = *residual.state(neighbour).as_state();
-      for i in 0..N {
-        let f_scaled = flux[i] * area * mesh.face_metrics(face).sqrt_metric;
-        res_l[i] -= f_scaled;
-        res_r[i] += f_scaled;
-      }
-      residual.write(owner, res_l.as_state());
-      residual.write(neighbour, res_r.as_state());
-    }
-
-    // Boundary faces
-    for tag in mesh.boundary_tags() {
-      if let Some(bc) = bcs.get(tag) {
-        for &(face, owner) in mesh.boundary_faces(tag) {
-          let interior = state.state(owner);
-          let area_vec = mesh.face_area_vector(face);
-          let area = mesh.face_area(face);
-          let out_sign = match mesh.face_connection(face) {
-            FaceConnection::Boundary { out_sign, .. } => *out_sign,
-            _ => unreachable!(),
-          };
-          let normal = &area_vec / &area * out_sign;
-
-          let ghost = bc.ghost_state(interior.as_state(), &normal);
-          let flux = self.flux.compute(
-            &self.law,
-            interior.as_state(),
-            &ghost,
-            &normal,
-          );
-
-          let mut res = *residual.state(owner).as_state();
-          for i in 0..N {
-            res[i] -= flux[i] * area * mesh.face_metrics(face).sqrt_metric;
-          }
-          residual.write(owner, res.as_state());
-        }
-      }
-    }
-
-    // Divide by volume + add source terms
-    for i in 0..mesh.cell_count() {
-      let cell = CellId::from(i);
-      let vol = mesh.cell_volume(cell);
-      let metrics = mesh.cell_metrics(cell);
-
-      let mut res = *residual.state(cell).as_state();
-      let s = self.law.source(
-        state.state(cell).as_state(),
-        mesh.cell_centroid(cell),
-        metrics,
-      );
-
-      for j in 0..N {
-        res[j] = res[j] / vol + s[j] * metrics.sqrt_metric;
-      }
-      residual.write(cell, res.as_state());
-    }
+    let mut state_cache = Vec::new();
+    let mut residual_accum = Vec::new();
+    Self::gather_state_cache(state, mesh, &mut state_cache);
+    Self::compute_residual_from_cache_with_accum(
+      &self.law,
+      &self.flux,
+      &state_cache,
+      &mut residual_accum,
+      residual,
+      mesh,
+      bcs,
+    );
   }
 
   #[profile]
@@ -197,110 +303,189 @@ where
     mesh: &(impl CellGeometry<D> + FaceGeometry<D> + Topology),
     bcs: &BoundaryRegistry<D, N>,
   ) -> f64 {
-  let dt = self.compute_dt(state, mesh);
+    let dt = {
+      self.ensure_scratch_slots(1);
+      let (law, flux, config, scratch) =
+        (&self.law, &self.flux, &self.config, &mut self.scratches[0]);
 
-    match self.config.integrator {
-      TimeIntegration::ForwardEuler => {
-        self.compute_residual(state, residual, mesh, bcs);
-        // state = state + dt * residual
-        state.axpy(dt, residual);
+      scratch.ensure_len(mesh.cell_count());
+      Self::gather_state_cache(state, mesh, &mut scratch.state_cache);
+      let dt =
+        Self::compute_dt_from_cache(config, law, &scratch.state_cache, mesh);
+
+      match config.integrator {
+        TimeIntegration::ForwardEuler => {
+          Self::compute_residual_from_cache_with_accum(
+            law,
+            flux,
+            &scratch.state_cache,
+            &mut scratch.residual_accum,
+            residual,
+            mesh,
+            bcs,
+          );
+          state.axpy(dt, residual);
+        }
+
+        TimeIntegration::Rk2 => {
+          let u_old = state.clone_state();
+
+          // Stage 1: state = u + dt * R(u)
+          Self::compute_residual_from_cache_with_accum(
+            law,
+            flux,
+            &scratch.state_cache,
+            &mut scratch.residual_accum,
+            residual,
+            mesh,
+            bcs,
+          );
+          state.axpy(dt, residual);
+
+          // Stage 2: state = u* + dt * R(u*)
+          Self::gather_state_cache(state, mesh, &mut scratch.state_cache);
+          Self::compute_residual_from_cache_with_accum(
+            law,
+            flux,
+            &scratch.state_cache,
+            &mut scratch.residual_accum,
+            residual,
+            mesh,
+            bcs,
+          );
+          state.axpy(dt, residual);
+
+          let stage2 = state.clone_state();
+          state.weighted_sum(0.5, &u_old, 0.5, &stage2);
+        }
       }
 
-      TimeIntegration::Rk2 => {
-        let u_old = state.clone_state();
-
-        // Stage 1: state = u + dt * R(u)
-        self.compute_residual(state, residual, mesh, bcs);
-        state.axpy(dt, residual);
-
-        // Stage 2: state = 0.5 * u_old + 0.5 * (state + dt * R(state))
-        self.compute_residual(state, residual, mesh, bcs);
-        state.axpy(dt, residual);          // state = u* + dt*R(u*)
-
-        let temp = state.clone_state();
-        state.weighted_sum(0.5, &u_old, 0.5, &temp);
+      for i in 0..mesh.cell_count() {
+        let cell = CellId::from(i);
+        state.state_into(cell, &mut scratch.cell_state);
+        law.fix_state(&mut scratch.cell_state);
+        state.write(cell, &scratch.cell_state);
       }
-    }
 
-    for i in 0..mesh.cell_count() {
-      let cell = CellId::from(i);
-      let mut s = *state.state(cell).as_state();
-      self.law.fix_state(&mut s);
-      state.write(cell, &s);
-    }
+      dt
+    };
 
     self.time += dt;
     self.step += 1;
     dt
   }
 
-  fn parallel_compute_residuals<M, S>(
-    &self,
-    pool: &Pool,
+  fn ensure_scratch_slots(&mut self, count: usize) {
+    let required = count.max(1);
+    if self.scratches.len() >= required {
+      return;
+    }
+    self.scratches.resize_with(required, SolverScratch::default);
+  }
+
+  fn refresh_parallel_state_caches<M, S>(
     decomp: &Decomposition<D, M>,
     states: &[S],
+    scratches: &mut [SolverScratch<N>],
+  ) where
+    M: Mesh<D>,
+    S: FieldStorage<N>,
+  {
+    for ((partition, state), scratch) in decomp
+      .partitions
+      .iter()
+      .zip(states.iter())
+      .zip(scratches.iter_mut())
+    {
+      scratch.ensure_len(partition.cell_count());
+      Self::gather_state_cache(state, partition, &mut scratch.state_cache);
+    }
+  }
+
+  fn parallel_compute_residuals_from_cache<M, S>(
+    pool: &Pool,
+    law: &L,
+    flux_solver: &F,
+    decomp: &Decomposition<D, M>,
+    scratches: &mut [SolverScratch<N>],
     residuals: &mut [S],
     bcs: &BoundaryRegistry<D, N>,
-  )
-where
+  ) where
     M: Mesh<D>,
     L: ConservationLaw<D, N> + Sync,
     F: NumericalFlux<D, N> + Sync,
     S: FieldStorage<N>,
   {
-    let tasks: Vec<_> = states.iter()
+    let tasks: Vec<_> = scratches
+      .iter_mut()
       .zip(residuals.iter_mut())
       .zip(decomp.partitions.iter())
-      .map(|((state, residual), partition)| {
+      .map(|((scratch, residual), partition)| {
         move || {
-          self.compute_residual(state, residual, partition, bcs);
+          Self::compute_residual_from_cache_with_accum(
+            law,
+            flux_solver,
+            &scratch.state_cache,
+            &mut scratch.residual_accum,
+            residual,
+            partition,
+            bcs,
+          );
         }
-      }).collect();
+      })
+      .collect();
+
     pool.dispatch(tasks);
   }
 
   fn parallel_axpy<S>(
-    &self,
     pool: &Pool,
     states: &mut [S],
     residuals: &[S],
     alpha: f64,
-  )
-where
+  ) where
     S: FieldStorage<N>,
   {
-    let tasks: Vec<_> = states.iter_mut()
+    let tasks: Vec<_> = states
+      .iter_mut()
       .zip(residuals.iter())
       .map(|(state, residual)| {
-        move || { state.axpy(alpha, residual); }
-      }).collect();
+        move || {
+          state.axpy(alpha, residual);
+        }
+      })
+      .collect();
+
     pool.dispatch(tasks);
   }
 
   fn parallel_fix_owned<M, S>(
-    &self,
     pool: &Pool,
+    law: &L,
     decomp: &Decomposition<D, M>,
     states: &mut [S],
-  )
-where
+  ) where
     M: Mesh<D>,
     L: ConservationLaw<D, N> + Sync,
     F: NumericalFlux<D, N> + Sync,
     S: FieldStorage<N>,
   {
-    let tasks: Vec<_> = states.iter_mut()
+    let tasks: Vec<_> = states
+      .iter_mut()
       .zip(decomp.partitions.iter())
       .map(|(state, partition)| {
         move || {
+          let mut cell_state = [0.0; N];
           for i in 0..partition.num_owned() {
             let cell = CellId::from(i);
-            let mut s = *state.state(cell).as_state();
-            self.law.fix_state(&mut s);
-            state.write(cell, &s);
+            state.state_into(cell, &mut cell_state);
+            law.fix_state(&mut cell_state);
+            state.write(cell, &cell_state);
           }
         }
-      }).collect();
+      })
+      .collect();
+
     pool.dispatch(tasks);
   }
 
@@ -313,7 +498,7 @@ where
     residuals: &mut [S],
     bcs: &BoundaryRegistry<D, N>,
   ) -> f64
-where
+  where
     M: Mesh<D>,
     L: ConservationLaw<D, N> + Sync,
     F: NumericalFlux<D, N> + Sync,
@@ -322,49 +507,78 @@ where
     // 1. Exchange ghost cell data
     decomp.exchange_ghosts(states);
 
-    // 2. Compute global dt (sequential — it's a min-reduction, fast)
-    let dt = decomp.partitions.iter().enumerate()
-      .map(|(i, p)| self.compute_dt(&states[i], p))
-      .fold(self.config.dt_max, f64::min);
+    let dt = {
+      // 2. Gather states once and compute global dt
+      self.ensure_scratch_slots(decomp.partitions.len());
+      let (law, flux, config, scratches) = (
+        &self.law,
+        &self.flux,
+        &self.config,
+        &mut self.scratches[..decomp.partitions.len()],
+      );
 
-    match self.config.integrator {
-      TimeIntegration::ForwardEuler => {
-        // 3. Compute residuals per partition (parallel via dispatch)
-        self.parallel_compute_residuals(pool, decomp, states, residuals, bcs);
+      Self::refresh_parallel_state_caches(decomp, states, scratches);
 
-        // 4. Update state: state += dt * residual (parallel via dispatch)
-        self.parallel_axpy(pool, states, residuals, dt);
+      let dt = decomp
+        .partitions
+        .iter()
+        .enumerate()
+        .map(|(i, partition)| {
+          Self::compute_dt_from_cache(
+            config,
+            law,
+            &scratches[i].state_cache,
+            partition,
+          )
+        })
+        .fold(config.dt_max, f64::min);
+
+      match config.integrator {
+        TimeIntegration::ForwardEuler => {
+          Self::parallel_compute_residuals_from_cache(
+            pool, law, flux, decomp, scratches, residuals, bcs,
+          );
+          Self::parallel_axpy(pool, states, residuals, dt);
+        }
+
+        TimeIntegration::Rk2 => {
+          let u_old: Vec<S> =
+            states.iter().map(|state| state.clone_state()).collect();
+
+          // Stage 1: state = u + dt * R(u)
+          Self::parallel_compute_residuals_from_cache(
+            pool, law, flux, decomp, scratches, residuals, bcs,
+          );
+          Self::parallel_axpy(pool, states, residuals, dt);
+
+          // Stage 2: state = u* + dt * R(u*)
+          decomp.exchange_ghosts(states);
+          Self::refresh_parallel_state_caches(decomp, states, scratches);
+          Self::parallel_compute_residuals_from_cache(
+            pool, law, flux, decomp, scratches, residuals, bcs,
+          );
+          Self::parallel_axpy(pool, states, residuals, dt);
+
+          // Combine stages: state = 0.5 * u_old + 0.5 * state
+          let tasks: Vec<_> = states
+            .iter_mut()
+            .zip(u_old.iter())
+            .map(|(state, old_state)| {
+              move || {
+                let stage2 = state.clone_state();
+                state.weighted_sum(0.5, old_state, 0.5, &stage2);
+              }
+            })
+            .collect();
+
+          pool.dispatch(tasks);
+        }
       }
 
-      TimeIntegration::Rk2 => {
-        let u_old: Vec<S> = states.iter()
-          .map(|state| state.clone_state())
-          .collect();
-
-        // Stage 1: state = u + dt * R(u)
-        self.parallel_compute_residuals(pool, decomp, states, residuals, bcs);
-        self.parallel_axpy(pool, states, residuals, dt);
-
-        // Stage 2: state = u* + dt * R(u*)
-        decomp.exchange_ghosts(states);
-        self.parallel_compute_residuals(pool, decomp, states, residuals, bcs);
-        self.parallel_axpy(pool, states, residuals, dt);
-
-        // Combine stages: state = 0.5 * u_old + 0.5 * state
-        let tasks: Vec<_> = states.iter_mut()
-          .zip(u_old.iter())
-          .map(|(state, old_state)| {
-            move || {
-              let stage2 = state.clone_state();
-              state.weighted_sum(0.5, old_state, 0.5, &stage2);
-            }
-          }).collect();
-        pool.dispatch(tasks);
-      }
-    }
-
-    // 5. Fix state per partition (parallel via dispatch)
-    self.parallel_fix_owned(pool, decomp, states);
+      // 5. Fix state per partition (parallel via dispatch)
+      Self::parallel_fix_owned(pool, law, decomp, states);
+      dt
+    };
 
     self.time += dt;
     self.step += 1;
@@ -372,4 +586,3 @@ where
     dt
   }
 }
-

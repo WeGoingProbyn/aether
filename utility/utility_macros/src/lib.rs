@@ -29,7 +29,7 @@ pub fn profile(_: TokenStream, item: TokenStream) -> TokenStream {
 
 #[proc_macro_derive(Serialize)]
 pub fn serialize(input: TokenStream) -> TokenStream {
-  let input = syn::parse::<syn::DeriveInput>(input).unwrap();                                                                                                                                                                                                                               
+  let input = syn::parse::<syn::DeriveInput>(input).unwrap();
   let name = &input.ident;
   // Extract the named fields
   let fields = match &input.data {
@@ -60,7 +60,8 @@ pub fn serialize(input: TokenStream) -> TokenStream {
         s.serialize_struct_end()
       }
     }
-  }.into() 
+  }
+  .into()
 }
 
 #[proc_macro_derive(Deserialize)]
@@ -69,38 +70,37 @@ pub fn deserialize(input: TokenStream) -> TokenStream {
   let name = &input.ident;
 
   match &input.data {
-    syn::Data::Struct(data) => {
-      match &data.fields {
-        syn::Fields::Named(fields) => {
-          let field_deserializations = fields.named.iter().map(|f| {
-            let field_name = f.ident.as_ref().unwrap();
-            let field_str = field_name.to_string();
-            quote! {
-              let #field_name = d.deserialize_struct_field(#field_str)?;
-            }
-          });
-
-          let field_names = fields.named.iter().map(|f| {
-            let field_name = f.ident.as_ref().unwrap();
-            quote! { #field_name }
-          });
-
+    syn::Data::Struct(data) => match &data.fields {
+      syn::Fields::Named(fields) => {
+        let field_deserializations = fields.named.iter().map(|f| {
+          let field_name = f.ident.as_ref().unwrap();
+          let field_str = field_name.to_string();
           quote! {
-            impl ::utility::serial::deserialize::Deserialize for #name {
-              fn deserialize<D: ::utility::serial::deserialize::Deserializer>(
-                d: &mut D
-              ) -> Result<Self, D::Error> {
-                d.deserialize_struct_begin(stringify!(#name))?;
-                #(#field_deserializations)*
-                d.deserialize_struct_end()?;
-                Ok(Self { #(#field_names),* })
-              }
+            let #field_name = d.deserialize_struct_field(#field_str)?;
+          }
+        });
+
+        let field_names = fields.named.iter().map(|f| {
+          let field_name = f.ident.as_ref().unwrap();
+          quote! { #field_name }
+        });
+
+        quote! {
+          impl ::utility::serial::deserialize::Deserialize for #name {
+            fn deserialize<D: ::utility::serial::deserialize::Deserializer>(
+              d: &mut D
+            ) -> Result<Self, D::Error> {
+              d.deserialize_struct_begin(stringify!(#name))?;
+              #(#field_deserializations)*
+              d.deserialize_struct_end()?;
+              Ok(Self { #(#field_names),* })
             }
-          }.into()
+          }
         }
-        _ => panic!("Deserialize derive only supports named structs"),
+        .into()
       }
-    }
+      _ => panic!("Deserialize derive only supports named structs"),
+    },
     _ => panic!("Deserialize derive only supports structs"),
   }
 }

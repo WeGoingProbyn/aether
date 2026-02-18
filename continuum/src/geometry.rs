@@ -5,7 +5,7 @@ pub type Point<const D: usize> = Vector<f64, D>;
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct CellId(usize);
 
-impl CellId{
+impl CellId {
   pub fn index(&self) -> usize {
     self.0
   }
@@ -64,9 +64,8 @@ pub struct FaceMetrics<const D: usize> {
   pub normal: Vector<f64, D>,
   pub comp_area: f64,
   pub phys_area: f64,
-  pub sqrt_metric: f64
+  pub sqrt_metric: f64,
 }
-
 
 /// Identity map for solution in cartesian grids requiring
 /// no geometrical mappings from computational to physical
@@ -89,5 +88,3 @@ impl<const D: usize> GeometryMap<D, D> for IdentityMap<D> {
     1.0f64
   }
 }
-
-

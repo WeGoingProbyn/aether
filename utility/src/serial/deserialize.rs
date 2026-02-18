@@ -1,5 +1,7 @@
 pub trait Deserialize: Sized {
-  fn deserialize<D: Deserializer>(deserializer: &mut D) -> Result<Self, D::Error>;
+  fn deserialize<D: Deserializer>(
+    deserializer: &mut D,
+  ) -> Result<Self, D::Error>;
 }
 
 pub trait Deserializer: Sized {
@@ -18,20 +20,33 @@ pub trait Deserializer: Sized {
   fn deserialize_f64(&mut self) -> Result<f64, Self::Error>;
   fn deserialize_str(&mut self) -> Result<String, Self::Error>;
   fn deserialize_bytes(&mut self) -> Result<Vec<u8>, Self::Error>;
-  fn deserialize_option<T: Deserialize>(&mut self) -> Result<Option<T>, Self::Error>;
+  fn deserialize_option<T: Deserialize>(
+    &mut self,
+  ) -> Result<Option<T>, Self::Error>;
   fn deserialize_unit(&mut self) -> Result<(), Self::Error>;
-  fn deserialize_seq_begin(&mut self) -> Result<usize, Self::Error>;  // returns len
-  fn deserialize_seq_element<T: Deserialize>(&mut self) -> Result<T, Self::Error>;
+  fn deserialize_seq_begin(&mut self) -> Result<usize, Self::Error>; // returns len
+  fn deserialize_seq_element<T: Deserialize>(
+    &mut self,
+  ) -> Result<T, Self::Error>;
   fn deserialize_seq_has_next(&mut self) -> Result<bool, Self::Error>;
   fn deserialize_seq_end(&mut self) -> Result<(), Self::Error>;
-  fn deserialize_struct_begin(&mut self, name: &str) -> Result<usize, Self::Error>;
-  fn deserialize_struct_field<T: Deserialize>(&mut self, key: &str) -> Result<T, Self::Error>;
+  fn deserialize_struct_begin(
+    &mut self,
+    name: &str,
+  ) -> Result<usize, Self::Error>;
+  fn deserialize_struct_field<T: Deserialize>(
+    &mut self,
+    key: &str,
+  ) -> Result<T, Self::Error>;
   fn deserialize_struct_end(&mut self) -> Result<(), Self::Error>;
-  fn deserialize_enum_begin(&mut self, variants: &[&str]) -> Result<usize, Self::Error>;
+  fn deserialize_enum_begin(
+    &mut self,
+    variants: &[&str],
+  ) -> Result<usize, Self::Error>;
   fn deserialize_enum_end(&mut self) -> Result<(), Self::Error>;
 }
 
-macro_rules! impl_deserialize_primitive {     
+macro_rules! impl_deserialize_primitive {
   ($($ty:ty => $method:ident),* $(,)?) => {
     $(
       impl Deserialize for $ty {

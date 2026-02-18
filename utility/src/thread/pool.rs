@@ -1,6 +1,22 @@
-use std::{any::Any, panic::{self, AssertUnwindSafe}, sync::{atomic::{AtomicBool, AtomicUsize, Ordering}, Arc, Condvar, Mutex}, thread::JoinHandle};
+use std::{
+  any::Any,
+  panic::{self, AssertUnwindSafe},
+  sync::{
+    Arc, Condvar, Mutex,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+  },
+  thread::JoinHandle,
+};
 
-use crate::{collections::graph::Graph, error::{AetherResult, Unpoison}, profiler::Profiler, thread::{task::{Job, TaskHandle}, worker::Queue}};
+use crate::{
+  collections::graph::Graph,
+  error::{AetherResult, Unpoison},
+  profiler::Profiler,
+  thread::{
+    task::{Job, TaskHandle},
+    worker::Queue,
+  },
+};
 
 pub struct Context {
   pub(crate) workers: Vec<Arc<Queue>>,
@@ -21,15 +37,15 @@ impl Default for Pool {
       // This will never not be safe as 1usize can never be non zero or negative
       std::thread::available_parallelism()
         .unwrap_or(std::num::NonZero::new_unchecked(1usize))
-        .get() 
+        .get()
     };
     Pool::new(n).unwrap()
   }
 }
 
 impl Pool {
-  pub fn spawn<F>(&self, f: F) -> TaskHandle 
-  where 
+  pub fn spawn<F>(&self, f: F) -> TaskHandle
+  where
     F: FnOnce() + Send + 'static,
   {
     let (handle, signal) = TaskHandle::new();
@@ -38,11 +54,12 @@ impl Pool {
       signal.complete();
     });
     self.submit(job);
-    handle 
+    handle
   }
 
   fn submit(&self, job: Job) {
-    let next = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.context.workers.len();
+    let next = self.next_worker.fetch_add(1, Ordering::Relaxed)
+      % self.context.workers.len();
 
     self.context.workers[next].push(job);
     self.context.global_barrier.notify_one();
@@ -55,11 +72,15 @@ impl Pool {
     let ctx = Arc::clone(&self.context);
 
     // Enqueue roots
-    exec.remaining_deps.iter().enumerate().for_each(|(id, dep)| {
-      if dep.load(Ordering::Acquire) == 0 {
-        enqueue_graph_task(id, &exec, &ctx);
-      }
-    });
+    exec
+      .remaining_deps
+      .iter()
+      .enumerate()
+      .for_each(|(id, dep)| {
+        if dep.load(Ordering::Acquire) == 0 {
+          enqueue_graph_task(id, &exec, &ctx);
+        }
+      });
 
     exec.wait();
     Ok(())
@@ -70,12 +91,15 @@ impl Pool {
     T: Send + 'static,
     F: Fn(&mut [T]) + Send + Sync,
   {
-    if data.is_empty() { return; }
+    if data.is_empty() {
+      return;
+    }
 
     let remaining = Arc::new(AtomicUsize::new(0));
     let done_mutex = Arc::new(Mutex::new(()));
     let done_condvar = Arc::new(Condvar::new());
-    let panic_payload = Arc::new(Mutex::new(None::<Box<dyn Any + Send + 'static>>));
+    let panic_payload =
+      Arc::new(Mutex::new(None::<Box<dyn Any + Send + 'static>>));
 
     // we block until all jobs complete, so `f` and `data`
     // outlive all submitted jobs. The transmute erases the lifetime
@@ -102,7 +126,8 @@ impl Pool {
       self.submit(Box::new(move || {
         // This will only truly be unsafe is chunks
         // overalp, which we've made sure that they don't
-        let chunk = unsafe { std::slice::from_raw_parts_mut(ptr as *mut T, len) };
+        let chunk =
+          unsafe { std::slice::from_raw_parts_mut(ptr as *mut T, len) };
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
           f(chunk);
         }));
@@ -160,7 +185,11 @@ impl Pool {
   }
 
   pub fn flush_profiler(&self) {
-    let barrier = Arc::new((AtomicUsize::new(self.context.workers.len()), Mutex::new(()), Condvar::new()));
+    let barrier = Arc::new((
+      AtomicUsize::new(self.context.workers.len()),
+      Mutex::new(()),
+      Condvar::new(),
+    ));
 
     for worker in &self.context.workers {
       let b = Arc::clone(&barrier);
@@ -184,11 +213,14 @@ impl Pool {
   where
     F: FnOnce() + Send,
   {
-    if tasks.is_empty() { return; }
+    if tasks.is_empty() {
+      return;
+    }
     let remaining = Arc::new(AtomicUsize::new(tasks.len()));
     let done_mutex = Arc::new(Mutex::new(()));
     let done_condvar = Arc::new(Condvar::new());
-    let panic_payload = Arc::new(Mutex::new(None::<Box<dyn Any + Send + 'static>>));
+    let panic_payload =
+      Arc::new(Mutex::new(None::<Box<dyn Any + Send + 'static>>));
 
     for task in tasks {
       let remaining = Arc::clone(&remaining);
@@ -237,7 +269,11 @@ impl Drop for Pool {
   }
 }
 
-fn enqueue_graph_task(id: usize, exec: &Arc<GraphExecution>, ctx: &Arc<Context>) {
+fn enqueue_graph_task(
+  id: usize,
+  exec: &Arc<GraphExecution>,
+  ctx: &Arc<Context>,
+) {
   let task = exec.tasks.lock().unpoison()[id].take();
   let exec = Arc::clone(exec);
   let ctx1 = Arc::clone(ctx);
@@ -271,9 +307,8 @@ pub struct TaskGraph {
 
 impl Default for TaskGraph {
   fn default() -> Self {
-    TaskGraph { 
-      inner: 
-      Graph::new()
+    TaskGraph {
+      inner: Graph::new(),
     }
   }
 }
@@ -284,7 +319,7 @@ impl TaskGraph {
   }
 
   pub fn add<F>(&mut self, f: F) -> usize
-where
+  where
     F: FnOnce() + Send + 'static,
   {
     self.inner.add_node(TaskNode {
@@ -293,7 +328,11 @@ where
     })
   }
 
-  pub fn dependency(&mut self, task: usize, depends_on: usize) -> AetherResult<()> {
+  pub fn dependency(
+    &mut self,
+    task: usize,
+    depends_on: usize,
+  ) -> AetherResult<()> {
     self.inner.add_edge(depends_on, task) // edge goes dep -> task
   }
 }
@@ -306,9 +345,9 @@ pub(crate) struct TaskNode {
 struct GraphExecution {
   tasks: Mutex<Vec<Option<Job>>>,
   //names: Vec<&'static str>,             // for profiler spans
-  dependents: Vec<Vec<usize>>,          // who to notify on completion
-  remaining_deps: Vec<AtomicUsize>,     // per-task dep counter
-  remaining_total: AtomicUsize,         // how many tasks left
+  dependents: Vec<Vec<usize>>, // who to notify on completion
+  remaining_deps: Vec<AtomicUsize>, // per-task dep counter
+  remaining_total: AtomicUsize, // how many tasks left
   done_mutex: Mutex<()>,
   done_condvar: Condvar,
 }
@@ -323,10 +362,8 @@ impl From<TaskGraph> for GraphExecution {
     dependents.iter_mut().enumerate().for_each(|(id, dep)| {
       //let node = graph.inner.get_node(id).unwrap();
       //names.push(node.data.name);
-      remaining_deps.push(
-        AtomicUsize::new(
-          graph.inner.incoming_edges(id).len()
-      ));
+      remaining_deps
+        .push(AtomicUsize::new(graph.inner.incoming_edges(id).len()));
 
       if let Some(edges) = graph.inner.outgoing_edges(id) {
         for edge in edges {
@@ -370,5 +407,3 @@ fn record_panic(
     *first = Some(payload);
   }
 }
-
-

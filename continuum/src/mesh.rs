@@ -1,6 +1,12 @@
 use utility::maths::vector::Vector;
 
-use crate::{geometry::{CellGeometry, CellId, CellMetrics, FaceGeometry, FaceId, FaceMetrics, GeometryMap, Point}, topology::{BoundaryTag, FaceConnection, Topology}};
+use crate::{
+  geometry::{
+    CellGeometry, CellId, CellMetrics, FaceGeometry, FaceId, FaceMetrics,
+    GeometryMap, Point,
+  },
+  topology::{BoundaryTag, FaceConnection, Topology},
+};
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone, Copy, Hash)]
 pub enum Axis {
@@ -9,12 +15,15 @@ pub enum Axis {
   Z = 2,
 }
 
-pub trait Mesh<const D: usize>: CellGeometry<D> + FaceGeometry<D> + Topology {}
+pub trait Mesh<const D: usize>:
+  CellGeometry<D> + FaceGeometry<D> + Topology
+{
+}
 
-impl<const D: usize, T> Mesh<D> for T
-where
-  T: CellGeometry<D> + FaceGeometry<D> + Topology,
-{}
+impl<const D: usize, T> Mesh<D> for T where
+  T: CellGeometry<D> + FaceGeometry<D> + Topology
+{
+}
 
 pub struct StructuredBlock<const D: usize> {
   dims: [usize; D], // x, y, z
@@ -35,7 +44,6 @@ pub struct StructuredBlock<const D: usize> {
   cell_face_adj: Vec<Vec<FaceId>>,
   interior_face_list: Vec<(FaceId, CellId, CellId)>,
   boundary_face_lists: Vec<(BoundaryTag, Vec<(FaceId, CellId)>)>,
-
   // The coordinate mapping
   // coord_map: Box<dyn GeometryMap<D, P>>,
 }
@@ -54,7 +62,9 @@ impl<const D: usize> StructuredBlock<D> {
   }
 
   pub fn face_count_for_axis(dims: &[usize; D], axis: usize) -> usize {
-    (0..D).map(|d| if d == axis { dims[d] + 1 } else { dims[d] }).product()
+    (0..D)
+      .map(|d| if d == axis { dims[d] + 1 } else { dims[d] })
+      .product()
   }
 
   fn total_faces(dims: &[usize; D]) -> usize {
@@ -84,7 +94,11 @@ impl<const D: usize> StructuredBlock<D> {
   }
 
   // Face ijk within an axis's face set. Along `axis`, size is dims[axis]+1; others are dims[d]
-  pub fn face_indices(dims: &[usize; D], axis: usize, local: usize) -> [usize; D] {
+  pub fn face_indices(
+    dims: &[usize; D],
+    axis: usize,
+    local: usize,
+  ) -> [usize; D] {
     let mut ijk = [0; D];
     let mut remaining = local;
     for d in 0..D {
@@ -110,7 +124,9 @@ impl<const D: usize> StructuredBlock<D> {
   // ---- Builders ----
 
   fn build_cell_geometry(
-    origin: &Point<D>, extent: &[f64; D], dims: &[usize; D],
+    origin: &Point<D>,
+    extent: &[f64; D],
+    dims: &[usize; D],
   ) -> (Vec<Point<D>>, Vec<f64>) {
     let spacing: [f64; D] = std::array::from_fn(|d| extent[d] / dims[d] as f64);
     let volume: f64 = spacing.iter().product();
@@ -121,9 +137,8 @@ impl<const D: usize> StructuredBlock<D> {
 
     for flat in 0..count {
       let ijk = Self::cell_indices(dims, flat);
-      let pos: [f64; D] = std::array::from_fn(|d| {
-        origin[d] + (ijk[d] as f64 + 0.5) * spacing[d]
-      });
+      let pos: [f64; D] =
+        std::array::from_fn(|d| origin[d] + (ijk[d] as f64 + 0.5) * spacing[d]);
       centroids.push(Vector::from(pos));
       volumes.push(volume);
     }
@@ -132,7 +147,9 @@ impl<const D: usize> StructuredBlock<D> {
   }
 
   fn build_face_geometry(
-    origin: &Point<D>, extent: &[f64; D], dims: &[usize; D],
+    origin: &Point<D>,
+    extent: &[f64; D],
+    dims: &[usize; D],
   ) -> (Vec<Point<D>>, Vec<Vector<f64, D>>, Vec<f64>) {
     let spacing: [f64; D] = std::array::from_fn(|d| extent[d] / dims[d] as f64);
     let total = Self::total_faces(dims);
@@ -184,10 +201,11 @@ impl<const D: usize> StructuredBlock<D> {
     let mut cell_faces = vec![Vec::new(); total_cells];
 
     // One boundary list per (axis, side) pair
-    let mut boundary_map: Vec<(BoundaryTag, Vec<(FaceId, CellId)>)> =
-    (0..D).flat_map(|axis| {
-      (0..2).map(move |side| (Self::boundary_tag(axis, side), Vec::new()))
-    }).collect();
+    let mut boundary_map: Vec<(BoundaryTag, Vec<(FaceId, CellId)>)> = (0..D)
+      .flat_map(|axis| {
+        (0..2).map(move |side| (Self::boundary_tag(axis, side), Vec::new()))
+      })
+      .collect();
 
     let mut global_face = 0usize;
 
@@ -201,20 +219,26 @@ impl<const D: usize> StructuredBlock<D> {
           // Min boundary along this axis
           let owner = CellId::from(Self::cell_index(dims, &ijk));
           let tag = Self::boundary_tag(axis, 0);
-          connections.push(FaceConnection::Boundary { owner, tag, out_sign: -1.0 });
+          connections.push(FaceConnection::Boundary {
+            owner,
+            tag,
+            out_sign: -1.0,
+          });
           boundary_map[axis * 2].1.push((face, owner));
           cell_faces[owner.index()].push(face);
-
         } else if ijk[axis] == dims[axis] {
           // Max boundary along this axis
           let mut cell_ijk = ijk;
           cell_ijk[axis] = dims[axis] - 1;
           let owner = CellId::from(Self::cell_index(dims, &cell_ijk));
           let tag = Self::boundary_tag(axis, 1);
-          connections.push(FaceConnection::Boundary { owner, tag, out_sign: 1.0 });
+          connections.push(FaceConnection::Boundary {
+            owner,
+            tag,
+            out_sign: 1.0,
+          });
           boundary_map[axis * 2 + 1].1.push((face, owner));
           cell_faces[owner.index()].push(face);
-
         } else {
           // Interior face between cell at (ijk[axis]-1) and cell at (ijk[axis])
           let mut owner_ijk = ijk;
@@ -242,7 +266,9 @@ impl<const D: usize> StructuredBlock<D> {
     face_areas: &[f64],
     coord_map: &dyn GeometryMap<D, P>,
   ) -> (Vec<CellMetrics<D>>, Vec<FaceMetrics<D>>) {
-    let cell_metrics = cell_centroids.iter().zip(cell_volumes.iter())
+    let cell_metrics = cell_centroids
+      .iter()
+      .zip(cell_volumes.iter())
       .map(|(centroid, &vol)| {
         let sqrt_g = coord_map.sqrt_det_metric(centroid);
         CellMetrics {
@@ -250,9 +276,11 @@ impl<const D: usize> StructuredBlock<D> {
           comp_volume: vol,
           phys_volume: vol * sqrt_g,
         }
-      }).collect();
+      })
+      .collect();
 
-    let face_metrics = face_centroids.iter()
+    let face_metrics = face_centroids
+      .iter()
       .zip(face_area_vectors.iter())
       .zip(face_areas.iter())
       .map(|((centroid, area_vec), &area)| {
@@ -264,7 +292,8 @@ impl<const D: usize> StructuredBlock<D> {
           phys_area: area * sqrt_g,
           sqrt_metric: sqrt_g,
         }
-      }).collect();
+      })
+      .collect();
 
     (cell_metrics, face_metrics)
   }
@@ -278,14 +307,21 @@ impl<const D: usize> StructuredBlock<D> {
     coord_map: Box<dyn GeometryMap<D, P>>,
   ) -> Self {
     let (cell_centroids, cell_volumes) =
-    Self::build_cell_geometry(&origin, &extent, &dims);
+      Self::build_cell_geometry(&origin, &extent, &dims);
     let (face_centroids, face_area_vectors, face_areas) =
-    Self::build_face_geometry(&origin, &extent, &dims);
-    let (face_connections, interior_face_list, boundary_face_lists, cell_face_adj) =
-    Self::build_topology(&dims);
+      Self::build_face_geometry(&origin, &extent, &dims);
+    let (
+      face_connections,
+      interior_face_list,
+      boundary_face_lists,
+      cell_face_adj,
+    ) = Self::build_topology(&dims);
     let (cell_metrics, face_metrics) = Self::compute_metrics(
-      &cell_centroids, &cell_volumes,
-      &face_centroids, &face_area_vectors, &face_areas,
+      &cell_centroids,
+      &cell_volumes,
+      &face_centroids,
+      &face_area_vectors,
+      &face_areas,
       coord_map.as_ref(),
     );
 
@@ -373,7 +409,9 @@ impl<const D: usize> Topology for StructuredBlock<D> {
   }
 
   fn boundary_faces(&self, tag: BoundaryTag) -> &[(FaceId, CellId)] {
-    self.boundary_face_lists.iter()
+    self
+      .boundary_face_lists
+      .iter()
       .find(|(t, _)| *t == tag)
       .map(|(_, list)| list.as_slice())
       .unwrap_or(&[])
@@ -383,5 +421,3 @@ impl<const D: usize> Topology for StructuredBlock<D> {
     self.boundary_face_lists.iter().map(|(tag, _)| *tag)
   }
 }
-
-

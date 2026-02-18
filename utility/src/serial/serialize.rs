@@ -1,5 +1,8 @@
 pub trait Serialize {
-  fn serialize<S: Serializer>(&self, serializer: &mut S) -> Result<(), S::Error>;
+  fn serialize<S: Serializer>(
+    &self,
+    serializer: &mut S,
+  ) -> Result<(), S::Error>;
 }
 
 pub trait Serializer {
@@ -22,16 +25,27 @@ pub trait Serializer {
   fn serialize_some<T: Serialize>(&mut self, v: &T) -> Result<(), Self::Error>;
   fn serialize_unit(&mut self) -> Result<(), Self::Error>;
   fn serialize_seq_begin(&mut self, length: usize) -> Result<(), Self::Error>;
-  fn serialize_seq_element<T: Serialize>(&mut self, v: &T) -> Result<(), Self::Error>;
+  fn serialize_seq_element<T: Serialize>(
+    &mut self,
+    v: &T,
+  ) -> Result<(), Self::Error>;
   fn serialize_seq_end(&mut self) -> Result<(), Self::Error>;
-  fn serialize_struct_begin(&mut self, name: &str, len: usize) -> Result<(), Self::Error>;
-  fn serialize_struct_field<T: Serialize>(&mut self, key: &str, v: &T) -> Result<(), Self::Error>;
+  fn serialize_struct_begin(
+    &mut self,
+    name: &str,
+    len: usize,
+  ) -> Result<(), Self::Error>;
+  fn serialize_struct_field<T: Serialize>(
+    &mut self,
+    key: &str,
+    v: &T,
+  ) -> Result<(), Self::Error>;
   fn serialize_struct_end(&mut self) -> Result<(), Self::Error>;
   fn serialize_enum_begin(&mut self, variant: &str) -> Result<(), Self::Error>;
   fn serialize_enum_end(&mut self) -> Result<(), Self::Error>;
 }
 
-macro_rules! impl_serialize_primitive {     
+macro_rules! impl_serialize_primitive {
   ($($ty:ty => $method:ident),* $(,)?) => {
     $(
       impl Serialize for $ty {
@@ -57,7 +71,7 @@ impl_serialize_primitive! {
   f64  => serialize_f64,
 }
 
-impl<T: Serialize> Serialize for &[T] {               
+impl<T: Serialize> Serialize for &[T] {
   fn serialize<S: Serializer>(&self, s: &mut S) -> Result<(), S::Error> {
     s.serialize_seq_begin(self.len())?;
     for item in *self {
@@ -67,7 +81,7 @@ impl<T: Serialize> Serialize for &[T] {
   }
 }
 
-impl<T: Serialize> Serialize for Vec<T> {               
+impl<T: Serialize> Serialize for Vec<T> {
   fn serialize<S: Serializer>(&self, s: &mut S) -> Result<(), S::Error> {
     s.serialize_seq_begin(self.len())?;
     for item in self {

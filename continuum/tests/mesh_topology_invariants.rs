@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use continuum::geometry::{CellGeometry, CellId, FaceGeometry, FaceId, IdentityMap};
+use continuum::geometry::{
+  CellGeometry, CellId, FaceGeometry, FaceId, IdentityMap,
+};
 use continuum::mesh::StructuredBlock;
 use continuum::topology::{FaceConnection, Topology};
 
@@ -55,7 +57,10 @@ fn assert_structured_mesh_invariants<const D: usize>(dims: [usize; D]) {
 
   assert_eq!(mesh.cell_count(), expected_cell_count(dims));
   assert_eq!(mesh.face_count(), expected_face_count(dims));
-  assert_eq!(mesh.interior_faces().len(), expected_interior_face_count(dims));
+  assert_eq!(
+    mesh.interior_faces().len(),
+    expected_interior_face_count(dims)
+  );
 
   let mut interior_faces = HashSet::new();
   for &(face, owner, neighbour) in mesh.interior_faces() {
@@ -79,7 +84,12 @@ fn assert_structured_mesh_invariants<const D: usize>(dims: [usize; D]) {
       ),
     }
 
-    assert!(mesh.cell_faces(owner).iter().any(|f| f.index() == face.index()));
+    assert!(
+      mesh
+        .cell_faces(owner)
+        .iter()
+        .any(|f| f.index() == face.index())
+    );
     assert!(
       mesh
         .cell_faces(neighbour)
@@ -114,7 +124,12 @@ fn assert_structured_mesh_invariants<const D: usize>(dims: [usize; D]) {
         ),
       }
 
-      assert!(mesh.cell_faces(owner).iter().any(|f| f.index() == face.index()));
+      assert!(
+        mesh
+          .cell_faces(owner)
+          .iter()
+          .any(|f| f.index() == face.index())
+      );
     }
   }
 

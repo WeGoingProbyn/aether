@@ -26,7 +26,7 @@ pub struct Graph<T> {
 
 impl<T> Default for Graph<T> {
   fn default() -> Self {
-    Graph { 
+    Graph {
       nodes: HashMap::new(),
       edges: HashMap::new(),
       next_node_id: 0usize,
@@ -77,13 +77,13 @@ impl<T> Graph<T> {
     if !self.nodes.contains_key(&source) {
       return Err(
         AetherError::new(ErrorKind::InvalidNode)
-          .context(format!("source node {} does not exist", source))
+          .context(format!("source node {} does not exist", source)),
       );
     }
     if !self.nodes.contains_key(&target) {
       return Err(
         AetherError::new(ErrorKind::InvalidNode)
-          .context(format!("target node {} does not exits", target))
+          .context(format!("target node {} does not exits", target)),
       );
     }
 
@@ -157,8 +157,12 @@ impl<T> Graph<T> {
     self.dfs_recurse(start_id, &mut visited, &mut visit);
   }
 
-  fn dfs_recurse<F>(&self, node_id: usize, visited: &mut HashSet<usize>, visit: &mut F)
-  where
+  fn dfs_recurse<F>(
+    &self,
+    node_id: usize,
+    visited: &mut HashSet<usize>,
+    visit: &mut F,
+  ) where
     F: FnMut(&GraphNode<T>),
   {
     if visited.contains(&node_id) {
@@ -209,7 +213,8 @@ impl<T> Graph<T> {
   /// or `Err` with a message if a cycle is detected
   pub fn topological_sort(&self) -> AetherResult<Vec<usize>> {
     // Compute in-degree of each node
-    let mut in_degree: HashMap<usize, usize> = self.nodes.keys().map(|&id| (id, 0)).collect();
+    let mut in_degree: HashMap<usize, usize> =
+      self.nodes.keys().map(|&id| (id, 0)).collect();
 
     for edges in self.edges.values() {
       for edge in edges {
@@ -248,7 +253,7 @@ impl<T> Graph<T> {
     } else {
       Err(
         AetherError::new(ErrorKind::GraphCycle)
-          .context("graph has at least one cycle")
+          .context("graph has at least one cycle"),
       )
     }
   }
@@ -268,7 +273,7 @@ impl<T: Clone> Graph<T> {
       if self.nodes.contains_key(&new_id) {
         return Err(
           AetherError::new(ErrorKind::NodeCollision)
-            .context(format!("node collision detected for {}", new_id))
+            .context(format!("node collision detected for {}", new_id)),
         );
       }
       id_map.insert(*id, new_id);
@@ -295,11 +300,7 @@ impl<T: Clone> Graph<T> {
           source: new_source,
           target: new_target,
         };
-        self
-          .edges
-          .entry(new_source)
-          .or_default()
-          .push(new_edge);
+        self.edges.entry(new_source).or_default().push(new_edge);
       }
     }
 
@@ -329,8 +330,12 @@ impl std::fmt::Display for ErrorKind {
   ) -> Result<(), std::fmt::Error> {
     let string = match self {
       ErrorKind::InvalidNode => "requested a non existant node",
-      ErrorKind::GraphCycle => "a node within the graph depends on a node which also depends on the same node",
-      ErrorKind::NodeCollision => "a collision was found between 2 distinct nodes and their ids",
+      ErrorKind::GraphCycle => {
+        "a node within the graph depends on a node which also depends on the same node"
+      }
+      ErrorKind::NodeCollision => {
+        "a collision was found between 2 distinct nodes and their ids"
+      }
     };
 
     write!(f, "{}", string)?;

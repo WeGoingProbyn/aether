@@ -38,7 +38,9 @@ impl<R: std::io::Read> TextReader<R> {
   pub(crate) fn skip_whitespace(&mut self) -> AetherResult<()> {
     while let Some(b) = self.peek_byte()? {
       match b {
-        b' ' | b'\n' | b'\r' | b'\t' => { self.read_byte()?; },
+        b' ' | b'\n' | b'\r' | b'\t' => {
+          self.read_byte()?;
+        }
         _ => break,
       }
     }
@@ -48,18 +50,20 @@ impl<R: std::io::Read> TextReader<R> {
   pub(crate) fn expect_byte(&mut self, expected: u8) -> AetherResult<()> {
     match self.read_byte()? {
       Some(b) if b == expected => Ok(()),
-      Some(b) => Err(
-        AetherError::new(ErrorKind::UnexpectedByte)
-        .context(format!("a text reader expected byte: {} but found: {}", expected, b))
-      ),
-      None => Err(
-        AetherError::new(ErrorKind::UnexpectedEof)
-        .context(format!("a text reader expected byte: {} but found an end of file", expected))
-      ),
+      Some(b) => Err(AetherError::new(ErrorKind::UnexpectedByte).context(
+        format!("a text reader expected byte: {} but found: {}", expected, b),
+      )),
+      None => Err(AetherError::new(ErrorKind::UnexpectedEof).context(format!(
+        "a text reader expected byte: {} but found an end of file",
+        expected
+      ))),
     }
   }
 
-  pub(crate) fn read_while(&mut self, pred: fn(u8) -> bool) -> AetherResult<String> {
+  pub(crate) fn read_while(
+    &mut self,
+    pred: fn(u8) -> bool,
+  ) -> AetherResult<String> {
     let mut buf: Vec<u8> = vec![];
     while let Some(b) = self.peek_byte()? {
       if pred(b) {
@@ -77,18 +81,19 @@ impl<R: std::io::Read> TextReader<R> {
     let mut buf: Vec<u8> = vec![];
 
     loop {
-      let b = self.read_byte()?.ok_or_else(||
+      let b = self.read_byte()?.ok_or_else(|| {
         AetherError::new(ErrorKind::UnexpectedEof)
           .context("unexpected EOF while reading string literal")
-      )?;
+      })?;
 
       match b {
         b'"' => break,
         b'\\' => {
-          let esc = self.read_byte()?.ok_or_else(||
-            AetherError::new(ErrorKind::UnexpectedEof)
-              .context("unexpected EOF after escape character in string literal")
-          )?;
+          let esc = self.read_byte()?.ok_or_else(|| {
+            AetherError::new(ErrorKind::UnexpectedEof).context(
+              "unexpected EOF after escape character in string literal",
+            )
+          })?;
 
           match esc {
             b'"' => buf.push(b'"'),
@@ -110,10 +115,11 @@ impl<R: std::io::Read> TextReader<R> {
 
                 if !(0xDC00..=0xDFFF).contains(&low) {
                   return Err(
-                    AetherError::new(ErrorKind::UnexpectedByte)
-                      .context(format!(
+                    AetherError::new(ErrorKind::UnexpectedByte).context(
+                      format!(
                         "invalid low surrogate in unicode escape: 0x{low:04X}"
-                      ))
+                      ),
+                    ),
                   );
                 }
 
@@ -122,29 +128,31 @@ impl<R: std::io::Read> TextReader<R> {
                 0x10000 + ((high_ten << 10) | low_ten)
               } else if (0xDC00..=0xDFFF).contains(&code) {
                 return Err(
-                  AetherError::new(ErrorKind::UnexpectedByte)
-                    .context(format!(
-                      "unexpected low surrogate in unicode escape: 0x{code:04X}"
-                    ))
+                  AetherError::new(ErrorKind::UnexpectedByte).context(format!(
+                    "unexpected low surrogate in unicode escape: 0x{code:04X}"
+                  )),
                 );
               } else {
                 code as u32
               };
 
-              let ch = char::from_u32(codepoint).ok_or_else(||
-                AetherError::new(ErrorKind::UnexpectedByte)
-                  .context(format!("invalid unicode codepoint: 0x{codepoint:04X}"))
-              )?;
+              let ch = char::from_u32(codepoint).ok_or_else(|| {
+                AetherError::new(ErrorKind::UnexpectedByte).context(format!(
+                  "invalid unicode codepoint: 0x{codepoint:04X}"
+                ))
+              })?;
 
               let mut utf8 = [0u8; 4];
               let encoded = ch.encode_utf8(&mut utf8);
               buf.extend_from_slice(encoded.as_bytes());
             }
             _ => {
-              return Err(
-                AetherError::new(ErrorKind::UnexpectedByte)
-                  .context(format!("invalid escape sequence '\\{}' in string literal", esc as char))
-              )
+              return Err(AetherError::new(ErrorKind::UnexpectedByte).context(
+                format!(
+                  "invalid escape sequence '\\{}' in string literal",
+                  esc as char
+                ),
+              ));
             }
           }
         }
@@ -159,20 +167,19 @@ impl<R: std::io::Read> TextReader<R> {
     let mut value = 0u16;
 
     for _ in 0..4 {
-      let b = self.read_byte()?.ok_or_else(||
+      let b = self.read_byte()?.ok_or_else(|| {
         AetherError::new(ErrorKind::UnexpectedEof)
           .context("unexpected EOF in unicode escape")
-      )?;
+      })?;
 
       let nibble = match b {
         b'0'..=b'9' => b - b'0',
         b'a'..=b'f' => 10 + (b - b'a'),
         b'A'..=b'F' => 10 + (b - b'A'),
         _ => {
-          return Err(
-            AetherError::new(ErrorKind::UnexpectedByte)
-              .context(format!("invalid hex digit '{}' in unicode escape", b as char))
-          )
+          return Err(AetherError::new(ErrorKind::UnexpectedByte).context(
+            format!("invalid hex digit '{}' in unicode escape", b as char),
+          ));
         }
       };
 
@@ -201,7 +208,9 @@ impl std::fmt::Display for ErrorKind {
   ) -> Result<(), std::fmt::Error> {
     let string = match self {
       ErrorKind::UnexpectedEof => "a reader has encountered an unexpected EOF",
-      ErrorKind::UnexpectedByte => "a reader has encountered an unexpected byte",
+      ErrorKind::UnexpectedByte => {
+        "a reader has encountered an unexpected byte"
+      }
     };
 
     write!(f, "{}", string)?;

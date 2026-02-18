@@ -23,8 +23,15 @@ pub enum CellKind {
 }
 
 pub enum FaceConnection {
-  Interior { owner: CellId, neighbour: CellId },
-  Boundary { owner: CellId, tag: BoundaryTag, out_sign: f64 },
+  Interior {
+    owner: CellId,
+    neighbour: CellId,
+  },
+  Boundary {
+    owner: CellId,
+    tag: BoundaryTag,
+    out_sign: f64,
+  },
 }
 
 pub trait Topology: Send + Sync {
@@ -42,6 +49,3 @@ pub trait Partition {
   fn owned_cells(&self) -> &[CellId];
   fn ghost_cells(&self) -> &[(CellId, u32, CellId)];
 }
-
-
-

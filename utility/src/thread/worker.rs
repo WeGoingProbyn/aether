@@ -1,7 +1,14 @@
-use std::{sync::{atomic::Ordering, Mutex}, time::Duration};
 use std::collections::VecDeque;
+use std::{
+  sync::{Mutex, atomic::Ordering},
+  time::Duration,
+};
 
-use crate::{error::Unpoison, profiler::{Profiler, SpanGuard}, thread::{pool::Context, task::Job}};
+use crate::{
+  error::Unpoison,
+  profiler::{Profiler, SpanGuard},
+  thread::{pool::Context, task::Job},
+};
 
 pub struct Queue {
   queue: Mutex<VecDeque<Job>>,
@@ -35,8 +42,8 @@ impl Queue {
         for job in self.queue.lock().unpoison().drain(..) {
           job()
         }
-        Profiler::flush_local(); 
-        return
+        Profiler::flush_local();
+        return;
       }
 
       // Drain our own queue first: FILO
@@ -49,7 +56,9 @@ impl Queue {
       // Drain other worker queues next: FIFO
       let mut stolen = false;
       for worker in &context.workers {
-        if self.index == worker.index { continue }
+        if self.index == worker.index {
+          continue;
+        }
 
         if let Some(job) = worker.pop_front() {
           let _span = SpanGuard::new("worker::steal", "thread");
@@ -58,15 +67,16 @@ impl Queue {
           break;
         }
       }
-      if stolen { continue; }
+      if stolen {
+        continue;
+      }
 
       // Wait 1ms before trying again
       // let _span = SpanGuard::new("worker::barrier", "thread");
       let guard = context.global_mutex.lock().unpoison();
-      let _ = context.global_barrier.wait_timeout(guard, Duration::from_millis(1));
+      let _ = context
+        .global_barrier
+        .wait_timeout(guard, Duration::from_millis(1));
     }
   }
 }
-
-
-
