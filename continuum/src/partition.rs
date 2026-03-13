@@ -12,6 +12,7 @@ use crate::{
 };
 
 /// Describes a ghost cell in a partition
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GhostDescriptor {
   pub local_cell: CellId, // local index in this partition (after owned cells)
   pub source_partition: usize, // which partition owns the original
@@ -46,12 +47,28 @@ impl<const D: usize, M> PartitionMesh<D, M>
 where
   M: Mesh<D>,
 {
+  pub fn local_cell_count(&self) -> usize {
+    self.local_to_global_cell.len()
+  }
+
   pub fn num_owned(&self) -> usize {
     self.num_owned
   }
 
   pub fn local_to_global(&self, cell: CellId) -> CellId {
     self.local_to_global_cell[cell.index()]
+  }
+
+  pub fn mesh(&self) -> &M {
+    self.mesh.as_ref()
+  }
+
+  pub fn local_to_global_cells(&self) -> &[CellId] {
+    &self.local_to_global_cell
+  }
+
+  pub fn ghost_cells(&self) -> &[GhostDescriptor] {
+    &self.ghost_cells
   }
 }
 

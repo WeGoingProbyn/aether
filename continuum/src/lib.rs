@@ -3,6 +3,7 @@ pub mod field;
 pub mod geometry;
 pub mod mesh;
 pub mod model;
+pub mod output;
 pub mod partition;
 pub mod solver;
 pub mod topology;

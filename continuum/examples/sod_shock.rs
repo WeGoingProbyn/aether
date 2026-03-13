@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
 use continuum::boundary::{BoundaryRegistry, ReflectiveWall, Transmissive};
-use continuum::field::{CellView, FieldStorage, SoaField};
-use continuum::geometry::{CellGeometry, CellId, IdentityMap};
+use continuum::field::SoaField;
+use continuum::geometry::{CellGeometry, IdentityMap};
 use continuum::mesh::StructuredBlock;
 use continuum::model::{Euler2D, RusanovFlux};
+use continuum::output::write_partitioned_vtu;
 use continuum::partition::decompose_structured;
 use continuum::solver::{FvmSolver, SolverConfig, TimeIntegration};
 use continuum::topology::BoundaryTag;
@@ -73,29 +74,60 @@ fn main() -> AetherResult<()> {
   let config = SolverConfig::new(0.5, 1e-4, TimeIntegration::ForwardEuler);
   let mut solver = FvmSolver::new(config, Euler2D::new(1.4), RusanovFlux);
 
+  let vtk_output_dir = std::env::var("AETHER_SOD_VTK_DIR")
+    .unwrap_or_else(|_| "output/sod_shock".to_string());
+  let vtk_write_every = std::env::var("AETHER_SOD_VTK_EVERY")
+    .ok()
+    .and_then(|value| value.parse::<usize>().ok())
+    .filter(|&value| value > 0)
+    .unwrap_or(100);
+
   let mut time = 0.0;
   let mut step = 0;
+
+  let initial_base = format!("step_{step:06}");
+  let initial_manifest = write_partitioned_vtu(
+    &decomp,
+    &states,
+    solver.law(),
+    &vtk_output_dir,
+    &initial_base,
+  )?;
+  info!("wrote vtk snapshot: {}", initial_manifest.to_string_lossy());
+
   while time < 0.2 {
     let dt =
       solver.parallel_step(&pool, &decomp, &mut states, &mut residuals, &bcs);
     time += dt;
     step += 1;
     info!("step={}, t={:.6}, dt={:.6}", step, time, dt);
+
+    if step % vtk_write_every == 0 || time >= 0.2 {
+      let base_name = format!("step_{step:06}");
+      let manifest = write_partitioned_vtu(
+        &decomp,
+        &states,
+        solver.law(),
+        &vtk_output_dir,
+        &base_name,
+      )?;
+      info!("wrote vtk snapshot: {}", manifest.to_string_lossy());
+    }
   }
 
   // Print density profile — gather from partitions
-  for (i, partition) in decomp.partitions.iter().enumerate() {
-    for j in 0..partition.num_owned() {
-      let cell = CellId::from(j);
-      let global = partition.local_to_global(cell);
-      let s = states[i].state(cell);
-      info!(
-        "{:.4} {:.4}",
-        mesh.cell_centroid(global)[0],
-        s.as_state()[0]
-      );
-    }
-  }
+  // for (i, partition) in decomp.partitions.iter().enumerate() {
+  //   for j in 0..partition.num_owned() {
+  //     let cell = CellId::from(j);
+  //     let global = partition.local_to_global(cell);
+  //     let s = states[i].state(cell);
+  //     info!(
+  //       "{:.4} {:.4}",
+  //       mesh.cell_centroid(global)[0],
+  //       s.as_state()[0]
+  //     );
+  //   }
+  // }
 
   pool.flush_profiler();
   Profiler::print(&mut LogWriter::new(Level::Info));

@@ -1,4 +1,5 @@
 use crate::geometry::{CellMetrics, Point};
+use crate::output::LawFieldSchema;
 use utility::{maths::vector::Vector, profile};
 
 pub trait ConservationLaw<const D: usize, const N: usize>: Send + Sync {
@@ -121,5 +122,29 @@ impl ConservationLaw<2, 4> for Euler2D {
     if state[3] - ke < floor {
       state[3] = ke + floor;
     }
+  }
+}
+
+impl LawFieldSchema<2, 4> for Euler2D {
+  fn conserved_field_names(&self) -> [&'static str; 4] {
+    ["rho", "rho_u", "rho_v", "energy"]
+  }
+
+  fn derived_field_names(&self) -> &'static [&'static str] {
+    &["u", "v", "pressure"]
+  }
+
+  fn write_derived_fields(
+    &self,
+    state: &[f64; 4],
+    _centroid: &Point<2>,
+    _metrics: &CellMetrics<2>,
+    out: &mut [f64],
+  ) {
+    debug_assert_eq!(out.len(), 3);
+    let rho = state[0];
+    out[0] = state[1] / rho;
+    out[1] = state[2] / rho;
+    out[2] = self.pressure(state);
   }
 }
