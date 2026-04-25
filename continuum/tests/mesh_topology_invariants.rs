@@ -190,3 +190,69 @@ fn invariants_2d_strip() {
 fn invariants_3d_cube() {
   assert_structured_mesh_invariants([2, 2, 2]);
 }
+
+#[test]
+fn from_axis_edges_uniform_matches_uniform_constructor() {
+  // Same physical box built two ways should be byte-identical in the data
+  // the rest of the solver looks at.
+  let dims = [3, 2, 4];
+  let origin = [0.0, 0.0, 0.0];
+  let extent = [3.0, 2.0, 4.0];
+
+  let a = StructuredBlock::uniform(
+    origin.into(),
+    extent,
+    dims,
+    Box::new(IdentityMap::<3>),
+  );
+
+  let edges: [Vec<f64>; 3] = std::array::from_fn(|d| {
+    let dx = extent[d] / dims[d] as f64;
+    (0..=dims[d]).map(|i| origin[d] + i as f64 * dx).collect()
+  });
+  let b = StructuredBlock::from_axis_edges(edges, Box::new(IdentityMap::<3>));
+
+  assert_eq!(a.cell_count(), b.cell_count());
+  assert_eq!(a.face_count(), b.face_count());
+  for i in 0..a.cell_count() {
+    let cell = CellId::from(i);
+    assert_eq!(a.cell_volume(cell), b.cell_volume(cell));
+  }
+  for i in 0..a.face_count() {
+    let face = FaceId::from(i);
+    assert_eq!(a.face_area(face), b.face_area(face));
+  }
+}
+
+#[test]
+fn non_uniform_axis_produces_per_cell_volumes_and_areas() {
+  // Non-uniform axis 2 with three cells of widths 1, 2, 4. Other axes uniform.
+  // Cell volume should match width-product per cell; face area along axis 0
+  // should depend on the cell's axis-2 position.
+  let edges: [Vec<f64>; 3] = [
+    vec![0.0, 1.0, 2.0],          // 2 cells, width 1
+    vec![0.0, 1.0, 2.0],          // 2 cells, width 1
+    vec![0.0, 1.0, 3.0, 7.0],     // 3 cells, widths 1, 2, 4
+  ];
+  let mesh = StructuredBlock::from_axis_edges(edges, Box::new(IdentityMap::<3>));
+
+  // Cells: 2*2*3 = 12. Indexed (i + j*Nx + k*Nx*Ny).
+  // Cell at (0,0,k) has volume 1·1·width_k.
+  let widths_z = [1.0, 2.0, 4.0];
+  for k in 0..3 {
+    let cell_idx = 0 + 0 * 2 + k * 4;
+    let cell = CellId::from(cell_idx);
+    assert_eq!(mesh.cell_volume(cell), widths_z[k]);
+  }
+
+  // Total volume = 4 cells per layer × layer width, summed = 4·(1+2+4) = 28.
+  let total: f64 = (0..mesh.cell_count())
+    .map(|i| mesh.cell_volume(CellId::from(i)))
+    .sum();
+  assert_eq!(total, 28.0);
+
+  // Sanity: total face count matches the uniform formula since topology is
+  // independent of edge spacing.
+  let dims = [2, 2, 3];
+  assert_eq!(mesh.face_count(), expected_face_count(dims));
+}

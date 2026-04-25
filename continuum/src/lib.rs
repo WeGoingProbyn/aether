@@ -7,4 +7,4 @@ pub mod output;
 pub mod partition;
 pub mod solver;
 pub mod topology;
-//pub mod cube_sphere;
+pub mod cube_sphere;

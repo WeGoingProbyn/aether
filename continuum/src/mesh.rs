@@ -124,12 +124,9 @@ impl<const D: usize> StructuredBlock<D> {
   // ---- Builders ----
 
   fn build_cell_geometry(
-    origin: &Point<D>,
-    extent: &[f64; D],
+    axis_edges: &[Vec<f64>; D],
     dims: &[usize; D],
   ) -> (Vec<Point<D>>, Vec<f64>) {
-    let spacing: [f64; D] = std::array::from_fn(|d| extent[d] / dims[d] as f64);
-    let volume: f64 = spacing.iter().product();
     let count = Self::total_cells(dims);
 
     let mut centroids = Vec::with_capacity(count);
@@ -137,21 +134,26 @@ impl<const D: usize> StructuredBlock<D> {
 
     for flat in 0..count {
       let ijk = Self::cell_indices(dims, flat);
-      let pos: [f64; D] =
-        std::array::from_fn(|d| origin[d] + (ijk[d] as f64 + 0.5) * spacing[d]);
+      let pos: [f64; D] = std::array::from_fn(|d| {
+        let lo = axis_edges[d][ijk[d]];
+        let hi = axis_edges[d][ijk[d] + 1];
+        0.5 * (lo + hi)
+      });
+      let spacing: [f64; D] = std::array::from_fn(|d| {
+        axis_edges[d][ijk[d] + 1] - axis_edges[d][ijk[d]]
+      });
+      let vol: f64 = spacing.iter().product();
       centroids.push(Vector::from(pos));
-      volumes.push(volume);
+      volumes.push(vol);
     }
 
     (centroids, volumes)
   }
 
   fn build_face_geometry(
-    origin: &Point<D>,
-    extent: &[f64; D],
+    axis_edges: &[Vec<f64>; D],
     dims: &[usize; D],
   ) -> (Vec<Point<D>>, Vec<Vector<f64, D>>, Vec<f64>) {
-    let spacing: [f64; D] = std::array::from_fn(|d| extent[d] / dims[d] as f64);
     let total = Self::total_faces(dims);
 
     let mut centroids = Vec::with_capacity(total);
@@ -159,28 +161,28 @@ impl<const D: usize> StructuredBlock<D> {
     let mut areas = Vec::with_capacity(total);
 
     for axis in 0..D {
-      // Face area = product of spacing along all axes except this one
-      let area: f64 = (0..D)
-        .filter(|&d| d != axis)
-        .map(|d| spacing[d])
-        .product::<f64>();
-
       let count = Self::face_count_for_axis(dims, axis);
       for local in 0..count {
         let ijk = Self::face_indices(dims, axis, local);
 
-        // Face sits at vertex position along its axis,
-        // cell center along other axes
+        // Face sits on a vertex along its own axis, cell-center along others.
         let pos: [f64; D] = std::array::from_fn(|d| {
           if d == axis {
-            origin[d] + ijk[d] as f64 * spacing[d]
+            axis_edges[d][ijk[d]]
           } else {
-            origin[d] + (ijk[d] as f64 + 0.5) * spacing[d]
+            0.5 * (axis_edges[d][ijk[d]] + axis_edges[d][ijk[d] + 1])
           }
         });
         centroids.push(Vector::from(pos));
 
-        // Normal points in +axis direction
+        // Face area = product of cell extents along the OTHER axes at this
+        // face's position. Varies per face when those axes are non-uniform.
+        let area: f64 = (0..D)
+          .filter(|&d| d != axis)
+          .map(|d| axis_edges[d][ijk[d] + 1] - axis_edges[d][ijk[d]])
+          .product();
+
+        // Normal points in +axis direction.
         let mut av = [0.0; D];
         av[axis] = area;
         area_vectors.push(Vector::from(av));
@@ -298,18 +300,37 @@ impl<const D: usize> StructuredBlock<D> {
     (cell_metrics, face_metrics)
   }
 
-  // ---- Constructor ----
+  // ---- Constructors ----
 
-  pub fn uniform<const P: usize>(
-    origin: Point<D>,
-    extent: [f64; D],
-    dims: [usize; D],
+  /// Build a block from per-axis edge positions. `axis_edges[d]` lists the
+  /// `dims[d] + 1` cell-edge positions along axis `d`, in strictly increasing
+  /// order. Allows non-uniform cell widths along any axis (e.g. atmospheric
+  /// stretching toward the surface).
+  pub fn from_axis_edges<const P: usize>(
+    axis_edges: [Vec<f64>; D],
     coord_map: Box<dyn GeometryMap<D, P>>,
   ) -> Self {
+    let dims: [usize; D] = std::array::from_fn(|d| {
+      assert!(
+        axis_edges[d].len() >= 2,
+        "axis {} needs at least two edges (got {})",
+        d,
+        axis_edges[d].len()
+      );
+      for i in 1..axis_edges[d].len() {
+        assert!(
+          axis_edges[d][i] > axis_edges[d][i - 1],
+          "axis {} edges must be strictly increasing",
+          d
+        );
+      }
+      axis_edges[d].len() - 1
+    });
+
     let (cell_centroids, cell_volumes) =
-      Self::build_cell_geometry(&origin, &extent, &dims);
+      Self::build_cell_geometry(&axis_edges, &dims);
     let (face_centroids, face_area_vectors, face_areas) =
-      Self::build_face_geometry(&origin, &extent, &dims);
+      Self::build_face_geometry(&axis_edges, &dims);
     let (
       face_connections,
       interior_face_list,
@@ -338,8 +359,22 @@ impl<const D: usize> StructuredBlock<D> {
       cell_face_adj,
       interior_face_list,
       boundary_face_lists,
-      // coord_map,
     }
+  }
+
+  /// Convenience constructor with uniform spacing along every axis. Equivalent
+  /// to calling `from_axis_edges` with arithmetically-spaced edges.
+  pub fn uniform<const P: usize>(
+    origin: Point<D>,
+    extent: [f64; D],
+    dims: [usize; D],
+    coord_map: Box<dyn GeometryMap<D, P>>,
+  ) -> Self {
+    let axis_edges: [Vec<f64>; D] = std::array::from_fn(|d| {
+      let dx = extent[d] / dims[d] as f64;
+      (0..=dims[d]).map(|i| origin[d] + i as f64 * dx).collect()
+    });
+    Self::from_axis_edges(axis_edges, coord_map)
   }
 
   pub fn dims(&self) -> &[usize; D] {
