@@ -10,77 +10,11 @@ use continuum::{
   boundary::{BoundaryRegistry, Transmissive},
   cube_sphere::CubeSphere,
   field::{FieldStorage, SoaField},
-  geometry::{CellGeometry, CellId, CellMetrics, Point},
-  model::{ConservationLaw, RusanovFlux},
+  geometry::{CellGeometry, CellId},
+  model::{Euler3D, RusanovFlux},
   solver::{FvmSolver, SolverConfig, TimeIntegration},
   topology::BoundaryTag,
 };
-
-/// Minimal 3D compressible Euler (γ-law gas). State = [ρ, ρu, ρv, ρw, E].
-/// Lives here, not in the library, because the user hasn't yet committed to
-/// a specific atmospheric law shape — this is just enough to smoke-test the
-/// mesh/solver wiring.
-struct Euler3D {
-  gamma: f64,
-}
-
-impl Euler3D {
-  fn pressure(&self, state: &[f64; 5]) -> f64 {
-    let rho = state[0];
-    let inv_rho = 1.0 / rho;
-    let ke = 0.5 * inv_rho
-      * (state[1].powi(2) + state[2].powi(2) + state[3].powi(2));
-    (self.gamma - 1.0) * (state[4] - ke)
-  }
-}
-
-impl ConservationLaw<3, 5> for Euler3D {
-  fn flux(&self, state: &[f64; 5]) -> [[f64; 5]; 3] {
-    let rho = state[0];
-    let u = state[1] / rho;
-    let v = state[2] / rho;
-    let w = state[3] / rho;
-    let p = self.pressure(state);
-    let h = state[4] + p;
-
-    let fx = [state[1], state[1] * u + p, state[1] * v, state[1] * w, h * u];
-    let fy = [state[2], state[2] * u, state[2] * v + p, state[2] * w, h * v];
-    let fz = [state[3], state[3] * u, state[3] * v, state[3] * w + p, h * w];
-    [fx, fy, fz]
-  }
-
-  fn max_wave_speed(&self, state: &[f64; 5]) -> f64 {
-    let rho = state[0];
-    let u = state[1] / rho;
-    let v = state[2] / rho;
-    let w = state[3] / rho;
-    let p = self.pressure(state);
-    let c = (self.gamma * p / rho).sqrt();
-    (u * u + v * v + w * w).sqrt() + c
-  }
-
-  fn source(
-    &self,
-    _: &[f64; 5],
-    _: &Point<3>,
-    _: &CellMetrics<3>,
-  ) -> [f64; 5] {
-    [0.0; 5]
-  }
-
-  fn fix_state(&self, state: &mut [f64; 5]) {
-    let floor = 1e-8;
-    if state[0] < floor {
-      state[0] = floor;
-    }
-    let rho = state[0];
-    let ke = 0.5 / rho
-      * (state[1].powi(2) + state[2].powi(2) + state[3].powi(2));
-    if state[4] - ke < floor {
-      state[4] = ke + floor;
-    }
-  }
-}
 
 /// Sum component `c` of state weighted by physical cell volume.
 fn integrate_component(
@@ -120,7 +54,7 @@ fn cube_sphere_constant_state_at_rest() {
 
   let mut solver = FvmSolver::new(
     SolverConfig::new(0.5, 0.1, TimeIntegration::ForwardEuler),
-    Euler3D { gamma },
+    Euler3D::new(gamma),
     RusanovFlux,
   );
 

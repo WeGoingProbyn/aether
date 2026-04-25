@@ -235,7 +235,7 @@ where
       let metrics = mesh.cell_metrics(cell);
 
       let source =
-        law.source(&state_cache[i], mesh.cell_centroid(cell), metrics);
+        law.source(&state_cache[i], cell, mesh.cell_centroid(cell), metrics);
 
       let mut out = [0.0; N];
       for j in 0..N {

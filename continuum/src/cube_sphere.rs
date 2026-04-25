@@ -613,6 +613,34 @@ impl CubeSphere {
 
   pub fn panels(&self) -> &[StructuredBlock<3>; 6] { &self.panels }
 
+  /// World-space centroid of `cell`. Cube-sphere `cell_centroid` returns
+  /// computational `(ξ, η, r)`; this projects through the owning panel's
+  /// gnomonic map to give an actual `(x, y, z)`.
+  pub fn cell_world_centroid(&self, cell: CellId) -> Point<3> {
+    let (panel_idx, local) = self.cell_to_panel(cell);
+    let panel_id = PANEL_ORDER[panel_idx];
+    GnomonicShellPanel::new(panel_id)
+      .to_physical(self.panels[panel_idx].cell_centroid(local))
+  }
+
+  /// Build a per-cell radial gravity field — `g · (-r̂)` evaluated at each
+  /// cell's world centroid. Magnitude is constant (uniform-g approximation
+  /// valid for atmospheres thin compared to the planet radius). Pass the
+  /// returned vector to `Euler3D::with_per_cell_gravity`.
+  pub fn radial_gravity_field(&self, surface_g: f64) -> Vec<[f64; 3]> {
+    (0..self.cell_count())
+      .map(|i| {
+        let p = self.cell_world_centroid(CellId::from(i));
+        let r = (p[0].powi(2) + p[1].powi(2) + p[2].powi(2)).sqrt();
+        [
+          -surface_g * p[0] / r,
+          -surface_g * p[1] / r,
+          -surface_g * p[2] / r,
+        ]
+      })
+      .collect()
+  }
+
   /// Build a radial-edge array in `[r_inner, r_outer]` whose spacing
   /// concentrates layers near the inner radius (= the ground for an
   /// atmospheric shell). `beta` controls how aggressive the stretching is:
