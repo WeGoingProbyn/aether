@@ -5,12 +5,13 @@ use std::sync::Arc;
 
 use continuum::boundary::{BoundaryRegistry, ReflectiveWall, Transmissive};
 use continuum::field::{CellView, FieldStorage, SoaField};
-use continuum::geometry::{CellGeometry, CellId, IdentityMap};
-use continuum::mesh::StructuredBlock;
 use continuum::model::{Euler2D, RusanovFlux};
-use continuum::partition::decompose_structured;
 use continuum::solver::{FvmSolver, SolverConfig, TimeIntegration};
-use continuum::topology::BoundaryTag;
+
+use tessera::mesh::StructuredBlock;
+use tessera::partition::decompose_structured;
+use tessera::topology::BoundaryTag;
+use tessera::geometry::{CellGeometry, CellId, IdentityMap};
 
 use utility::error::AetherResult;
 use utility::info;

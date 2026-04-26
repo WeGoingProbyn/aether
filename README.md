@@ -218,33 +218,40 @@ Generally following latin or greek naming scheme:
                  └────┬─────┘
                       │
          ┌────────────┼──────────────┐
-         ▼            ▼              │ 
-    ┌─────────┐  ┌─────────┐         │ 
- ┌──┤ tessera │  │  cosmo  │         │ 
- │  └────┬────┘  └────┬────┘         │ 
+         ▼            ▼              │
+    ┌─────────┐  ┌─────────┐         │
+ ┌──┤ tessera │  │  cosmo  │         │
+ │  └────┬────┘  └────┬────┘         │
  │       │            │              │
  │       ▼            │              │
  │  ┌─────────┐       │              │
- ├──┤ pleroma │◀────┬─┘              │
- │  └─────────┘     │                │
- │                  │                │
- │              ┌───┴───┐            │
- │              │ nexus │            │
- │              └───┬───┘            │
- │                  │                │
- │                  ▼                ▼
- │┌─────┬───────┬──────────┬────────────────┐
- ││ aer │ terra │ gravitas │ future physics │
- │└─────┴───────┼──────────┼────────────────┘
- │              │continuum │
- │              └──────────┘            
- │              ┌──────────┐    
- └─────────────▶│ eidolon  │       (read-only viewer over pleroma + tessera for rendering)
-                └────┬─────┘
-                     ▼
-                ┌──────────┐
-                │ sandbox  │       (your binary/project)
-                └──────────┘
+ ├──┤ pleroma │◀──────┘              │
+ │  └────┬────┘                      │
+ │       ├─────────────┐             │
+ │       ▼             │             │
+ │  ┌─────────┐        │             │
+ │  │  nexus  │        │             │
+ │  └────┬────┘        │             │
+ │       │             │             │
+ │       ▼             ▼             ▼
+ │  ┌─────┬───────┬──────────┬────────────────┐
+ │  │ aer │ terra │ gravitas │ future physics │
+ │  └──┬──┴───┬───┴────┬─────┴──────┬─────────┘
+ │     │      │        │            │
+ │     └──────┴────────┼────────────┘
+ │                     │
+ │                     ▼
+ │               ┌──────────┐
+ ├──────────────▶│continuum │   (numerical-methods library;
+ │               └──────────┘    consumed by physics crates)
+ │
+ │  ┌──────────┐
+ └─▶│ eidolon  │   (read-only viewer over pleroma + tessera)
+    └────┬─────┘
+         ▼
+    ┌──────────┐
+    │ sandbox  │   (integration rig: cosmo → pleroma → nexus → physics → eidolon)
+    └──────────┘
 ```
 
 ---

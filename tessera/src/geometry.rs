@@ -1,39 +1,17 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use utility::maths::{matrix::Matrix, vector::Vector};
-
-pub type Point<const D: usize> = Vector<f64, D>;
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct CellId(usize);
-
-impl CellId {
-  pub fn index(&self) -> usize {
-    self.0
-  }
-}
-
-impl From<usize> for CellId {
-  fn from(value: usize) -> Self {
-    CellId(value)
-  }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct FaceId(usize);
-
-impl FaceId {
-  pub fn index(&self) -> usize {
-    self.0
-  }
-}
-
-impl From<usize> for FaceId {
-  fn from(value: usize) -> Self {
-    FaceId(value)
-  }
-}
+use utility::{
+  domain::{
+    CellId,
+    FaceId,
+    Point,
+  },
+  maths::{
+    matrix::Matrix, 
+    vector::Vector
+  },
+};
 
 pub trait CellGeometry<const D: usize>: Send + Sync {
   fn cell_centroid(&self, cell: CellId) -> &Point<D>;

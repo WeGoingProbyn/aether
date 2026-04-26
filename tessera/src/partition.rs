@@ -3,14 +3,19 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use utility::{maths::vector::Vector, profile};
+use utility::{
+  domain::{
+    BoundaryTag, CellId, FaceId, Point,
+  },
+  maths::vector::Vector,
+};
 
 use crate::{
   geometry::{
-    CellGeometry, CellId, CellMetrics, FaceGeometry, FaceId, FaceMetrics, Point,
+    CellGeometry, CellMetrics, FaceGeometry, FaceMetrics,
   },
   mesh::{Mesh, StructuredBlock},
-  topology::{BoundaryTag, FaceConnection, Topology},
+  topology::{FaceConnection, Topology},
 };
 
 /// Describes a ghost cell in a partition
@@ -167,39 +172,15 @@ where
   pub partitions: Vec<PartitionMesh<D, M>>,
 }
 
-impl<const D: usize, M: CellGeometry<D> + FaceGeometry<D> + Topology>
-  Decomposition<D, M>
+impl<const D: usize, M> Decomposition<D, M>
+where
+  M: CellGeometry<D> + FaceGeometry<D> + Topology,
 {
-  /// Exchange ghost cell data between partition fields.
-  /// Two-pass to avoid aliasing: collect all ghost values, then scatter.
-  #[profile]
-  pub fn exchange_ghosts<const N: usize, S: FieldStorage<N>>(
-    &self,
-    fields: &mut [S],
-  ) {
-    // Pass 1: collect ghost values from source partitions
-    let ghost_data: Vec<Vec<(CellId, [f64; N])>> = self
-      .partitions
-      .iter()
-      .map(|p| {
-        p.ghost_cells
-          .iter()
-          .map(|g| {
-            let val = *fields[g.source_partition]
-              .state(g.source_local_cell)
-              .as_state();
-            (g.local_cell, val)
-          })
-          .collect()
-      })
-      .collect();
-
-    // Pass 2: write ghost values to destination fields
-    for (dest, data) in ghost_data.into_iter().enumerate() {
-      for (cell, val) in data {
-        fields[dest].write(cell, &val);
-      }
-    }
+  /// All ghost descriptors, grouped per partition. Pleroma uses these to
+  /// drive the actual field-data exchange — tessera owns the topology, not
+  /// the field storage.
+  pub fn ghost_descriptors_per_partition(&self) -> Vec<&[GhostDescriptor]> {
+    self.partitions.iter().map(|p| p.ghost_cells()).collect()
   }
 }
 

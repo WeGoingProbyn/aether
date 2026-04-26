@@ -14,6 +14,7 @@ dependencies = [
 name = "continuum"
 version = "0.1.0"
 dependencies = [
+ "pleroma",
  "utility",
 ]
 
@@ -35,10 +36,18 @@ version = "0.1.0"
 [[package]]
 name = "nexus"
 version = "0.1.0"
+dependencies = [
+ "pleroma",
+ "utility",
+]
 
 [[package]]
 name = "pleroma"
 version = "0.1.0"
+dependencies = [
+ "tessera",
+ "utility",
+]
 
 [[package]]
 name = "proc-macro2"
@@ -63,6 +72,7 @@ name = "sandbox"
 version = "0.1.0"
 dependencies = [
  "continuum",
+ "tessera",
  "utility",
 ]
 

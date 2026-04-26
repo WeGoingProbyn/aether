@@ -3,15 +3,26 @@
 
 use std::collections::HashMap;
 
-use utility::maths::{matrix::Matrix, vector::Vector};
+use utility::{
+  domain::{
+    BoundaryTag,
+    CellId,
+    FaceId,
+    Point,
+  },
+  maths::{
+    matrix::Matrix,
+    vector::Vector,
+  },
+};
 
 use crate::{
   geometry::{
-    CellGeometry, CellId, CellMetrics, FaceGeometry, FaceId, FaceMetrics,
-    GeometryMap, Point,
+    CellGeometry, CellMetrics, FaceGeometry, FaceMetrics,
+    GeometryMap,
   },
   mesh::StructuredBlock,
-  topology::{BoundaryTag, FaceConnection, Topology},
+  topology::{FaceConnection, Topology},
 };
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]

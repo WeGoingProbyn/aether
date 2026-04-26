@@ -1,16 +1,24 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use utility::{profile, thread::pool::Pool};
+use utility::{
+  domain::{
+    CellId,
+  },
+  profile, 
+  thread::pool::Pool
+};
+
+use pleroma::core::storage::FieldStorage;
 
 use crate::{
   boundary::BoundaryRegistry,
-  field::FieldStorage,
-  geometry::{CellGeometry, CellId, FaceGeometry},
-  mesh::Mesh,
   model::{ConservationLaw, NumericalFlux},
+
+  mesh::Mesh,
   partition::Decomposition,
   topology::{FaceConnection, Topology},
+  geometry::{CellGeometry, FaceGeometry},
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -507,11 +515,9 @@ where
     F: NumericalFlux<D, N> + Sync,
     S: FieldStorage<N>,
   {
-    // 1. Exchange ghost cell data
     decomp.exchange_ghosts(states);
 
     let dt = {
-      // 2. Gather states once and compute global dt
       self.ensure_scratch_slots(decomp.partitions.len());
       let (law, flux, config, scratches) = (
         &self.law,
@@ -548,13 +554,11 @@ where
           let u_old: Vec<S> =
             states.iter().map(|state| state.clone_state()).collect();
 
-          // Stage 1: state = u + dt * R(u)
           Self::parallel_compute_residuals_from_cache(
             pool, law, flux, decomp, scratches, residuals, bcs,
           );
           Self::parallel_axpy(pool, states, residuals, dt);
 
-          // Stage 2: state = u* + dt * R(u*)
           decomp.exchange_ghosts(states);
           Self::refresh_parallel_state_caches(decomp, states, scratches);
           Self::parallel_compute_residuals_from_cache(
@@ -578,7 +582,6 @@ where
         }
       }
 
-      // 5. Fix state per partition (parallel via dispatch)
       Self::parallel_fix_owned(pool, law, decomp, states);
       dt
     };

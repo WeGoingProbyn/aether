@@ -1,23 +1,11 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::geometry::{CellId, FaceId};
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum BoundaryTag {
-  Top,
-  Left,
-  Right,
-  Bottom,
-  Front,
-  Back,
-
-  Wall,
-  Ground,
-  Inflow,
-  Outflow,
-  AtmosphereEdge,
-}
+use utility::domain::{
+  BoundaryTag,
+  CellId,
+  FaceId,
+};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum CellKind {

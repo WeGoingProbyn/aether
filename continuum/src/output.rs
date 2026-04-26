@@ -7,15 +7,12 @@ use std::{
   path::{Path, PathBuf},
 };
 
-use crate::{
-  field::FieldStorage,
-  geometry::{CellGeometry, CellMetrics, FaceGeometry, FaceId, Point},
-  mesh::StructuredBlock,
-  model::ConservationLaw,
-  partition::{Decomposition, PartitionMesh},
-};
-
+use pleroma::core::storage::FieldStorage;
+use tessera::geometry::{CellGeometry, CellMetrics, FaceGeometry};
+use tessera::mesh::StructuredBlock;
+use tessera::partition::{Decomposition, PartitionMesh};
 use utility::{
+  domain::{FaceId, Point},
   error::{AetherError, AetherResult, ErrorDomain},
   serial::{
     field::{
@@ -25,6 +22,8 @@ use utility::{
     vtk::{PvtuSchema, XmlPvtuWriter, XmlVtuWriter},
   },
 };
+
+use crate::model::ConservationLaw;
 
 /// Defines how a conservation law maps its state vectors into named export
 /// arrays. This keeps format writers generic (VTK, HDF5, etc.).
@@ -701,14 +700,13 @@ mod tests {
     time::{SystemTime, UNIX_EPOCH},
   };
 
-  use crate::{
-    field::AosField,
-    geometry::{CellGeometry, IdentityMap},
-    mesh::StructuredBlock,
-    model::{Euler2D, RusanovFlux},
-    partition::decompose_structured,
-    solver::{FvmSolver, SolverConfig, TimeIntegration},
-  };
+  use pleroma::core::storage::AosField;
+  use tessera::geometry::{CellGeometry, IdentityMap};
+  use tessera::mesh::StructuredBlock;
+  use tessera::partition::decompose_structured;
+
+  use crate::model::{Euler2D, RusanovFlux};
+  use crate::solver::{FvmSolver, SolverConfig, TimeIntegration};
 
   use super::{
     MeshFieldDatasetBuilder, build_cell_state_arrays, write_partitioned_vtu,

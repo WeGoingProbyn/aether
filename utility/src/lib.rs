@@ -9,6 +9,7 @@ pub mod maths;
 pub mod profiler;
 pub mod serial;
 pub mod thread;
+pub mod domain;
 
 pub use utility_macros::Deserialize;
 pub use utility_macros::Serialize;

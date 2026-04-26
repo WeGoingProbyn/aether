@@ -1,22 +1,23 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use utility::maths::vector::Vector;
+use utility::{
+  domain::{
+    BoundaryTag,
+    CellId,
+    FaceId,
+    Point,
+  },
+  maths::vector::Vector
+};
 
 use crate::{
   geometry::{
-    CellGeometry, CellId, CellMetrics, FaceGeometry, FaceId, FaceMetrics,
-    GeometryMap, Point,
+    CellGeometry, CellMetrics, FaceGeometry, FaceMetrics,
+    GeometryMap,
   },
-  topology::{BoundaryTag, FaceConnection, Topology},
+  topology::{FaceConnection, Topology},
 };
-
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone, Copy, Hash)]
-pub enum Axis {
-  X = 0,
-  Y = 1,
-  Z = 2,
-}
 
 pub trait Mesh<const D: usize>:
   CellGeometry<D> + FaceGeometry<D> + Topology
