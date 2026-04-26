@@ -13,10 +13,8 @@
 use std::collections::HashMap;
 
 use utility::{
+  constants::{angular_velocity, orbital_velocity},
   consts::*,
-  constants::{
-    angular_velocity, orbital_velocity,
-  },
   maths::vector::Vector,
 };
 

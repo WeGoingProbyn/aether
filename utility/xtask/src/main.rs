@@ -10,7 +10,7 @@ fn visit_dir(dir: &Path) {
     let path = entry.path();
 
     if path.to_string_lossy().contains("target")
-    || path.to_string_lossy().contains(".git")
+      || path.to_string_lossy().contains(".git")
     {
       continue;
     }

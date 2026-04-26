@@ -8,3 +8,4 @@ license = "Apache-2.0"
 utility = { path = "../utility" }
 continuum = { path = "../continuum" }
 tessera = { path = "../tessera" }
+pleroma = { path = "../pleroma" }

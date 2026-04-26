@@ -15,6 +15,7 @@ name = "continuum"
 version = "0.1.0"
 dependencies = [
  "pleroma",
+ "tessera",
  "utility",
 ]
 
@@ -72,6 +73,7 @@ name = "sandbox"
 version = "0.1.0"
 dependencies = [
  "continuum",
+ "pleroma",
  "tessera",
  "utility",
 ]
@@ -86,6 +88,10 @@ dependencies = [
  "quote",
  "unicode-ident",
 ]
+
+[[package]]
+name = "syzygy"
+version = "0.1.0"
 
 [[package]]
 name = "terra"

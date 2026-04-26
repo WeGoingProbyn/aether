@@ -1,7 +1,7 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use utility::domain::{FaceId, CellId};
+use utility::domain::{CellId, FaceId};
 
 pub trait MeshCoupler: Send + Sync {
   fn paired_face(&self, side: Side, face: FaceId) -> Option<(Side, FaceId)>;

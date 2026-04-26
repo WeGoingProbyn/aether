@@ -3,13 +3,13 @@
 
 pub mod collections;
 pub mod constants;
+pub mod domain;
 pub mod error;
 pub mod logger;
 pub mod maths;
 pub mod profiler;
 pub mod serial;
 pub mod thread;
-pub mod domain;
 
 pub use utility_macros::Deserialize;
 pub use utility_macros::Serialize;

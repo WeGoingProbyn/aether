@@ -2,17 +2,20 @@
 members = [
   "utility",
   "utility/xtask",
-  "sandbox", 
-  "continuum", 
-  "aer", 
-  "cosmo", 
-  "gravitas", 
-  "nexus", 
-  "eidolon", 
-  "terra", 
-  "pleroma", 
-  "tessera", "syzygy",
+  "sandbox",
+  "continuum",
+  "aer",
+  "cosmo",
+  "gravitas",
+  "nexus",
+  "eidolon",
+  "terra",
+  "pleroma",
+  "tessera",
+  "syzygy",
 ]
 
 resolver = "2"
+
+[workspace.package]
 license = "Apache-2.0"

@@ -55,6 +55,7 @@ impl From<usize> for FaceId {
 
 pub type Point<const D: usize> = Vector<f64, D>;
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum FieldKey {
   Temperature,
   VelocityX,
@@ -73,4 +74,3 @@ pub enum MeshType {
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct MeshKey(MeshType);
-

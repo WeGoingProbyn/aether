@@ -1,12 +1,7 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use utility::{
-  profile,
-  domain::{
-    CellId,
-  },
-};
+use utility::{domain::CellId, profile};
 
 pub trait FieldStorage<const N: usize>: Send + Sync {
   type CellView<'a>: CellView<N>

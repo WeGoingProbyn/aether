@@ -4,22 +4,13 @@
 use std::collections::HashMap;
 
 use utility::{
-  domain::{
-    BoundaryTag,
-    CellId,
-    FaceId,
-    Point,
-  },
-  maths::{
-    matrix::Matrix,
-    vector::Vector,
-  },
+  domain::{BoundaryTag, CellId, FaceId, Point},
+  maths::{matrix::Matrix, vector::Vector},
 };
 
 use crate::{
   geometry::{
-    CellGeometry, CellMetrics, FaceGeometry, FaceMetrics,
-    GeometryMap,
+    CellGeometry, CellMetrics, FaceGeometry, FaceMetrics, GeometryMap,
   },
   mesh::StructuredBlock,
   topology::{FaceConnection, Topology},

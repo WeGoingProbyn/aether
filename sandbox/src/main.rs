@@ -4,15 +4,16 @@
 use std::sync::Arc;
 
 use continuum::boundary::{BoundaryRegistry, ReflectiveWall, Transmissive};
-use continuum::field::{CellView, FieldStorage, SoaField};
 use continuum::model::{Euler2D, RusanovFlux};
 use continuum::solver::{FvmSolver, SolverConfig, TimeIntegration};
 
+use pleroma::core::storage::{CellView, FieldStorage, SoaField};
+
+use tessera::geometry::{CellGeometry, IdentityMap};
 use tessera::mesh::StructuredBlock;
 use tessera::partition::decompose_structured;
-use tessera::topology::BoundaryTag;
-use tessera::geometry::{CellGeometry, CellId, IdentityMap};
 
+use utility::domain::{BoundaryTag, CellId};
 use utility::error::AetherResult;
 use utility::info;
 use utility::logger::{Level, LogWriter, Logger, StdSink};

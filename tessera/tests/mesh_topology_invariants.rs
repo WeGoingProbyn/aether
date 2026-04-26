@@ -3,11 +3,11 @@
 
 use std::collections::HashSet;
 
-use continuum::geometry::{
+use tessera::geometry::{
   CellGeometry, CellId, FaceGeometry, FaceId, IdentityMap,
 };
-use continuum::mesh::StructuredBlock;
-use continuum::topology::{FaceConnection, Topology};
+use tessera::mesh::StructuredBlock;
+use tessera::topology::{FaceConnection, Topology};
 
 fn expected_cell_count<const D: usize>(dims: [usize; D]) -> usize {
   dims.iter().product()

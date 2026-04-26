@@ -1,24 +1,19 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use utility::{
-  domain::{
-    CellId,
-  },
-  profile, 
-  thread::pool::Pool
-};
+use utility::{domain::CellId, profile, thread::pool::Pool};
 
+use pleroma::core::exchange::exchange_ghosts;
 use pleroma::core::storage::FieldStorage;
+
+use tessera::geometry::{CellGeometry, FaceGeometry};
+use tessera::mesh::Mesh;
+use tessera::partition::Decomposition;
+use tessera::topology::{FaceConnection, Topology};
 
 use crate::{
   boundary::BoundaryRegistry,
   model::{ConservationLaw, NumericalFlux},
-
-  mesh::Mesh,
-  partition::Decomposition,
-  topology::{FaceConnection, Topology},
-  geometry::{CellGeometry, FaceGeometry},
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -515,7 +510,7 @@ where
     F: NumericalFlux<D, N> + Sync,
     S: FieldStorage<N>,
   {
-    decomp.exchange_ghosts(states);
+    exchange_ghosts(decomp, states);
 
     let dt = {
       self.ensure_scratch_slots(decomp.partitions.len());
@@ -559,7 +554,7 @@ where
           );
           Self::parallel_axpy(pool, states, residuals, dt);
 
-          decomp.exchange_ghosts(states);
+          exchange_ghosts(decomp, states);
           Self::refresh_parallel_state_caches(decomp, states, scratches);
           Self::parallel_compute_residuals_from_cache(
             pool, law, flux, decomp, scratches, residuals, bcs,

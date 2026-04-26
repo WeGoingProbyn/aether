@@ -1,10 +1,10 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use continuum::geometry::{
+use tessera::geometry::{
   CellGeometry, CellId, FaceGeometry, FaceId, IdentityMap,
 };
-use continuum::mesh::StructuredBlock;
+use tessera::mesh::StructuredBlock;
 
 fn assert_close(lhs: f64, rhs: f64, eps: f64, context: &str) {
   assert!(

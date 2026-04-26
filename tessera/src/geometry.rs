@@ -1,17 +1,11 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use utility::{
-  domain::{
-    CellId,
-    FaceId,
-    Point,
-  },
-  maths::{
-    matrix::Matrix, 
-    vector::Vector
-  },
-};
+use utility::maths::{matrix::Matrix, vector::Vector};
+
+// Re-export geometric vocabulary so callers can write
+// `tessera::geometry::CellId` without having to know it lives in utility.
+pub use utility::domain::{CellId, FaceId, Point};
 
 pub trait CellGeometry<const D: usize>: Send + Sync {
   fn cell_centroid(&self, cell: CellId) -> &Point<D>;

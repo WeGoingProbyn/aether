@@ -4,16 +4,12 @@
 use std::{collections::HashMap, sync::Arc};
 
 use utility::{
-  domain::{
-    BoundaryTag, CellId, FaceId, Point,
-  },
+  domain::{BoundaryTag, CellId, FaceId, Point},
   maths::vector::Vector,
 };
 
 use crate::{
-  geometry::{
-    CellGeometry, CellMetrics, FaceGeometry, FaceMetrics,
-  },
+  geometry::{CellGeometry, CellMetrics, FaceGeometry, FaceMetrics},
   mesh::{Mesh, StructuredBlock},
   topology::{FaceConnection, Topology},
 };

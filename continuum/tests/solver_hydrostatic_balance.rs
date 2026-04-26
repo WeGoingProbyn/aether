@@ -13,15 +13,14 @@
 //! positive, no NaN, max |w| bounded well below sound speed, and density
 //! doesn't crash by more than a factor of 2 from the analytical profile.
 
-use continuum::{
-  boundary::{BoundaryRegistry, ReflectiveWall},
-  field::{FieldStorage, SoaField},
-  geometry::{CellGeometry, CellId, IdentityMap},
-  mesh::StructuredBlock,
-  model::{Euler3D, RusanovFlux},
-  solver::{FvmSolver, SolverConfig, TimeIntegration},
-  topology::BoundaryTag,
-};
+use continuum::boundary::{BoundaryRegistry, ReflectiveWall};
+use continuum::model::{Euler3D, RusanovFlux};
+use continuum::solver::{FvmSolver, SolverConfig, TimeIntegration};
+use pleroma::core::storage::{FieldStorage, SoaField};
+use tessera::geometry::{CellGeometry, IdentityMap};
+use tessera::mesh::StructuredBlock;
+use utility::domain::BoundaryTag;
+use utility::domain::CellId;
 
 #[test]
 fn flat_atmosphere_remains_hydrostatic_under_gravity() {

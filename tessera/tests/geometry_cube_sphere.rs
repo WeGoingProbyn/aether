@@ -1,15 +1,14 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use continuum::{
-  cube_sphere::{
-    CUBE_EDGES, CubeSphere, GnomonicPanel, GnomonicShellPanel, PanelId,
-    cells_along_edge, edge_cell_index, edge_face_centroid_comp,
-    match_edge_cells,
-  },
-  geometry::{CellGeometry, CellId, FaceGeometry, FaceId, GeometryMap, Point},
-  topology::{BoundaryTag, FaceConnection, Topology},
+use tessera::cube_sphere::{
+  CUBE_EDGES, CubeSphere, GnomonicPanel, GnomonicShellPanel, PanelId,
+  cells_along_edge, edge_cell_index, edge_face_centroid_comp, match_edge_cells,
 };
+use tessera::geometry::{CellGeometry, FaceGeometry, GeometryMap};
+use tessera::topology::{FaceConnection, Topology};
+use utility::domain::BoundaryTag;
+use utility::domain::{CellId, FaceId, Point};
 
 fn all_panels() -> [PanelId; 6] {
   [
@@ -231,7 +230,7 @@ fn cube_sphere_topology_is_consistent() {
   let mut interior_count = 0;
   let mut boundary_count = 0;
   for f in 0..mesh.face_count() {
-    match mesh.face_connection(continuum::geometry::FaceId::from(f)) {
+    match mesh.face_connection(utility::domain::FaceId::from(f)) {
       FaceConnection::Interior { .. } => interior_count += 1,
       FaceConnection::Boundary { .. } => boundary_count += 1,
     }

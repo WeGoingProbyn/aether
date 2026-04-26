@@ -9,15 +9,14 @@
 //! sphere by panel-pair symmetry); per-cell momentum drift is allowed because
 //! the world-frame area vectors are midpoint approximations on a curved grid.
 
-use continuum::{
-  boundary::{BoundaryRegistry, Transmissive},
-  cube_sphere::CubeSphere,
-  field::{FieldStorage, SoaField},
-  geometry::{CellGeometry, CellId},
-  model::{Euler3D, RusanovFlux},
-  solver::{FvmSolver, SolverConfig, TimeIntegration},
-  topology::BoundaryTag,
-};
+use continuum::boundary::{BoundaryRegistry, Transmissive};
+use continuum::model::{Euler3D, RusanovFlux};
+use continuum::solver::{FvmSolver, SolverConfig, TimeIntegration};
+use pleroma::core::storage::{FieldStorage, SoaField};
+use tessera::cube_sphere::CubeSphere;
+use tessera::geometry::CellGeometry;
+use utility::domain::BoundaryTag;
+use utility::domain::CellId;
 
 /// Sum component `c` of state weighted by physical cell volume.
 fn integrate_component(

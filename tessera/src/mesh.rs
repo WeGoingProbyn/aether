@@ -2,19 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use utility::{
-  domain::{
-    BoundaryTag,
-    CellId,
-    FaceId,
-    Point,
-  },
-  maths::vector::Vector
+  domain::{BoundaryTag, CellId, FaceId, Point},
+  maths::vector::Vector,
 };
 
 use crate::{
   geometry::{
-    CellGeometry, CellMetrics, FaceGeometry, FaceMetrics,
-    GeometryMap,
+    CellGeometry, CellMetrics, FaceGeometry, FaceMetrics, GeometryMap,
   },
   topology::{FaceConnection, Topology},
 };

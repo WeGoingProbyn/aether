@@ -1,14 +1,12 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use utility::domain::{
-  CellId,
-  Point,
-};
-
-use crate::geometry::{CellMetrics, Point};
-use crate::output::LawFieldSchema;
+use utility::domain::{CellId, Point};
 use utility::{maths::vector::Vector, profile};
+
+use tessera::geometry::CellMetrics;
+
+use crate::output::LawFieldSchema;
 
 pub trait ConservationLaw<const D: usize, const N: usize>: Send + Sync {
   fn fix_state(&self, state: &mut [f64; N]);
@@ -161,13 +159,19 @@ pub struct Euler3D {
 impl Euler3D {
   /// Construct without gravity (free flow).
   pub fn new(gamma: f64) -> Self {
-    Self { gamma, gravity: GravityField::None }
+    Self {
+      gamma,
+      gravity: GravityField::None,
+    }
   }
 
   /// Construct with a constant gravity vector (force per unit mass) — right
   /// for flat boxes, e.g. `[0, 0, -9.81]`.
   pub fn with_gravity(gamma: f64, gravity: [f64; 3]) -> Self {
-    Self { gamma, gravity: GravityField::Constant(gravity) }
+    Self {
+      gamma,
+      gravity: GravityField::Constant(gravity),
+    }
   }
 
   /// Construct with a precomputed per-cell gravity field — right for radial
@@ -175,14 +179,17 @@ impl Euler3D {
   /// must have length equal to the mesh's cell count. Build it via
   /// `CubeSphere::radial_gravity_field(g)`.
   pub fn with_per_cell_gravity(gamma: f64, gravity: Vec<[f64; 3]>) -> Self {
-    Self { gamma, gravity: GravityField::PerCell(gravity) }
+    Self {
+      gamma,
+      gravity: GravityField::PerCell(gravity),
+    }
   }
 
   pub fn pressure(&self, state: &[f64; 5]) -> f64 {
     let rho = state[0];
     let inv_rho = 1.0 / rho;
-    let ke = 0.5 * inv_rho
-      * (state[1].powi(2) + state[2].powi(2) + state[3].powi(2));
+    let ke =
+      0.5 * inv_rho * (state[1].powi(2) + state[2].powi(2) + state[3].powi(2));
     (self.gamma - 1.0) * (state[4] - ke)
   }
 
@@ -200,9 +207,27 @@ impl ConservationLaw<3, 5> for Euler3D {
     let p = self.pressure(state);
     let h = state[4] + p;
 
-    let fx = [state[1], state[1] * u + p, state[1] * v, state[1] * w, h * u];
-    let fy = [state[2], state[2] * u, state[2] * v + p, state[2] * w, h * v];
-    let fz = [state[3], state[3] * u, state[3] * v, state[3] * w + p, h * w];
+    let fx = [
+      state[1],
+      state[1] * u + p,
+      state[1] * v,
+      state[1] * w,
+      h * u,
+    ];
+    let fy = [
+      state[2],
+      state[2] * u,
+      state[2] * v + p,
+      state[2] * w,
+      h * v,
+    ];
+    let fz = [
+      state[3],
+      state[3] * u,
+      state[3] * v,
+      state[3] * w + p,
+      h * w,
+    ];
     [fx, fy, fz]
   }
 
@@ -246,8 +271,8 @@ impl ConservationLaw<3, 5> for Euler3D {
       state[0] = floor;
     }
     let rho = state[0];
-    let ke = 0.5 / rho
-      * (state[1].powi(2) + state[2].powi(2) + state[3].powi(2));
+    let ke =
+      0.5 / rho * (state[1].powi(2) + state[2].powi(2) + state[3].powi(2));
     if state[4] - ke < floor {
       state[4] = ke + floor;
     }

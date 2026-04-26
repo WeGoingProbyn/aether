@@ -4,14 +4,14 @@
 use std::sync::Arc;
 
 use continuum::boundary::{BoundaryRegistry, ReflectiveWall, Transmissive};
-use continuum::field::SoaField;
-use continuum::geometry::{CellGeometry, IdentityMap};
-use continuum::mesh::StructuredBlock;
 use continuum::model::{Euler2D, RusanovFlux};
 use continuum::output::write_partitioned_vtu;
-use continuum::partition::decompose_structured;
 use continuum::solver::{FvmSolver, SolverConfig, TimeIntegration};
-use continuum::topology::BoundaryTag;
+use pleroma::core::storage::SoaField;
+use tessera::geometry::{CellGeometry, IdentityMap};
+use tessera::mesh::StructuredBlock;
+use tessera::partition::decompose_structured;
+use utility::domain::BoundaryTag;
 
 use utility::error::AetherResult;
 use utility::info;

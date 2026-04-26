@@ -16,15 +16,14 @@
 //! sphere drifts because the discrete `∮ p·n dA` over a curved cell doesn't
 //! identically cancel the gravity source.
 
-use continuum::{
-  boundary::{BoundaryRegistry, ReflectiveWall},
-  cube_sphere::CubeSphere,
-  field::{FieldStorage, SoaField},
-  geometry::{CellGeometry, CellId},
-  model::{Euler3D, RusanovFlux},
-  solver::{FvmSolver, SolverConfig, TimeIntegration},
-  topology::BoundaryTag,
-};
+use continuum::boundary::{BoundaryRegistry, ReflectiveWall};
+use continuum::model::{Euler3D, RusanovFlux};
+use continuum::solver::{FvmSolver, SolverConfig, TimeIntegration};
+use pleroma::core::storage::{FieldStorage, SoaField};
+use tessera::cube_sphere::CubeSphere;
+use tessera::geometry::CellGeometry;
+use utility::domain::BoundaryTag;
+use utility::domain::CellId;
 
 #[test]
 fn radial_gravity_field_is_inward_radial_with_correct_magnitude() {

@@ -1,10 +1,7 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use utility::{
-  domain::BoundaryTag,
-  maths::vector::Vector
-};
+use utility::{domain::BoundaryTag, maths::vector::Vector};
 
 pub trait BoundaryCondition<const D: usize, const N: usize>:
   Send + Sync

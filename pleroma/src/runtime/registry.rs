@@ -1,7 +1,11 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashMap, sync::Arc};
+use std::any::{Any, TypeId};
+use std::cell::UnsafeCell;
+use std::collections::HashMap;
+use std::marker::PhantomData;
+use std::sync::Arc;
 
 use tessera::mesh::Mesh;
 use utility::domain::{FieldKey, MeshKey};
@@ -9,7 +13,12 @@ use utility::domain::{FieldKey, MeshKey};
 use crate::core::access::ScheduleAccess;
 use crate::core::storage::FieldStorage;
 use crate::runtime::slot::FieldSlot;
+use crate::runtime::split::SplitBorrow;
 
+/// Aggregator for every simulation field plus the meshes they're bound to.
+/// Constructed by sandbox/init code from a cosmo seed; physics crates never
+/// hold a `Pleroma` directly — they reach state via `WorldAccess` from
+/// nexus.
 pub struct Pleroma {
   meshes: HashMap<MeshKey, Arc<dyn Mesh<3>>>,
   fields: HashMap<FieldKey, FieldSlot>,
@@ -29,43 +38,74 @@ impl Pleroma {
     }
   }
 
-  pub fn register_mesh(
-    &mut self,
-    key: MeshKey,
-    mesh: Arc<dyn Mesh<3>>,
-  ) {
+  pub fn register_mesh(&mut self, key: MeshKey, mesh: Arc<dyn Mesh<3>>) {
     self.meshes.insert(key, mesh);
   }
 
-  pub fn register_field<S, const N: usize>(
-    &mut self,
-    _key: FieldKey,
-    _init: S,
-  ) where
+  /// Register a field. The concrete `S` is captured in the slot's TypeId
+  /// so subsequent `read::<S>` / `write::<S>` calls can downcast safely.
+  pub fn register_field<S, const N: usize>(&mut self, key: FieldKey, init: S)
+  where
     S: FieldStorage<N> + 'static,
   {
-    unimplemented!("Pleroma::register_field is awaiting runtime impl")
+    let cell_count = init.len();
+    let boxed: Box<dyn Any + Send + Sync> = Box::new(init);
+    self.fields.insert(
+      key,
+      FieldSlot {
+        data: UnsafeCell::new(boxed),
+        type_id: TypeId::of::<S>(),
+        cell_count,
+      },
+    );
   }
 
-  // Single-stage / test direct access (safe; takes &mut self).
-  pub fn read<S: 'static>(&self, _key: FieldKey) -> Option<&S> {
-    unimplemented!("Pleroma::read is awaiting runtime impl")
+  /// Direct read against the registry. Safe; takes `&self`. Returns `None`
+  /// if the key isn't registered or the requested `S` doesn't match the
+  /// stored type.
+  pub fn read<S: 'static>(&self, key: FieldKey) -> Option<&S> {
+    let slot = self.fields.get(&key)?;
+    if slot.type_id != TypeId::of::<S>() {
+      return None;
+    }
+    // SAFETY: `&self` borrow on Pleroma blocks any concurrent `write`/`view_for`
+    // call. We hand out only a shared reference.
+    unsafe {
+      let boxed = &*slot.data.get();
+      boxed.downcast_ref::<S>()
+    }
   }
 
-  pub fn write<S: 'static>(&mut self, _key: FieldKey) -> Option<&mut S> {
-    unimplemented!("Pleroma::write is awaiting runtime impl")
+  /// Direct mutable borrow against the registry. Safe; takes `&mut self`.
+  pub fn write<S: 'static>(&mut self, key: FieldKey) -> Option<&mut S> {
+    let slot = self.fields.get_mut(&key)?;
+    if slot.type_id != TypeId::of::<S>() {
+      return None;
+    }
+    let boxed = slot.data.get_mut();
+    boxed.downcast_mut::<S>()
   }
 
-  /// Nexus entry-point. Hands out a `ScheduleAccess` for one DAG layer.
-  /// Nexus then calls `unsafe ScheduleAccess::view_for` once per parallel
-  /// stage with that stage's declared reads/writes. The unsafe split is
-  /// sound because the schedule has already verified non-overlap at the
-  /// layer level.
+  /// Hand a `ScheduleAccess` to the nexus scheduler for one DAG layer. The
+  /// returned handle holds a phantom mutable borrow on `self`, so the
+  /// registry is exclusively held until it is dropped.
   pub fn schedule_access(&mut self) -> ScheduleAccess<'_> {
-    unimplemented!("Pleroma::schedule_access is awaiting runtime impl")
+    ScheduleAccess {
+      inner: SplitBorrow {
+        fields: &self.fields as *const _,
+        meshes: &self.meshes as *const _,
+        _phantom: PhantomData,
+      },
+    }
   }
 
   pub fn meshes(&self) -> &HashMap<MeshKey, Arc<dyn Mesh<3>>> {
     &self.meshes
+  }
+
+  /// Cell count of a registered field, without needing to know its concrete
+  /// storage type. Useful for sanity-checking buffer sizes during init.
+  pub fn cell_count(&self, key: FieldKey) -> Option<usize> {
+    self.fields.get(&key).map(|s| s.cell_count)
   }
 }

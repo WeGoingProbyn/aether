@@ -9,6 +9,5 @@ use crate::{coupling::MeshCoupler, mesh::Mesh};
 
 pub struct LayeredMesh {
   meshes: HashMap<MeshKey, Arc<dyn Mesh<3>>>,
-  couplers: Vec<(MeshKey, MeshKey, Box<dyn MeshCoupler>)> 
+  couplers: Vec<(MeshKey, MeshKey, Box<dyn MeshCoupler>)>,
 }
-
