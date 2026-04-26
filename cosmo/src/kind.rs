@@ -63,15 +63,30 @@ impl CelestialBody {
     velocity: Vector<f64, 3>,
     kind: BodyKind,
   ) -> Self {
-    Self { body: Body::new(mass, radius, position, velocity), kind }
+    Self {
+      body: Body::new(mass, radius, position, velocity),
+      kind,
+    }
   }
 
-  pub fn mass(&self) -> f64 { self.body.mass }
-  pub fn radius(&self) -> f64 { self.body.radius }
-  pub fn position(&self) -> &Vector<f64, 3> { &self.body.position }
-  pub fn velocity(&self) -> &Vector<f64, 3> { &self.body.velocity }
-  pub fn kind(&self) -> &BodyKind { &self.kind }
-  pub fn kind_mut(&mut self) -> &mut BodyKind { &mut self.kind }
+  pub fn mass(&self) -> f64 {
+    self.body.mass
+  }
+  pub fn radius(&self) -> f64 {
+    self.body.radius
+  }
+  pub fn position(&self) -> &Vector<f64, 3> {
+    &self.body.position
+  }
+  pub fn velocity(&self) -> &Vector<f64, 3> {
+    &self.body.velocity
+  }
+  pub fn kind(&self) -> &BodyKind {
+    &self.kind
+  }
+  pub fn kind_mut(&mut self) -> &mut BodyKind {
+    &mut self.kind
+  }
 
   /// Surface gravity = G·M/r². For gas giants, "surface" is the 1-bar level
   /// (which is what `radius` refers to for them).

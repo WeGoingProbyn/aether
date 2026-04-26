@@ -2,9 +2,8 @@ use std::collections::HashMap;
 
 use utility::{
   constants::{
-    CO2_MOLAR_MASS, HELIUM_MOLAR_MASS, HYDROGEN_MOLAR_MASS,
-    METHANE_MOLAR_MASS, NITROGEN_MOLAR_MASS, OXYGEN_MOLAR_MASS, gamma,
-    specific_gas_constant,
+    CO2_MOLAR_MASS, HELIUM_MOLAR_MASS, HYDROGEN_MOLAR_MASS, METHANE_MOLAR_MASS,
+    NITROGEN_MOLAR_MASS, OXYGEN_MOLAR_MASS, gamma, specific_gas_constant,
   },
   maths::vector::Vector,
 };
@@ -24,7 +23,12 @@ impl Body {
     pos: Vector<f64, 3>,
     vel: Vector<f64, 3>,
   ) -> Body {
-    Body { mass, radius, position: pos, velocity: vel }
+    Body {
+      mass,
+      radius,
+      position: pos,
+      velocity: vel,
+    }
   }
 }
 
@@ -108,7 +112,10 @@ impl Atmosphere {
     composition: HashMap<Species, f64>,
     albedo: Option<f64>,
   ) -> Atmosphere {
-    Atmosphere { composition, albedo }
+    Atmosphere {
+      composition,
+      albedo,
+    }
   }
 
   /// Mole fractions sum to ≤ 1 (the residual is treated as inert / unmodelled).

@@ -3,7 +3,6 @@ use std::{collections::HashMap, sync::Arc};
 use utility::{maths::vector::Vector, profile};
 
 use crate::{
-  field::{CellView, FieldStorage},
   geometry::{
     CellGeometry, CellId, CellMetrics, FaceGeometry, FaceId, FaceMetrics, Point,
   },
@@ -152,8 +151,8 @@ where
       .unwrap_or(&[])
   }
 
-  fn boundary_tags(&self) -> impl Iterator<Item = BoundaryTag> + '_ {
-    self.boundary_face_lists.iter().map(|(tag, _)| *tag)
+  fn boundary_tags(&self) -> Box<dyn Iterator<Item = BoundaryTag> + '_> {
+    Box::new(self.boundary_face_lists.iter().map(|(tag, _)| *tag))
   }
 }
 
@@ -210,12 +209,9 @@ pub fn decompose_structured<const D: usize>(
   num_parts: usize,
   ghost_depth: usize,
 ) -> Decomposition<D, StructuredBlock<D>> {
-  // 1. Find longest axis to split along
   let split_axis = (0..D).max_by_key(|&d| dims[d]).unwrap();
   let n = dims[split_axis];
 
-  // 2. Compute slab boundaries: [0, b1, b2, ..., n]
-  //    Distributes remainder cells to first partitions
   let slab_size = n / num_parts;
   let remainder = n % num_parts;
   let boundaries: Vec<usize> = (0..=num_parts)
@@ -235,7 +231,6 @@ pub fn decompose_structured<const D: usize>(
     .product::<usize>()
     .max(1); // D=1 case
 
-  // 3. Build each partition
   let partitions = (0..num_parts)
     .map(|p| {
       let start = boundaries[p];

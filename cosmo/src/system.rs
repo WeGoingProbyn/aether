@@ -15,11 +15,17 @@ impl System {
 
   /// First body whose kind is `Star`. Returns `None` for rogue-planet systems.
   pub fn star(&self) -> Option<&CelestialBody> {
-    self.bodies.iter().find(|b| matches!(b.kind(), BodyKind::Star(_)))
+    self
+      .bodies
+      .iter()
+      .find(|b| matches!(b.kind(), BodyKind::Star(_)))
   }
 
   /// Iterator over non-stellar bodies.
   pub fn planets(&self) -> impl Iterator<Item = &CelestialBody> + '_ {
-    self.bodies.iter().filter(|b| !matches!(b.kind(), BodyKind::Star(_)))
+    self
+      .bodies
+      .iter()
+      .filter(|b| !matches!(b.kind(), BodyKind::Star(_)))
   }
 }

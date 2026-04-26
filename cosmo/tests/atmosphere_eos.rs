@@ -19,7 +19,11 @@ fn pure_diatomic_at_room_temperature_gives_gamma_seven_fifths() {
   assert!((p.gamma - 1.4).abs() < 1e-12, "γ = {}", p.gamma);
   assert!((p.molar_mass - 0.028).abs() < 1e-12, "M = {}", p.molar_mass);
   let r_expected = R_UNIVERSAL / 0.028;
-  assert!((p.gas_constant - r_expected).abs() < 1e-9, "R = {}", p.gas_constant);
+  assert!(
+    (p.gas_constant - r_expected).abs() < 1e-9,
+    "R = {}",
+    p.gas_constant
+  );
 }
 
 #[test]
@@ -50,7 +54,8 @@ fn earth_air_gives_realistic_gamma_and_specific_gas_constant() {
   // (the small gap is the Argon we don't model).
   assert!(
     (p.gas_constant - 288.0).abs() < 1.5,
-    "R_specific = {}", p.gas_constant
+    "R_specific = {}",
+    p.gas_constant
   );
 }
 

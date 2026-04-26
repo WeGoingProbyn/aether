@@ -62,7 +62,11 @@ fn cube_sphere_constant_state_at_rest() {
   let energy_before = integrate_component(&state, &mesh, 4);
 
   let dt = solver.step(&mut state, &mut residual, &mesh, &bcs);
-  assert!(dt > 0.0 && dt.is_finite(), "dt should be positive and finite, got {}", dt);
+  assert!(
+    dt > 0.0 && dt.is_finite(),
+    "dt should be positive and finite, got {}",
+    dt
+  );
 
   // ----- Per-cell invariants: ρ and E exactly unchanged -----
   // Mass flux is ρu·n; with u = 0 everywhere, F_ρ = 0 at every face on every
@@ -76,11 +80,15 @@ fn cube_sphere_constant_state_at_rest() {
     let de = (s[4] - e0).abs();
     assert!(
       drho < 1e-13,
-      "cell {}: ρ drifted by {} (expected exact)", i, drho
+      "cell {}: ρ drifted by {} (expected exact)",
+      i,
+      drho
     );
     assert!(
       de < 1e-13,
-      "cell {}: E drifted by {} (expected exact)", i, de
+      "cell {}: E drifted by {} (expected exact)",
+      i,
+      de
     );
   }
 
@@ -102,7 +110,10 @@ fn cube_sphere_constant_state_at_rest() {
     let p_total = integrate_component(&state, &mesh, c);
     assert!(
       p_total.abs() < 1e-10 * mass_before,
-      "Σρu_{} = {} (mass = {})", c, p_total, mass_before
+      "Σρu_{} = {} (mass = {})",
+      c,
+      p_total,
+      mass_before
     );
   }
 }

@@ -18,7 +18,7 @@ pub enum PanelId {
   YP,
   YN,
   ZP,
-  ZN
+  ZN,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -26,7 +26,7 @@ pub enum Edge {
   North,
   South,
   East,
-  West
+  West,
 }
 
 impl Edge {
@@ -35,10 +35,10 @@ impl Edge {
   pub fn midpoint_comp(self) -> Point<2> {
     let b = std::f64::consts::FRAC_PI_4;
     match self {
-      Edge::North => [0.0,  b].into(),
+      Edge::North => [0.0, b].into(),
       Edge::South => [0.0, -b].into(),
-      Edge::East  => [ b, 0.0].into(),
-      Edge::West  => [-b, 0.0].into(),
+      Edge::East => [b, 0.0].into(),
+      Edge::West => [-b, 0.0].into(),
     }
   }
 }
@@ -48,20 +48,20 @@ impl Edge {
 /// changes, the verification test will catch any mismatch here.
 pub const CUBE_EDGES: [(PanelId, Edge, PanelId, Edge); 12] = [
   // Top ring (shared with ZP).
-  (PanelId::ZP, Edge::East,  PanelId::XP, Edge::North),
-  (PanelId::ZP, Edge::West,  PanelId::XN, Edge::North),
+  (PanelId::ZP, Edge::East, PanelId::XP, Edge::North),
+  (PanelId::ZP, Edge::West, PanelId::XN, Edge::North),
   (PanelId::ZP, Edge::North, PanelId::YP, Edge::North),
   (PanelId::ZP, Edge::South, PanelId::YN, Edge::North),
   // Bottom ring (shared with ZN).
-  (PanelId::ZN, Edge::East,  PanelId::XP, Edge::South),
-  (PanelId::ZN, Edge::West,  PanelId::XN, Edge::South),
+  (PanelId::ZN, Edge::East, PanelId::XP, Edge::South),
+  (PanelId::ZN, Edge::West, PanelId::XN, Edge::South),
   (PanelId::ZN, Edge::North, PanelId::YN, Edge::South),
   (PanelId::ZN, Edge::South, PanelId::YP, Edge::South),
   // Vertical ring (between X and Y panels).
-  (PanelId::XP, Edge::East,  PanelId::YP, Edge::West),
-  (PanelId::XP, Edge::West,  PanelId::YN, Edge::East),
-  (PanelId::XN, Edge::East,  PanelId::YN, Edge::West),
-  (PanelId::XN, Edge::West,  PanelId::YP, Edge::East),
+  (PanelId::XP, Edge::East, PanelId::YP, Edge::West),
+  (PanelId::XP, Edge::West, PanelId::YN, Edge::East),
+  (PanelId::XN, Edge::East, PanelId::YN, Edge::West),
+  (PanelId::XN, Edge::West, PanelId::YP, Edge::East),
 ];
 
 /// Number of cells along the given edge, given a 2D panel resolution.
@@ -78,24 +78,28 @@ pub fn edge_cell_index(edge: Edge, dims: [usize; 2], k: usize) -> CellId {
   let nx = dims[0];
   let ny = dims[1];
   let (i, j) = match edge {
-    Edge::East  => (nx - 1, k),
-    Edge::West  => (0,      k),
-    Edge::North => (k,      ny - 1),
-    Edge::South => (k,      0),
+    Edge::East => (nx - 1, k),
+    Edge::West => (0, k),
+    Edge::North => (k, ny - 1),
+    Edge::South => (k, 0),
   };
   CellId::from(i + j * nx)
 }
 
 /// Computational (ξ, η) of the face centroid of the k-th boundary face along
 /// `edge`. Cells are uniformly spaced over [-π/4, π/4]² in both directions.
-pub fn edge_face_centroid_comp(edge: Edge, dims: [usize; 2], k: usize) -> Point<2> {
+pub fn edge_face_centroid_comp(
+  edge: Edge,
+  dims: [usize; 2],
+  k: usize,
+) -> Point<2> {
   let bound = std::f64::consts::FRAC_PI_4;
-  let dxi   = 2.0 * bound / dims[0] as f64;
-  let deta  = 2.0 * bound / dims[1] as f64;
+  let dxi = 2.0 * bound / dims[0] as f64;
+  let deta = 2.0 * bound / dims[1] as f64;
   match edge {
-    Edge::East  => [ bound, -bound + (k as f64 + 0.5) * deta].into(),
-    Edge::West  => [-bound, -bound + (k as f64 + 0.5) * deta].into(),
-    Edge::North => [-bound + (k as f64 + 0.5) * dxi,  bound].into(),
+    Edge::East => [bound, -bound + (k as f64 + 0.5) * deta].into(),
+    Edge::West => [-bound, -bound + (k as f64 + 0.5) * deta].into(),
+    Edge::North => [-bound + (k as f64 + 0.5) * dxi, bound].into(),
     Edge::South => [-bound + (k as f64 + 0.5) * dxi, -bound].into(),
   }
 }
@@ -118,27 +122,35 @@ pub fn match_edge_cells(
   assert_eq!(n_a, n_b, "edge resolutions must match");
 
   let world_a: Vec<(CellId, Point<3>)> = (0..n_a)
-    .map(|k| (
-      edge_cell_index(edge_a, dims_a, k),
-      panel_a.to_physical(&edge_face_centroid_comp(edge_a, dims_a, k)),
-    ))
+    .map(|k| {
+      (
+        edge_cell_index(edge_a, dims_a, k),
+        panel_a.to_physical(&edge_face_centroid_comp(edge_a, dims_a, k)),
+      )
+    })
     .collect();
 
   let world_b: Vec<(CellId, Point<3>)> = (0..n_b)
-    .map(|k| (
-      edge_cell_index(edge_b, dims_b, k),
-      panel_b.to_physical(&edge_face_centroid_comp(edge_b, dims_b, k)),
-    ))
+    .map(|k| {
+      (
+        edge_cell_index(edge_b, dims_b, k),
+        panel_b.to_physical(&edge_face_centroid_comp(edge_b, dims_b, k)),
+      )
+    })
     .collect();
 
-  world_a.iter().map(|(cell_a, pa)| {
-    let (cell_b, _) = world_b.iter()
-      .min_by(|(_, q1), (_, q2)| {
-        pa.distance(q1).partial_cmp(&pa.distance(q2)).unwrap()
-      })
-      .unwrap();
-    (*cell_a, *cell_b)
-  }).collect()
+  world_a
+    .iter()
+    .map(|(cell_a, pa)| {
+      let (cell_b, _) = world_b
+        .iter()
+        .min_by(|(_, q1), (_, q2)| {
+          pa.distance(q1).partial_cmp(&pa.distance(q2)).unwrap()
+        })
+        .unwrap();
+      (*cell_a, *cell_b)
+    })
+    .collect()
 }
 
 /// (ξ, η) ∈ [-π/4, π/4]²
@@ -153,7 +165,7 @@ impl GnomonicPanel {
     GnomonicPanel {
       panel,
       rotation: panel_axes(panel),
-      radius
+      radius,
     }
   }
 }
@@ -163,12 +175,12 @@ impl GnomonicPanel {
 /// vector (this codebase's `Vector` is a row vector).
 pub fn panel_axes(panel: PanelId) -> Matrix<f64, 3, 3> {
   let (xi, eta, n): ([f64; 3], [f64; 3], [f64; 3]) = match panel {
-    PanelId::ZP => ([1.0, 0.0, 0.0], [0.0,  1.0, 0.0], [0.0, 0.0,  1.0]),
+    PanelId::ZP => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
     PanelId::ZN => ([1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]),
-    PanelId::XP => ([0.0, 1.0, 0.0], [0.0, 0.0,  1.0], [ 1.0, 0.0, 0.0]),
-    PanelId::XN => ([0.0,-1.0, 0.0], [0.0, 0.0,  1.0], [-1.0, 0.0, 0.0]),
-    PanelId::YP => ([-1.0,0.0, 0.0], [0.0, 0.0,  1.0], [0.0,  1.0, 0.0]),
-    PanelId::YN => ([ 1.0,0.0, 0.0], [0.0, 0.0,  1.0], [0.0, -1.0, 0.0]),
+    PanelId::XP => ([0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]),
+    PanelId::XN => ([0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [-1.0, 0.0, 0.0]),
+    PanelId::YP => ([-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]),
+    PanelId::YN => ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]),
   };
   [xi, eta, n].into()
 }
@@ -185,16 +197,19 @@ impl GeometryMap<2, 3> for GnomonicPanel {
 
   fn to_computational(&self, physical: &Point<3>) -> Option<Point<2>> {
     let local: Vector<f64, 3> = physical * &self.rotation.transpose();
-    if local[2] <= 0f64 { return None; }
+    if local[2] <= 0f64 {
+      return None;
+    }
 
     let xi: f64 = (local[0] / local[2]).atan();
     let eta: f64 = (local[1] / local[2]).atan();
 
     let bound: f64 = std::f64::consts::FRAC_PI_4;
-    if xi.abs() > bound || eta.abs() > bound { return None; }
+    if xi.abs() > bound || eta.abs() > bound {
+      return None;
+    }
 
     Some([xi, eta].into())
-    
   }
 
   /// ∂v_local/∂ξ = (sec²ξ / g^(3/2)) · ( 1 + tan²η,  -tan ξ · tan η,  -tan ξ)
@@ -222,7 +237,10 @@ pub struct GnomonicShellPanel {
 
 impl GnomonicShellPanel {
   pub fn new(panel: PanelId) -> GnomonicShellPanel {
-    GnomonicShellPanel { panel, rotation: panel_axes(panel) }
+    GnomonicShellPanel {
+      panel,
+      rotation: panel_axes(panel),
+    }
   }
 }
 
@@ -239,12 +257,16 @@ impl GeometryMap<3, 3> for GnomonicShellPanel {
 
   fn to_computational(&self, physical: &Point<3>) -> Option<Point<3>> {
     let local: Vector<f64, 3> = physical * &self.rotation.transpose();
-    if local[2] <= 0.0 { return None; }
+    if local[2] <= 0.0 {
+      return None;
+    }
 
     let xi = (local[0] / local[2]).atan();
     let eta = (local[1] / local[2]).atan();
     let bound = std::f64::consts::FRAC_PI_4;
-    if xi.abs() > bound || eta.abs() > bound { return None; }
+    if xi.abs() > bound || eta.abs() > bound {
+      return None;
+    }
 
     let r = physical.magnitude();
     Some([xi, eta, r].into())
@@ -271,27 +293,30 @@ impl GeometryMap<3, 3> for GnomonicShellPanel {
       sec2_xi * (1.0 + t * t) / g32,
       -sec2_xi * s * t / g32,
       -sec2_xi * s / g32,
-    ].into();
+    ]
+    .into();
 
     let dv_deta: Vector<f64, 3> = [
       -sec2_eta * s * t / g32,
       sec2_eta * (1.0 + s * s) / g32,
       -sec2_eta * t / g32,
-    ].into();
+    ]
+    .into();
 
     let v_unit: Vector<f64, 3> =
       [s / g.sqrt(), t / g.sqrt(), 1.0 / g.sqrt()].into();
 
-    let dw_dxi  = (&dv_dxi  * &self.rotation) * r;
+    let dw_dxi = (&dv_dxi * &self.rotation) * r;
     let dw_deta = (&dv_deta * &self.rotation) * r;
-    let dw_dr   = &v_unit   * &self.rotation;
+    let dw_dr = &v_unit * &self.rotation;
 
     // Pack columns into a Matrix<f64, 3, 3> (row-major: inner[r][c]).
     [
       [dw_dxi[0], dw_deta[0], dw_dr[0]],
       [dw_dxi[1], dw_deta[1], dw_dr[1]],
       [dw_dxi[2], dw_deta[2], dw_dr[2]],
-    ].into()
+    ]
+    .into()
   }
 
   /// sqrt(det g) = r² · sec²ξ · sec²η / (1 + tan²ξ + tan²η)^(3/2)
@@ -313,8 +338,8 @@ impl GeometryMap<3, 3> for GnomonicShellPanel {
 /// to the corresponding axis 0/1 boundary (see `mesh.rs::boundary_tag`).
 fn boundary_tag_for(edge: Edge) -> BoundaryTag {
   match edge {
-    Edge::East  => BoundaryTag::Right,
-    Edge::West  => BoundaryTag::Left,
+    Edge::East => BoundaryTag::Right,
+    Edge::West => BoundaryTag::Left,
     Edge::North => BoundaryTag::Top,
     Edge::South => BoundaryTag::Bottom,
   }
@@ -337,9 +362,9 @@ fn world_unit_normal(
   let map = GnomonicShellPanel::new(panel_id);
   let j = map.jacobian(comp_centroid);
   let cross = match axis {
-    0 => col3(&j, 1).cross(&col3(&j, 2)),  // +ξ direction
-    1 => col3(&j, 2).cross(&col3(&j, 0)),  // +η direction
-    2 => col3(&j, 0).cross(&col3(&j, 1)),  // +r direction
+    0 => col3(&j, 1).cross(&col3(&j, 2)), // +ξ direction
+    1 => col3(&j, 2).cross(&col3(&j, 0)), // +η direction
+    2 => col3(&j, 0).cross(&col3(&j, 1)), // +r direction
     _ => unreachable!(),
   };
   cross.normalise()
@@ -350,9 +375,13 @@ fn world_unit_normal(
 /// trip over.
 fn axis_of(av: &Vector<f64, 3>) -> usize {
   let (a, b, c) = (av[0].abs(), av[1].abs(), av[2].abs());
-  if a >= b && a >= c { 0 }
-  else if b >= c { 1 }
-  else { 2 }
+  if a >= b && a >= c {
+    0
+  } else if b >= c {
+    1
+  } else {
+    2
+  }
 }
 
 /// Fixed slot for each panel in the `CubeSphere::panels` array.
@@ -368,9 +397,12 @@ fn panel_index(id: PanelId) -> usize {
 }
 
 const PANEL_ORDER: [PanelId; 6] = [
-  PanelId::XP, PanelId::XN,
-  PanelId::YP, PanelId::YN,
-  PanelId::ZP, PanelId::ZN,
+  PanelId::XP,
+  PanelId::XN,
+  PanelId::YP,
+  PanelId::YN,
+  PanelId::ZP,
+  PanelId::ZN,
 ];
 
 /// 3D cubed-sphere shell. Six `StructuredBlock<3>` panels are stitched along
@@ -426,8 +458,10 @@ impl CubeSphere {
     angular_dims: [usize; 2],
     radial_edges: Vec<f64>,
   ) -> Self {
-    assert_eq!(angular_dims[0], angular_dims[1],
-      "angular dims must be equal so adjacent panel edges have matching cell counts");
+    assert_eq!(
+      angular_dims[0], angular_dims[1],
+      "angular dims must be equal so adjacent panel edges have matching cell counts"
+    );
     assert!(radial_edges.len() >= 2, "need at least two radial edges");
     assert!(radial_edges[0] > 0.0, "inner radius must be positive");
     for k in 1..radial_edges.len() {
@@ -449,7 +483,8 @@ impl CubeSphere {
       .collect();
 
     let panels: [StructuredBlock<3>; 6] = PANEL_ORDER.map(|p| {
-      let map: Box<dyn GeometryMap<3, 3>> = Box::new(GnomonicShellPanel::new(p));
+      let map: Box<dyn GeometryMap<3, 3>> =
+        Box::new(GnomonicShellPanel::new(p));
       StructuredBlock::from_axis_edges(
         [xi_edges.clone(), eta_edges.clone(), radial_edges.clone()],
         map,
@@ -499,7 +534,8 @@ impl CubeSphere {
         let go = to_global(p, owner);
         let gn = to_global(p, nbr);
         face_connections.push(FaceConnection::Interior {
-          owner: go, neighbour: gn,
+          owner: go,
+          neighbour: gn,
         });
         interior_face_list.push((gf, go, gn));
         cell_face_adj[go.index()].push(gf);
@@ -508,7 +544,7 @@ impl CubeSphere {
 
       for (panel_tag, sphere_tag) in [
         (BoundaryTag::Front, BoundaryTag::Ground),
-        (BoundaryTag::Back,  BoundaryTag::AtmosphereEdge),
+        (BoundaryTag::Back, BoundaryTag::AtmosphereEdge),
       ] {
         for &(local_f, owner) in panel.boundary_faces(panel_tag) {
           let out_sign = match panel.face_connection(local_f) {
@@ -521,7 +557,9 @@ impl CubeSphere {
           face_area_vectors_world.push(world_av_for(panel, panel_id, local_f));
           let go = to_global(p, owner);
           face_connections.push(FaceConnection::Boundary {
-            owner: go, tag: sphere_tag, out_sign,
+            owner: go,
+            tag: sphere_tag,
+            out_sign,
           });
           boundary_map.entry(sphere_tag).or_default().push((gf, go));
           cell_face_adj[go.index()].push(gf);
@@ -544,10 +582,8 @@ impl CubeSphere {
       // nearest-distance comparison, so any positive value works.
       let map_a = GnomonicPanel::new(panel_a_id, 1.0);
       let map_b = GnomonicPanel::new(panel_b_id, 1.0);
-      let pairs_2d = match_edge_cells(
-        &map_a, edge_a, [nx, ny],
-        &map_b, edge_b, [nx, ny],
-      );
+      let pairs_2d =
+        match_edge_cells(&map_a, edge_a, [nx, ny], &map_b, edge_b, [nx, ny]);
 
       // Cell→face map for panel A's edge. Includes all 3D cells along the
       // edge (Ny·Nz or Nx·Nz entries).
@@ -581,9 +617,11 @@ impl CubeSphere {
           let gf = FaceId::from(face_panel.len());
           face_panel.push(pa as u8);
           face_local.push(local_face_a);
-          face_area_vectors_world.push(
-            world_av_for(&panels[pa], panel_a_id, local_face_a)
-          );
+          face_area_vectors_world.push(world_av_for(
+            &panels[pa],
+            panel_a_id,
+            local_face_a,
+          ));
           face_connections.push(FaceConnection::Interior { owner, neighbour });
           interior_face_list.push((gf, owner, neighbour));
           cell_face_adj[cell_a_global.index()].push(gf);
@@ -609,9 +647,13 @@ impl CubeSphere {
     }
   }
 
-  pub fn dims(&self) -> [usize; 3] { self.dims }
+  pub fn dims(&self) -> [usize; 3] {
+    self.dims
+  }
 
-  pub fn panels(&self) -> &[StructuredBlock<3>; 6] { &self.panels }
+  pub fn panels(&self) -> &[StructuredBlock<3>; 6] {
+    &self.panels
+  }
 
   /// World-space centroid of `cell`. Cube-sphere `cell_centroid` returns
   /// computational `(ξ, η, r)`; this projects through the owning panel's
@@ -659,7 +701,10 @@ impl CubeSphere {
     n_layers: usize,
     beta: f64,
   ) -> Vec<f64> {
-    assert!(beta >= 0.0 && beta.is_finite(), "beta must be a non-negative finite number");
+    assert!(
+      beta >= 0.0 && beta.is_finite(),
+      "beta must be a non-negative finite number"
+    );
     assert!(n_layers >= 1);
     if beta == 0.0 {
       return (0..=n_layers)
@@ -677,7 +722,10 @@ impl CubeSphere {
 
   fn cell_to_panel(&self, cell: CellId) -> (usize, CellId) {
     let g = cell.index();
-    (g / self.cells_per_panel, CellId::from(g % self.cells_per_panel))
+    (
+      g / self.cells_per_panel,
+      CellId::from(g % self.cells_per_panel),
+    )
   }
 
   fn face_to_panel(&self, face: FaceId) -> (&StructuredBlock<3>, FaceId) {
@@ -736,12 +784,14 @@ impl Topology for CubeSphere {
     &self.interior_face_list
   }
   fn boundary_faces(&self, tag: BoundaryTag) -> &[(FaceId, CellId)] {
-    self.boundary_face_lists.iter()
+    self
+      .boundary_face_lists
+      .iter()
       .find(|(t, _)| *t == tag)
       .map(|(_, l)| l.as_slice())
       .unwrap_or(&[])
   }
-  fn boundary_tags(&self) -> impl Iterator<Item = BoundaryTag> + '_ {
-    self.boundary_face_lists.iter().map(|(t, _)| *t)
+  fn boundary_tags(&self) -> Box<dyn Iterator<Item = BoundaryTag> + '_> {
+    Box::new(self.boundary_face_lists.iter().map(|(t, _)| *t))
   }
 }

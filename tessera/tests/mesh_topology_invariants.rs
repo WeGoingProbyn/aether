@@ -230,11 +230,12 @@ fn non_uniform_axis_produces_per_cell_volumes_and_areas() {
   // Cell volume should match width-product per cell; face area along axis 0
   // should depend on the cell's axis-2 position.
   let edges: [Vec<f64>; 3] = [
-    vec![0.0, 1.0, 2.0],          // 2 cells, width 1
-    vec![0.0, 1.0, 2.0],          // 2 cells, width 1
-    vec![0.0, 1.0, 3.0, 7.0],     // 3 cells, widths 1, 2, 4
+    vec![0.0, 1.0, 2.0],      // 2 cells, width 1
+    vec![0.0, 1.0, 2.0],      // 2 cells, width 1
+    vec![0.0, 1.0, 3.0, 7.0], // 3 cells, widths 1, 2, 4
   ];
-  let mesh = StructuredBlock::from_axis_edges(edges, Box::new(IdentityMap::<3>));
+  let mesh =
+    StructuredBlock::from_axis_edges(edges, Box::new(IdentityMap::<3>));
 
   // Cells: 2*2*3 = 12. Indexed (i + j*Nx + k*Nx*Ny).
   // Cell at (0,0,k) has volume 1·1·width_k.

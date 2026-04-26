@@ -82,7 +82,7 @@ Responsibilities:
 
 ---
 
-### `plemora`
+### `Pleroma`
 
 Owns the **global mutable simulation state**.
 
@@ -92,7 +92,7 @@ Responsibilities:
 - read/write access for physics systems
 - field lifecycle management
 
-> Plemora contains **values only**, never geometry or physics logic.
+> Pleroma contains **values only**, never geometry or physics logic.
 
 ---
 
@@ -188,6 +188,26 @@ Used for:
 - integrating with rendering backends
 
 ---
+
+### Naming Scheme
+
+Generally following latin or greek naming scheme:
+
+- Aether → the medium / substrate in which everything exists
+
+- Cosmo → origin / ordering principle  
+- Tessera → structure / tiling of space  
+- Pleroma → fullness / realised state  
+- Nexus → connection / causality  
+- Eidolon → image / projection  
+
+- Continuum → continuous fields / conservation laws / numerical flow  
+- Aer → air / atmosphere / gaseous processes  
+- Terra → earth / solid body / geophysical processes  
+- Gravitas → motion / celestial mechanics / gravitational evolution 
+
+---
+
 ## Dependency topology
 
 ```text
@@ -195,36 +215,37 @@ Used for:
                  │ utility  │
                  └────┬─────┘
                       │
-         ┌────────────┼─────────────┐
-         ▼            ▼             ▼
-    ┌─────────┐  ┌─────────┐   ┌──────────┐
-    │ tessera │  │  cosmo  │   │  orbit   │
-    └────┬────┘  └────┬────┘   └─────┬────┘
-         │            │              │
-         ▼            │              │
-    ┌──────────┐      │              │
-    │ pleroma  │◀─────┘              │
-    └────┬─────┘                     │
-         │                           │
-         │     ┌────────┐            │
-         ├────▶│  nexus │            │
-         │     └─────┬──┘            │
-         │           ▲               │
-         ▼           │               ▼
-   ┌──────────┐  ┌──────┬───────┬───────┬─────────────────┐
-   │continuum │  │ aer  │ terra │ orbit │ future physics  │
-   └─────┬────┘  └───┬──┴───────┴───────┴─────────────────┘
-         └────────┬──┘
-                  │
-                  ▼
-             ┌──────────┐
-             │ eidolon  │   (read-only viewer over pleroma + tessera for rendering)
-             └────┬─────┘
-                  ▼
-             ┌──────────┐
-             │ sandbox  │   (your binary/project)
-             └──────────┘
+         ┌────────────┼──────────────┐
+         ▼            ▼              │ 
+    ┌─────────┐  ┌─────────┐         │ 
+ ┌──┤ tessera │  │  cosmo  │         │ 
+ │  └────┬────┘  └────┬────┘         │ 
+ │       │            │              │
+ │       ▼            │              │
+ │  ┌─────────┐       │              │
+ ├──┤ pleroma │◀────┬─┘              │
+ │  └─────────┘     │                │
+ │                  │                │
+ │              ┌───┴───┐            │
+ │              │ nexus │            │
+ │              └───┬───┘            │
+ │                  │                │
+ │                  ▼                ▼
+ │┌─────┬───────┬──────────┬────────────────┐
+ ││ aer │ terra │ gravitas │ future physics │
+ │└─────┴───────┼──────────┼────────────────┘
+ │              │continuum │
+ │              └──────────┘            
+ │              ┌──────────┐    
+ └─────────────▶│ eidolon  │       (read-only viewer over pleroma + tessera for rendering)
+                └────┬─────┘
+                     ▼
+                ┌──────────┐
+                │ sandbox  │       (your binary/project)
+                └──────────┘
 ```
+
+---
 
 ## Execution Model
 
@@ -269,7 +290,7 @@ Each tick:
 
 ---
 
-## Data Flow Summary
+## Data Flow
 
 ```text
 cosmo → initial conditions
@@ -287,7 +308,7 @@ eidolon → visualises state
 
 ---
 
-## Key Architectural Rules
+## Architectural Rules
 
 - No physics crate owns state
 - No physics crate owns geometry
@@ -298,13 +319,13 @@ eidolon → visualises state
 
 ---
 
-## Planned extensions:
+## Planned Extensions
 
-radiative transfer systems
-chemistry / phase transitions
-magnetosphere and plasma interactions
-adaptive mesh refinement (AMR)
-multiple rendering backends
+- radiative transfer systems
+- chemistry / phase transitions
+- magnetosphere and plasma interactions
+- adaptive mesh refinement (AMR)
+- multiple rendering backends
 
 ---
 
@@ -313,3 +334,10 @@ multiple rendering backends
 Aether is structured around a simple idea:
 
 Define the world (cosmo), shape it (tessera), store it (plemora), evolve it (physics via nexus), and observe it (eidolon).
+
+## Note
+
+This is very much a passion project driven by just myself (WeGoingProbyn), I work on it in my free time when I feel motivated to do so. If you're using this project yourself, I can't guarantee API consistency and I can't guarantee fixes and updates at a pace which you might expect from other maintainers. Feel free to open issues and PRs if you wish and I will get around to them when I can.
+
+
+

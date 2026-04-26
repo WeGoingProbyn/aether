@@ -41,7 +41,11 @@ fn flat_atmosphere_remains_hydrostatic_under_gravity() {
   let cell_edge = z_max / dims[2] as f64; // 312.5 m
   let mesh = StructuredBlock::uniform(
     [0.0, 0.0, 0.0].into(),
-    [cell_edge * dims[0] as f64, cell_edge * dims[1] as f64, z_max],
+    [
+      cell_edge * dims[0] as f64,
+      cell_edge * dims[1] as f64,
+      z_max,
+    ],
     dims,
     Box::new(IdentityMap::<3>),
   );
@@ -85,10 +89,7 @@ fn flat_atmosphere_remains_hydrostatic_under_gravity() {
   let n_steps = 50;
   for step in 0..n_steps {
     let dt = solver.step(&mut state, &mut residual, &mesh, &bcs);
-    assert!(
-      dt > 0.0 && dt.is_finite(),
-      "step {}: dt={}", step, dt
-    );
+    assert!(dt > 0.0 && dt.is_finite(), "step {}: dt={}", step, dt);
   }
 
   let mut max_w_abs = 0.0_f64;
@@ -101,7 +102,12 @@ fn flat_atmosphere_remains_hydrostatic_under_gravity() {
     let rho = s[0];
     let energy = s[4];
     assert!(rho > 0.0 && rho.is_finite(), "ρ={} at cell {}", rho, i);
-    assert!(energy > 0.0 && energy.is_finite(), "E={} at cell {}", energy, i);
+    assert!(
+      energy > 0.0 && energy.is_finite(),
+      "E={} at cell {}",
+      energy,
+      i
+    );
     let w = s[3] / rho;
     max_w_abs = max_w_abs.max(w.abs());
     min_rho = min_rho.min(rho);
@@ -118,7 +124,8 @@ fn flat_atmosphere_remains_hydrostatic_under_gravity() {
   assert!(
     max_w_abs < 50.0,
     "max |w| = {:.3} m/s grew too large after {} steps",
-    max_w_abs, n_steps
+    max_w_abs,
+    n_steps
   );
 
   // Density bounds: highest pressure at z=0, lowest at z=z_max.
@@ -128,11 +135,13 @@ fn flat_atmosphere_remains_hydrostatic_under_gravity() {
   assert!(
     max_rho < 1.5 * expected_max,
     "max ρ = {:.4} grew above 1.5 × ρ₀ ({:.4})",
-    max_rho, expected_max
+    max_rho,
+    expected_max
   );
   assert!(
     min_rho > 0.5 * expected_min,
     "min ρ = {:.4} fell below 0.5 × expected min ({:.4})",
-    min_rho, expected_min
+    min_rho,
+    expected_min
   );
 }

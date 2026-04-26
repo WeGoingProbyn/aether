@@ -310,7 +310,6 @@ impl<T: Default, const C: usize> Default for Vector<T, C> {
   }
 }
 
-
 impl<T, const C: usize> std::fmt::Display for Vector<T, C>
 where
   T: Default + std::fmt::Display,

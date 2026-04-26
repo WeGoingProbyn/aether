@@ -41,7 +41,7 @@ pub trait Topology: Send + Sync {
   // fn cell_count(&self) -> usize;
   fn interior_faces(&self) -> &[(FaceId, CellId, CellId)];
   fn boundary_faces(&self, tag: BoundaryTag) -> &[(FaceId, CellId)];
-  fn boundary_tags(&self) -> impl Iterator<Item = BoundaryTag> + '_;
+  fn boundary_tags(&self) -> Box<dyn Iterator<Item = BoundaryTag> + '_>;
 }
 
 pub trait Partition {

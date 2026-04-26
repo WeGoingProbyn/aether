@@ -103,7 +103,12 @@ impl FieldDataset {
       );
     }
 
-    if !self.mesh.points.len().is_multiple_of(self.mesh.point_components) {
+    if !self
+      .mesh
+      .points
+      .len()
+      .is_multiple_of(self.mesh.point_components)
+    {
       return Err(AetherError::new(ErrorKind::InvalidPointBuffer).context(
         format!(
           "points length {} is not divisible by point_components {}",

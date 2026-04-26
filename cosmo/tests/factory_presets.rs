@@ -21,7 +21,13 @@ fn sun_returns_solar_kinematic_constants() {
   // Stefan–Boltzmann luminosity should match SOLAR_LUMIN to within ~1%.
   let l = s.luminosity().expect("star has luminosity");
   let rel_err = (l - SOLAR_LUMIN).abs() / SOLAR_LUMIN;
-  assert!(rel_err < 0.01, "L = {}, expected ~{} (rel err {})", l, SOLAR_LUMIN, rel_err);
+  assert!(
+    rel_err < 0.01,
+    "L = {}, expected ~{} (rel err {})",
+    l,
+    SOLAR_LUMIN,
+    rel_err
+  );
 }
 
 #[test]
@@ -31,7 +37,12 @@ fn earth_has_atmosphere_with_correct_eos_at_surface_temperature() {
   assert_eq!(e.radius(), EARTH_RADIUS);
 
   let r = e.position()[0];
-  assert!((r - AU).abs() < 1e-3, "Earth orbit radius = {} (expected AU = {})", r, AU);
+  assert!(
+    (r - AU).abs() < 1e-3,
+    "Earth orbit radius = {} (expected AU = {})",
+    r,
+    AU
+  );
 
   // Surface gravity should be close to 9.81 m/s².
   let g = e.surface_gravity();
@@ -44,7 +55,8 @@ fn earth_has_atmosphere_with_correct_eos_at_surface_temperature() {
       assert!((p.gamma - 1.4).abs() < 1e-12, "γ = {}", p.gamma);
       assert!(
         (p.gas_constant - 288.0).abs() < 1.5,
-        "R_specific = {}", p.gas_constant
+        "R_specific = {}",
+        p.gas_constant
       );
     }
     _ => panic!("Earth should be a RockyBody"),
@@ -57,11 +69,19 @@ fn mars_has_co2_atmosphere_with_lower_gamma() {
   assert_eq!(m.mass(), MARS_MASS);
   match m.kind() {
     BodyKind::RockyBody(rb) => {
-      assert!(rb.surface_pressure < 1000.0, "Mars p = {}", rb.surface_pressure);
+      assert!(
+        rb.surface_pressure < 1000.0,
+        "Mars p = {}",
+        rb.surface_pressure
+      );
       let atm = rb.atmosphere.as_ref().unwrap();
       let p = atm.properties(rb.surface_temperature);
       // CO₂ at 210 K → 6 DOF → γ = 4/3 ≈ 1.333.
-      assert!(p.gamma < 1.4, "Mars γ = {} should be lower than diatomic 1.4", p.gamma);
+      assert!(
+        p.gamma < 1.4,
+        "Mars γ = {} should be lower than diatomic 1.4",
+        p.gamma
+      );
       assert!((p.gamma - 4.0 / 3.0).abs() < 0.02);
     }
     _ => panic!("Mars should be a RockyBody"),
@@ -74,7 +94,11 @@ fn venus_rotation_is_retrograde() {
   assert_eq!(v.mass(), VENUS_MASS);
   match v.kind() {
     BodyKind::RockyBody(rb) => {
-      assert!(rb.angular_velocity < 0.0, "Venus should be retrograde, ω = {}", rb.angular_velocity);
+      assert!(
+        rb.angular_velocity < 0.0,
+        "Venus should be retrograde, ω = {}",
+        rb.angular_velocity
+      );
     }
     _ => panic!("Venus should be a RockyBody"),
   }
@@ -114,6 +138,16 @@ fn planet_orbital_velocities_decrease_with_distance() {
     mars().velocity().magnitude(),
     jupiter().velocity().magnitude(),
   ];
-  assert!(speeds[0] > speeds[1], "Earth {} > Mars {}", speeds[0], speeds[1]);
-  assert!(speeds[1] > speeds[2], "Mars {} > Jupiter {}", speeds[1], speeds[2]);
+  assert!(
+    speeds[0] > speeds[1],
+    "Earth {} > Mars {}",
+    speeds[0],
+    speeds[1]
+  );
+  assert!(
+    speeds[1] > speeds[2],
+    "Mars {} > Jupiter {}",
+    speeds[1],
+    speeds[2]
+  );
 }

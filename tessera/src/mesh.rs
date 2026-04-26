@@ -72,7 +72,6 @@ impl<const D: usize> StructuredBlock<D> {
   }
 
   // ---- Index conversions ----
-
   fn cell_indices(dims: &[usize; D], index: usize) -> [usize; D] {
     let mut ijk = [0; D];
     let mut remaining = index;
@@ -122,7 +121,6 @@ impl<const D: usize> StructuredBlock<D> {
   }
 
   // ---- Builders ----
-
   fn build_cell_geometry(
     axis_edges: &[Vec<f64>; D],
     dims: &[usize; D],
@@ -452,7 +450,7 @@ impl<const D: usize> Topology for StructuredBlock<D> {
       .unwrap_or(&[])
   }
 
-  fn boundary_tags(&self) -> impl Iterator<Item = BoundaryTag> + '_ {
-    self.boundary_face_lists.iter().map(|(tag, _)| *tag)
+  fn boundary_tags(&self) -> Box<dyn Iterator<Item = BoundaryTag> + '_> {
+    Box::new(self.boundary_face_lists.iter().map(|(tag, _)| *tag))
   }
 }

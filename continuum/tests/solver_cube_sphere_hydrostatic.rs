@@ -35,17 +35,24 @@ fn radial_gravity_field_is_inward_radial_with_correct_magnitude() {
     let mag = (gv[0].powi(2) + gv[1].powi(2) + gv[2].powi(2)).sqrt();
     assert!(
       (mag - g).abs() < 1e-10,
-      "cell {}: |gravity| = {} (expected {})", i, mag, g
+      "cell {}: |gravity| = {} (expected {})",
+      i,
+      mag,
+      g
     );
 
     // Should point opposite to the world centroid (inward radial).
     let centroid = mesh.cell_world_centroid(CellId::from(i));
-    let r = (centroid[0].powi(2) + centroid[1].powi(2) + centroid[2].powi(2)).sqrt();
+    let r =
+      (centroid[0].powi(2) + centroid[1].powi(2) + centroid[2].powi(2)).sqrt();
     let r_hat = [centroid[0] / r, centroid[1] / r, centroid[2] / r];
     let dot = gv[0] * r_hat[0] + gv[1] * r_hat[1] + gv[2] * r_hat[2];
     assert!(
       (dot + g).abs() < 1e-10,
-      "cell {}: gravity·r̂ = {} (expected -{})", i, dot, g
+      "cell {}: gravity·r̂ = {} (expected -{})",
+      i,
+      dot,
+      g
     );
   }
 }
@@ -94,18 +101,23 @@ fn one_step_with_radial_gravity_drives_inward_momentum() {
     let drho = (s[0] - rho0).abs();
     assert!(
       drho < 1e-13,
-      "cell {} ρ drifted by {} from initial {}", i, drho, rho0
+      "cell {} ρ drifted by {} from initial {}",
+      i,
+      drho,
+      rho0
     );
 
     // Momentum should point inward: dot with -r̂ should be positive.
     let centroid = mesh.cell_world_centroid(cell);
-    let r = (centroid[0].powi(2) + centroid[1].powi(2) + centroid[2].powi(2)).sqrt();
+    let r =
+      (centroid[0].powi(2) + centroid[1].powi(2) + centroid[2].powi(2)).sqrt();
     let inward_dot =
       -(s[1] * centroid[0] + s[2] * centroid[1] + s[3] * centroid[2]) / r;
     assert!(
       inward_dot > 0.0,
       "cell {}: momentum has no inward component (inward·ρu = {})",
-      i, inward_dot
+      i,
+      inward_dot
     );
   }
 }

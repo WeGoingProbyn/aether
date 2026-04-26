@@ -1,14 +1,8 @@
-pub fn add(left: u64, right: u64) -> u64 {
-  left + right
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn it_works() {
-    let result = add(2, 2);
-    assert_eq!(result, 4);
-  }
-}
+pub mod coupling;
+pub mod cube_sphere;
+pub mod geometry;
+pub mod mesh;
+pub mod partition;
+pub mod radial_stack;
+pub mod topology;
+pub mod world_mesh;
