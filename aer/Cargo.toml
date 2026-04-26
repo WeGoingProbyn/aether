@@ -1,0 +1,8 @@
+[package]
+name = "aer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+continuum = { path = "../continuum" }
+utility = { path = "../utility" }

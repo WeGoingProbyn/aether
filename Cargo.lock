@@ -3,7 +3,22 @@
 version = 4
 
 [[package]]
+name = "aer"
+version = "0.1.0"
+dependencies = [
+ "continuum",
+ "utility",
+]
+
+[[package]]
 name = "continuum"
+version = "0.1.0"
+dependencies = [
+ "utility",
+]
+
+[[package]]
+name = "cosmo"
 version = "0.1.0"
 dependencies = [
  "utility",

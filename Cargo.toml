@@ -2,7 +2,7 @@
 members = [
   "utility",
   "sandbox", 
-  "continuum",
+  "continuum", "aer", "cosmo", "orbit", "nexus", "eidolon", "terra", "plemora", "tessera",
 ]
 
   resolver = "2"
