@@ -1,45 +1,315 @@
 # Aether
 
-## Core responsibilities
+## Overview
 
-Aether is designed to be modular and provide a clear and distinct set of seperation of concerns. To this effect, Aether is split into distinct subset of crates which all own and act upon a distinct set of core responsibilities. The idea is to provide an easy to extend and interpret set of multiphysics subsystems which can be manipulated and re arranged without needing to pull down thousands of lines of fragile operations.
+Aether is a modular multiphysics simulation framework designed around **strict separation of concerns** and **composable physics systems**.
 
-### utility
+The goal is to provide:
 
-Provides helper and general types which don't necessarily fit into a single multiphysics stage.
+- clear boundaries between simulation layers
+- extensible physics modules
+- deterministic execution via dependency resolution
+- decoupling of simulation, numerics, and rendering
 
-### Cosmo
+Rather than a monolithic engine, Aether is composed of independent crates which interact through well-defined interfaces.
 
-Provides immutable state for building simulations, provides seeding, initial conditions, chooses integration schemes and allows serializing and deserializing of these states.
+---
 
-### Tessera
+## Core Design Principles
 
-Owns mesh, geometry and topology definitions to be used by the underlying physics crates. Including the splitting and coupling of different parts of one larger mesh.
+- **Separation of concerns**  
+  Geometry, state, physics, and orchestration are fully decoupled.
 
-### Plemora
+- **Data-oriented architecture**  
+  Simulation state is stored centrally and transformed by systems.
 
-Provides the global mutable state for all physics to act upon. Allows reading and writing to states and passes these down stream to determine execution orders.
+- **Deterministic execution**  
+  All physics systems declare read/write dependencies, resolved via a DAG.
 
-### Continuum
+- **Pluggable physics**  
+  New physics modules can be added without modifying existing ones.
 
-Underlying finite volume solver abstracted over conservation laws and flux schemes. Provides the underlying solver for all PDE solutions required by physics crates.
+- **Engine agnostic**  
+  Rendering is handled separately via an intermediate representation.
 
-### Aer
+---
 
-Definitions for atmospheric physics
+## Crate Responsibilities
 
-### Orbit
+---
 
-Definitions for orbital mechanics and their evolutions
+### `utility`
 
-### Terra
+Provides shared foundational components:
 
-Definitions for geophysical processes like plate tectonics, terrain height maps, erosion etc.
+- math types (vectors, matrices, quaternions)
+- collections and graphs
+- serialization helpers
+- threading utilities
 
-### Nexus
+This crate contains no domain-specific logic.
 
-DAG based orchestrator and plugin builder. Looks at defined reads and writes and determines execution order across multiphysics domain.
+---
 
-### Eidolon
+### `cosmo`
 
-A viewer into Plemora and Tessera to build an engine agnostic IR to be passed into a game engine of your choice (currently only supports bevy)
+Defines the **immutable simulation configuration**.
+
+Responsibilities:
+
+- seeds and procedural generation inputs
+- planetary and system parameters
+- initial conditions (ICs)
+- integration scheme selection
+- serialization / deserialization
+
+> Cosmo is the **single source of truth for starting conditions** and is never mutated at runtime.
+
+---
+
+### `tessera`
+
+Defines the **spatial domain** of the simulation.
+
+Responsibilities:
+
+- mesh generation (cube-sphere, grids, etc.)
+- topology and adjacency relationships
+- geometric transformations
+- coupling between domain regions (e.g. atmosphere ↔ surface)
+
+> Tessera defines *where* physics happens, but contains no physical values.
+
+---
+
+### `plemora`
+
+Owns the **global mutable simulation state**.
+
+Responsibilities:
+
+- storage of all simulation fields (temperature, pressure, velocity, etc.)
+- read/write access for physics systems
+- field lifecycle management
+
+> Plemora contains **values only**, never geometry or physics logic.
+
+---
+
+### `continuum`
+
+Provides the **numerical solver layer**.
+
+Responsibilities:
+
+- finite volume methods (FVM)
+- flux computation
+- reconstruction schemes
+- time integration
+
+> Continuum is domain-agnostic and operates over tessera-defined meshes.
+
+---
+
+### `aer`
+
+Defines **atmospheric physics**.
+
+Examples:
+
+- thermodynamics
+- gas dynamics
+- radiative processes (future)
+- composition evolution
+
+---
+
+### `terra`
+
+Defines **geophysical processes**.
+
+Examples:
+
+- terrain generation
+- erosion
+- plate tectonics (future)
+- crust and mantle interactions
+
+---
+
+### `orbit`
+
+Defines **orbital mechanics**.
+
+Examples:
+
+- n-body dynamics
+- gravitational interactions
+- orbital evolution
+
+---
+
+### `nexus`
+
+The **execution engine** of Aether.
+
+Responsibilities:
+
+- builds a directed acyclic graph (DAG) of system dependencies
+- resolves execution order based on read/write access
+- schedules physics systems
+- enables parallel execution where possible
+
+> Nexus orchestrates *when* and *in what order* physics systems run.
+
+---
+
+### `eidolon`
+
+The **rendering bridge**.
+
+Responsibilities:
+
+- reads from `plemora` (fields) and `tessera` (geometry)
+- constructs an engine-agnostic intermediate representation (IR)
+- translates IR to specific backends (currently Bevy)
+
+> Eidolon does not perform simulation — it only **interprets simulation state for presentation**.
+
+---
+
+### `sandbox`
+
+Example binary / playground.
+
+Used for:
+- running simulations
+- testing configurations
+- integrating with rendering backends
+
+---
+## Dependency topology
+
+```text
+                 ┌──────────┐
+                 │ utility  │
+                 └────┬─────┘
+                      │
+         ┌────────────┼─────────────┐
+         ▼            ▼             ▼
+    ┌─────────┐  ┌─────────┐   ┌──────────┐
+    │ tessera │  │  cosmo  │   │  orbit   │
+    └────┬────┘  └────┬────┘   └─────┬────┘
+         │            │              │
+         ▼            │              │
+    ┌──────────┐      │              │
+    │ pleroma  │◀─────┘              │
+    └────┬─────┘                     │
+         │                           │
+         │     ┌────────┐            │
+         ├────▶│  nexus │            │
+         │     └─────┬──┘            │
+         │           ▲               │
+         ▼           │               ▼
+   ┌──────────┐  ┌──────┬───────┬───────┬─────────────────┐
+   │continuum │  │ aer  │ terra │ orbit │ future physics  │
+   └─────┬────┘  └───┬──┴───────┴───────┴─────────────────┘
+         └────────┬──┘
+                  │
+                  ▼
+             ┌──────────┐
+             │ eidolon  │   (read-only viewer over pleroma + tessera for rendering)
+             └────┬─────┘
+                  ▼
+             ┌──────────┐
+             │ sandbox  │   (your binary/project)
+             └──────────┘
+```
+
+## Execution Model
+
+Aether does not use a linear pipeline. Instead, it operates as a dependency-driven simulation graph.
+
+### Step 1 — Initialization
+
+- `cosmo` defines initial conditions  
+- `tessera` constructs the spatial domain  
+- `plemora` initializes fields from cosmo  
+
+---
+
+### Step 2 — Graph Construction
+
+Physics systems declare:
+
+- fields they **read**
+- fields they **write**
+
+`nexus` builds a DAG from these dependencies.
+
+---
+
+### Step 3 — Simulation Step
+
+Each tick:
+
+- `nexus` resolves execution order via topological sort  
+- physics systems execute in dependency-safe order  
+- fields in `plemora` are updated  
+
+---
+
+### Step 4 — Rendering
+
+- `eidolon` samples:
+  - geometry from `tessera`
+  - fields from `plemora`
+- builds render IR  
+- passes to backend (e.g. Bevy)  
+
+---
+
+## Data Flow Summary
+
+```text
+cosmo → initial conditions
+        ↓
+tessera → geometry
+        ↓
+plemora → fields (state)
+        ↓
+nexus → orchestrates updates
+        ↓
+physics systems → transform state
+        ↓
+eidolon → visualises state
+```
+
+---
+
+## Key Architectural Rules
+
+- No physics crate owns state
+- No physics crate owns geometry
+- All mutation happens in plemora
+- All geometry lives in tessera
+- All execution ordering is handled by nexus
+- Rendering is strictly read-only
+
+---
+
+## Planned extensions:
+
+radiative transfer systems
+chemistry / phase transitions
+magnetosphere and plasma interactions
+adaptive mesh refinement (AMR)
+multiple rendering backends
+
+---
+
+## Summary
+
+Aether is structured around a simple idea:
+
+Define the world (cosmo), shape it (tessera), store it (plemora), evolve it (physics via nexus), and observe it (eidolon).
