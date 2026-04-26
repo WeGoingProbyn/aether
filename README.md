@@ -1,5 +1,7 @@
 # Aether
 
+This project is not in a currently finished or complete state. Although some systems are implemented and working, some crates are stubs and lots of things are currently not working at all.
+
 ## Overview
 
 Aether is a modular multiphysics simulation framework designed around **strict separation of concerns** and **composable physics systems**.
