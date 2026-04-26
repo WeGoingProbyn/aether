@@ -11,15 +11,7 @@ use std::collections::HashMap;
 
 use utility::{
   constants::{
-    EARTH_ALBEDO, EARTH_DAY, EARTH_MASS, EARTH_ORBIT, EARTH_RADIUS,
-    EARTH_SURFACE_PRESS, JUPITER_DAY, JUPITER_HEAT_FACTOR, JUPITER_MASS,
-    JUPITER_ORBIT, JUPITER_RADIUS, MARS_ALBEDO, MARS_DAY, MARS_MASS,
-    MARS_ORBIT, MARS_RADIUS, MERCURY_DAY, MERCURY_MASS, MERCURY_ORBIT,
-    MERCURY_RADIUS, NEPTUNE_DAY, NEPTUNE_MASS, NEPTUNE_ORBIT,
-    NEPTUNE_RADIUS, SATURN_DAY, SATURN_HEAT_FACTOR, SATURN_MASS, SATURN_ORBIT,
-    SATURN_RADIUS, SOLAR_MASS, SOLAR_RADIUS, SOLAR_TEMP, VENUS_ALBEDO,
-    VENUS_DAY, VENUS_MASS, VENUS_ORBIT, VENUS_RADIUS, angular_velocity,
-    orbital_velocity,
+    EARTH_ALBEDO, EARTH_AXIAL_TILT, EARTH_DAY, EARTH_MASS, EARTH_ORBIT, EARTH_RADIUS, EARTH_SURFACE_P, EARTH_SURFACE_T, JUPITER_AXIAL_TILT, JUPITER_DAY, JUPITER_HEAT_FACTOR, JUPITER_MASS, JUPITER_ORBIT, JUPITER_RADIUS, JUPITER_SURFACE_T, MARS_ALBEDO, MARS_AXIAL_TILT, MARS_DAY, MARS_MASS, MARS_ORBIT, MARS_RADIUS, MARS_SURFACE_P, MARS_SURFACE_T, MERCURY_AXIAL_TILT, MERCURY_DAY, MERCURY_MASS, MERCURY_ORBIT, MERCURY_RADIUS, MERCURY_SURFACE_P, MERCURY_SURFACE_T, NEPTUNE_AXIAL_TILT, NEPTUNE_DAY, NEPTUNE_HEAT_FACTOR, NEPTUNE_MASS, NEPTUNE_ORBIT, NEPTUNE_RADIUS, NEPTUNE_SURFACE_T, NOMINAL_GAS_PRESS, SATURN_AXIAL_TILT, SATURN_DAY, SATURN_HEAT_FACTOR, SATURN_MASS, SATURN_ORBIT, SATURN_RADIUS, SATURN_SURFACE_T, SOLAR_CORE_TEMP, SOLAR_MASS, SOLAR_RADIUS, SOLAR_SURFACE_TEMP, VENUS_ALBEDO, VENUS_AXIAL_TILT, VENUS_DAY, VENUS_MASS, VENUS_ORBIT, VENUS_RADIUS, VENUS_SURFACE_P, VENUS_SURFACE_T, angular_velocity, orbital_velocity
   },
   maths::vector::Vector,
 };
@@ -29,9 +21,6 @@ use crate::{
   kind::{BodyKind, CelestialBody, GasGiant, RockyBody, Star},
   system::System,
 };
-
-const NOMINAL_GAS_GIANT_PRESSURE: f64 = 1.0e5; // 1 bar reference
-const SUN_CORE_TEMP: f64 = 1.57e7;
 
 /// Place a body on +x at `orbit_radius`, moving in +y at the circular orbital
 /// velocity around a primary of mass `primary_mass`.
@@ -61,8 +50,8 @@ pub fn sun() -> CelestialBody {
     [0.0, 0.0, 0.0].into(),
     [0.0, 0.0, 0.0].into(),
     BodyKind::Star(Star {
-      surface_temperature: SOLAR_TEMP,
-      core_temperature: SUN_CORE_TEMP,
+      surface_temperature: SOLAR_SURFACE_TEMP,
+      core_temperature: SOLAR_CORE_TEMP,
     }),
   )
 }
@@ -75,10 +64,10 @@ pub fn mercury() -> CelestialBody {
     pos,
     vel,
     BodyKind::RockyBody(RockyBody {
-      surface_temperature: 440.0,
-      surface_pressure: 0.0, // effectively no atmosphere
+      surface_temperature: MERCURY_SURFACE_T,
+      surface_pressure: MERCURY_SURFACE_P,
       angular_velocity: angular_velocity(MERCURY_DAY),
-      axial_tilt: 0.034f64.to_radians(),
+      axial_tilt: MERCURY_AXIAL_TILT.to_radians(),
       atmosphere: None,
     }),
   )
@@ -96,10 +85,10 @@ pub fn venus() -> CelestialBody {
     pos,
     vel,
     BodyKind::RockyBody(RockyBody {
-      surface_temperature: 737.0, // runaway greenhouse — measured, not equilibrium
-      surface_pressure: 9.2e6,    // 92 bar
-      angular_velocity: angular_velocity(VENUS_DAY), // already negative (retrograde)
-      axial_tilt: 177.4f64.to_radians(),
+      surface_temperature: VENUS_SURFACE_T,
+      surface_pressure: VENUS_SURFACE_P,
+      angular_velocity: angular_velocity(VENUS_DAY),
+      axial_tilt: VENUS_AXIAL_TILT.to_radians(),
       atmosphere: Some(atm),
     }),
   )
@@ -117,10 +106,10 @@ pub fn earth() -> CelestialBody {
     pos,
     vel,
     BodyKind::RockyBody(RockyBody {
-      surface_temperature: 288.0,
-      surface_pressure: EARTH_SURFACE_PRESS,
+      surface_temperature: EARTH_SURFACE_T,
+      surface_pressure: EARTH_SURFACE_P,
       angular_velocity: angular_velocity(EARTH_DAY),
-      axial_tilt: 23.44f64.to_radians(),
+      axial_tilt: EARTH_AXIAL_TILT.to_radians(),
       atmosphere: Some(atm),
     }),
   )
@@ -142,10 +131,10 @@ pub fn mars() -> CelestialBody {
     pos,
     vel,
     BodyKind::RockyBody(RockyBody {
-      surface_temperature: 210.0,
-      surface_pressure: 600.0,
+      surface_temperature: MARS_SURFACE_T,
+      surface_pressure: MARS_SURFACE_P,
       angular_velocity: angular_velocity(MARS_DAY),
-      axial_tilt: 25.19f64.to_radians(),
+      axial_tilt: MARS_AXIAL_TILT.to_radians(),
       atmosphere: Some(atm),
     }),
   )
@@ -167,10 +156,10 @@ pub fn jupiter() -> CelestialBody {
     pos,
     vel,
     BodyKind::GasGiant(GasGiant {
-      reference_temperature: 165.0,
-      reference_pressure: NOMINAL_GAS_GIANT_PRESSURE,
+      reference_temperature: JUPITER_SURFACE_T,
+      reference_pressure: NOMINAL_GAS_PRESS,
       angular_velocity: angular_velocity(JUPITER_DAY),
-      axial_tilt: 3.13f64.to_radians(),
+      axial_tilt: JUPITER_AXIAL_TILT.to_radians(),
       heat_factor: JUPITER_HEAT_FACTOR,
       atmosphere: atm,
     }),
@@ -193,10 +182,10 @@ pub fn saturn() -> CelestialBody {
     pos,
     vel,
     BodyKind::GasGiant(GasGiant {
-      reference_temperature: 134.0,
-      reference_pressure: NOMINAL_GAS_GIANT_PRESSURE,
+      reference_temperature: SATURN_SURFACE_T,
+      reference_pressure: NOMINAL_GAS_PRESS,
       angular_velocity: angular_velocity(SATURN_DAY),
-      axial_tilt: 26.73f64.to_radians(),
+      axial_tilt: SATURN_AXIAL_TILT.to_radians(),
       heat_factor: SATURN_HEAT_FACTOR,
       atmosphere: atm,
     }),
@@ -219,11 +208,11 @@ pub fn neptune() -> CelestialBody {
     pos,
     vel,
     BodyKind::GasGiant(GasGiant {
-      reference_temperature: 72.0,
-      reference_pressure: NOMINAL_GAS_GIANT_PRESSURE,
+      reference_temperature: NEPTUNE_SURFACE_T,
+      reference_pressure: NOMINAL_GAS_PRESS,
       angular_velocity: angular_velocity(NEPTUNE_DAY),
-      axial_tilt: 28.32f64.to_radians(),
-      heat_factor: 2.7,
+      axial_tilt: NEPTUNE_AXIAL_TILT.to_radians(),
+      heat_factor: NEPTUNE_HEAT_FACTOR,
       atmosphere: atm,
     }),
   )
