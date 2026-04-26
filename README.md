@@ -82,7 +82,7 @@ Responsibilities:
 
 ---
 
-### `Pleroma`
+### `pleroma`
 
 Owns the **global mutable simulation state**.
 
@@ -137,7 +137,7 @@ Examples:
 
 ---
 
-### `orbit`
+### `gravitas`
 
 Defines **orbital mechanics**.
 
@@ -170,7 +170,7 @@ The **rendering bridge**.
 
 Responsibilities:
 
-- reads from `plemora` (fields) and `tessera` (geometry)
+- reads from `pleroma` (fields) and `tessera` (geometry)
 - constructs an engine-agnostic intermediate representation (IR)
 - translates IR to specific backends (currently Bevy)
 
@@ -255,7 +255,7 @@ Aether does not use a linear pipeline. Instead, it operates as a dependency-driv
 
 - `cosmo` defines initial conditions  
 - `tessera` constructs the spatial domain  
-- `plemora` initializes fields from cosmo  
+- `pleroma` initializes fields from cosmo  
 
 ---
 
@@ -276,7 +276,7 @@ Each tick:
 
 - `nexus` resolves execution order via topological sort  
 - physics systems execute in dependency-safe order  
-- fields in `plemora` are updated  
+- fields in `plerom` are updated  
 
 ---
 
@@ -284,7 +284,7 @@ Each tick:
 
 - `eidolon` samples:
   - geometry from `tessera`
-  - fields from `plemora`
+  - fields from `pleroma`
 - builds render IR  
 - passes to backend (e.g. Bevy)  
 
@@ -297,7 +297,7 @@ cosmo → initial conditions
         ↓
 tessera → geometry
         ↓
-plemora → fields (state)
+pleroma → fields (state)
         ↓
 nexus → orchestrates updates
         ↓
@@ -312,7 +312,7 @@ eidolon → visualises state
 
 - No physics crate owns state
 - No physics crate owns geometry
-- All mutation happens in plemora
+- All mutation happens in pleroma
 - All geometry lives in tessera
 - All execution ordering is handled by nexus
 - Rendering is strictly read-only
@@ -333,7 +333,7 @@ eidolon → visualises state
 
 Aether is structured around a simple idea:
 
-Define the world (cosmo), shape it (tessera), store it (plemora), evolve it (physics via nexus), and observe it (eidolon).
+Define the world (cosmo), shape it (tessera), store it (pleroma), evolve it (physics via nexus), and observe it (eidolon).
 
 ## Note
 
