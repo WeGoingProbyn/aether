@@ -1,3 +1,6 @@
+// Copyright 2026 William Probyn
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::kind::{BodyKind, CelestialBody};
 
 /// A set of celestial bodies sharing a coordinate frame — typically one star

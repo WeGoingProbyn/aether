@@ -1,8 +1,18 @@
 [workspace]
 members = [
   "utility",
+  "utility/xtask",
   "sandbox", 
-  "continuum", "aer", "cosmo", "orbit", "nexus", "eidolon", "terra", "plemora", "tessera",
+  "continuum", 
+  "aer", 
+  "cosmo", 
+  "gravitas", 
+  "nexus", 
+  "eidolon", 
+  "terra", 
+  "pleroma", 
+  "tessera",
 ]
 
-  resolver = "2"
+resolver = "2"
+license = "Apache-2.0"

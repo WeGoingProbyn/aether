@@ -1,3 +1,6 @@
+// Copyright 2026 William Probyn
+// SPDX-License-Identifier: Apache-2.0
+
 pub trait Deserialize: Sized {
   fn deserialize<D: Deserializer>(
     deserializer: &mut D,

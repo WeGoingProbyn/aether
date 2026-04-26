@@ -1,3 +1,6 @@
+// Copyright 2026 William Probyn
+// SPDX-License-Identifier: Apache-2.0
+
 //! Mixture equation-of-state tests for `Atmosphere`. Reference values come
 //! from textbook ideal-gas mixing rules; mole fractions are mole-fraction-
 //! weighted into molar mass and DOF, then γ = 1 + 2/f, R = R_universal/M.

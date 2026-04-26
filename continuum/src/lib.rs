@@ -1,3 +1,6 @@
+// Copyright 2026 William Probyn
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod boundary;
 pub mod field;
 pub mod geometry;

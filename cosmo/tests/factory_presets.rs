@@ -1,3 +1,6 @@
+// Copyright 2026 William Probyn
+// SPDX-License-Identifier: Apache-2.0
+
 //! Sanity-check that the Sol-system factory functions return bodies whose
 //! gross properties match well-known reference values, and that the system
 //! container exposes them correctly.

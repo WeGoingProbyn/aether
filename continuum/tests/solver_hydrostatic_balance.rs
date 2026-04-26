@@ -1,3 +1,6 @@
+// Copyright 2026 William Probyn
+// SPDX-License-Identifier: Apache-2.0
+
 //! Hydrostatic balance test for `Euler3D` with constant gravity. Initialises
 //! a flat tall box with an isothermal Earth-like atmosphere in hydrostatic
 //! equilibrium — `∂p/∂z = -ρ·g` — and verifies the solver doesn't blow it up

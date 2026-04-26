@@ -1,3 +1,6 @@
+// Copyright 2026 William Probyn
+// SPDX-License-Identifier: Apache-2.0
+
 //! Hand-built presets for the Sol system. Each planet factory returns a
 //! `CelestialBody` placed on the +x axis at its orbital radius, moving in +y
 //! at its mean orbital velocity (a circular-orbit approximation — eccentricity

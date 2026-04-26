@@ -1,3 +1,6 @@
+// Copyright 2026 William Probyn
+// SPDX-License-Identifier: Apache-2.0
+
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse_quote;

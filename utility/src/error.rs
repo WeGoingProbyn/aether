@@ -1,3 +1,6 @@
+// Copyright 2026 William Probyn
+// SPDX-License-Identifier: Apache-2.0
+
 use std::boxed::Box;
 use std::error::Error;
 use std::marker::{Send, Sync};

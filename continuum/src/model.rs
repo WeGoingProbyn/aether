@@ -1,3 +1,6 @@
+// Copyright 2026 William Probyn
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::geometry::{CellId, CellMetrics, Point};
 use crate::output::LawFieldSchema;
 use utility::{maths::vector::Vector, profile};

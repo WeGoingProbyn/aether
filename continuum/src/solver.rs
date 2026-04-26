@@ -1,3 +1,6 @@
+// Copyright 2026 William Probyn
+// SPDX-License-Identifier: Apache-2.0
+
 use utility::{profile, thread::pool::Pool};
 
 use crate::{

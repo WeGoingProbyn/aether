@@ -1,3 +1,6 @@
+// Copyright 2026 William Probyn
+// SPDX-License-Identifier: Apache-2.0
+
 //! Smoke test: drive `FvmSolver::step` on a `CubeSphere` mesh starting from
 //! a constant state at rest. Verifies that the mesh is wired into the solver
 //! correctly — mass and energy fluxes vanish identically at every face, so ρ

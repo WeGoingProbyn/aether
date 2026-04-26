@@ -1,3 +1,6 @@
+// Copyright 2026 William Probyn
+// SPDX-License-Identifier: Apache-2.0
+
 use utility::maths::{matrix::Matrix, vector::Vector};
 
 pub type Point<const D: usize> = Vector<f64, D>;

@@ -29,15 +29,15 @@ name = "eidolon"
 version = "0.1.0"
 
 [[package]]
+name = "gravitas"
+version = "0.1.0"
+
+[[package]]
 name = "nexus"
 version = "0.1.0"
 
 [[package]]
-name = "orbit"
-version = "0.1.0"
-
-[[package]]
-name = "plemora"
+name = "pleroma"
 version = "0.1.0"
 
 [[package]]
@@ -109,3 +109,7 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "xtask"
+version = "0.1.0"

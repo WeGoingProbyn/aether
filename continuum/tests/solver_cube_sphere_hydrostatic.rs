@@ -1,3 +1,6 @@
+// Copyright 2026 William Probyn
+// SPDX-License-Identifier: Apache-2.0
+
 //! Validates the per-cell radial gravity machinery on the cube sphere:
 //!   * `CubeSphere::cell_world_centroid` returns sane world coordinates.
 //!   * `CubeSphere::radial_gravity_field` produces a vector of correct length

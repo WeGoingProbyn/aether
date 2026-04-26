@@ -1,3 +1,6 @@
+// Copyright 2026 William Probyn
+// SPDX-License-Identifier: Apache-2.0
+
 // ====== Conversions ================ //
 pub const POWER_THREE: f64 = 1_000f64;
 pub const POWER_SIX: f64 = 1_000_000f64;

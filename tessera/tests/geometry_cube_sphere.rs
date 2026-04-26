@@ -1,3 +1,6 @@
+// Copyright 2026 William Probyn
+// SPDX-License-Identifier: Apache-2.0
+
 use continuum::{
   cube_sphere::{
     CUBE_EDGES, CubeSphere, GnomonicPanel, GnomonicShellPanel, PanelId,

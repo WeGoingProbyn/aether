@@ -1,3 +1,6 @@
+// Copyright 2026 William Probyn
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::{Arc, Condvar, Mutex};
 
 pub type Job = Box<dyn FnOnce() + Send>;

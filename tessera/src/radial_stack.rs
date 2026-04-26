@@ -1,3 +1,6 @@
+// Copyright 2026 William Probyn
+// SPDX-License-Identifier: Apache-2.0
+
 pub struct RadialStackCoupler {
   // Two cube-spheres sharing the same 6 panels and angular dims, where
   // the upper mesh's bottom radial layer touches the lower mesh's top
