@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use tessera::cube_sphere::{
-  CUBE_EDGES, CubeSphere, GnomonicPanel, GnomonicShellPanel, PanelId,
-  cells_along_edge, edge_cell_index, edge_face_centroid_comp, match_edge_cells,
+  CUBE_EDGES, CubeSphere, CubeSphereShellSpec, GnomonicPanel,
+  GnomonicShellPanel, PanelId, cells_along_edge, edge_cell_index,
+  edge_face_centroid_comp, match_edge_cells,
 };
 use tessera::geometry::{CellGeometry, FaceGeometry, GeometryMap};
 use tessera::topology::{FaceConnection, Topology};
 use utility::domain::BoundaryTag;
-use utility::domain::{CellId, FaceId, Point};
+use utility::domain::{CellId, Point};
 
 fn all_panels() -> [PanelId; 6] {
   [
@@ -237,6 +238,21 @@ fn cube_sphere_topology_is_consistent() {
   }
   assert_eq!(interior_count, mesh.interior_faces().len());
   assert_eq!(boundary_count, ground + edge);
+}
+
+#[test]
+fn cube_sphere_shell_spec_sets_radial_boundary_tags() {
+  let n = 4;
+  let nz = 2;
+  let mesh = CubeSphere::shell(
+    CubeSphereShellSpec::uniform([n, n, nz], 1.0, 2.0)
+      .with_boundaries(BoundaryTag::Inflow, BoundaryTag::Outflow),
+  );
+
+  assert_eq!(mesh.boundary_faces(BoundaryTag::Inflow).len(), 6 * n * n);
+  assert_eq!(mesh.boundary_faces(BoundaryTag::Outflow).len(), 6 * n * n);
+  assert!(mesh.boundary_faces(BoundaryTag::Ground).is_empty());
+  assert!(mesh.boundary_faces(BoundaryTag::AtmosphereEdge).is_empty());
 }
 
 // Mirrors CubeSphere's internal cell→panel decoding so tests can reproject

@@ -339,6 +339,54 @@ impl GeometryMap<3, 3> for GnomonicShellPanel {
   }
 }
 
+#[derive(Clone, Debug)]
+pub struct CubeSphereShellSpec {
+  pub angular_dims: [usize; 2],
+  pub radial_edges: Vec<f64>,
+  pub inner_boundary: BoundaryTag,
+  pub outer_boundary: BoundaryTag,
+}
+
+impl CubeSphereShellSpec {
+  pub fn new(angular_dims: [usize; 2], radial_edges: Vec<f64>) -> Self {
+    Self {
+      angular_dims,
+      radial_edges,
+      inner_boundary: BoundaryTag::Ground,
+      outer_boundary: BoundaryTag::AtmosphereEdge,
+    }
+  }
+
+  pub fn uniform(dims: [usize; 3], r_inner: f64, r_outer: f64) -> Self {
+    let radial_edges: Vec<f64> = (0..=dims[2])
+      .map(|k| r_inner + (r_outer - r_inner) * k as f64 / dims[2] as f64)
+      .collect();
+    Self::new([dims[0], dims[1]], radial_edges)
+  }
+
+  pub fn with_boundaries(
+    mut self,
+    inner_boundary: BoundaryTag,
+    outer_boundary: BoundaryTag,
+  ) -> Self {
+    self.inner_boundary = inner_boundary;
+    self.outer_boundary = outer_boundary;
+    self
+  }
+
+  pub fn radial_layers(&self) -> usize {
+    self.radial_edges.len().saturating_sub(1)
+  }
+
+  pub fn dims(&self) -> [usize; 3] {
+    [
+      self.angular_dims[0],
+      self.angular_dims[1],
+      self.radial_layers(),
+    ]
+  }
+}
+
 /// Maps an angular `Edge` to the `BoundaryTag` that `StructuredBlock` assigns
 /// to the corresponding axis 0/1 boundary (see `mesh.rs::boundary_tag`).
 fn boundary_tag_for(edge: Edge) -> BoundaryTag {
@@ -448,10 +496,7 @@ impl CubeSphere {
   /// Construct with uniform radial layers. Convenience wrapper over
   /// `with_radial_edges`.
   pub fn new(dims: [usize; 3], r_inner: f64, r_outer: f64) -> Self {
-    let radial_edges: Vec<f64> = (0..=dims[2])
-      .map(|k| r_inner + (r_outer - r_inner) * k as f64 / dims[2] as f64)
-      .collect();
-    Self::with_radial_edges([dims[0], dims[1]], radial_edges)
+    Self::shell(CubeSphereShellSpec::uniform(dims, r_inner, r_outer))
   }
 
   /// Construct with caller-supplied radial layer edges. Lets atmospheric
@@ -463,6 +508,15 @@ impl CubeSphere {
     angular_dims: [usize; 2],
     radial_edges: Vec<f64>,
   ) -> Self {
+    Self::shell(CubeSphereShellSpec::new(angular_dims, radial_edges))
+  }
+
+  pub fn shell(spec: CubeSphereShellSpec) -> Self {
+    let angular_dims = spec.angular_dims;
+    let radial_edges = spec.radial_edges;
+    let inner_boundary = spec.inner_boundary;
+    let outer_boundary = spec.outer_boundary;
+
     assert_eq!(
       angular_dims[0], angular_dims[1],
       "angular dims must be equal so adjacent panel edges have matching cell counts"
@@ -548,8 +602,8 @@ impl CubeSphere {
       }
 
       for (panel_tag, sphere_tag) in [
-        (BoundaryTag::Front, BoundaryTag::Ground),
-        (BoundaryTag::Back, BoundaryTag::AtmosphereEdge),
+        (BoundaryTag::Front, inner_boundary),
+        (BoundaryTag::Back, outer_boundary),
       ] {
         for &(local_f, owner) in panel.boundary_faces(panel_tag) {
           let out_sign = match panel.face_connection(local_f) {

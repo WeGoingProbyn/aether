@@ -11,12 +11,15 @@ use nexus::{
 };
 use pleroma::Pleroma;
 use tessera::{
-  geometry::{CellGeometry, IdentityMap},
-  mesh::{Mesh, StructuredBlock},
+  coupling::MeshCoupler,
+  cube_sphere::{CubeSphere, CubeSphereShellSpec},
+  geometry::CellGeometry,
+  mesh::Mesh,
+  radial_stack::RadialStackCoupler,
   world_mesh::Tessera,
 };
 
-use utility::domain::CellId;
+use utility::domain::{BoundaryTag, CellId};
 use utility::error::AetherResult;
 use utility::info;
 use utility::logger::{Level, LogWriter, Logger, StdSink};
@@ -66,10 +69,7 @@ impl Stage for DummySurfaceHeating {
       .fields
       .read(SURFACE_TEMPERATURE)
       .expect("dummy stage declares surface temperature as a read");
-
-    for cell in 0..field.len() {
-      info!("{:?}", field.state(CellId::from(cell)));
-    }
+    let before = field.state(CellId::from(0));
 
     let field: &mut SoaField<1> = ctx
       .world
@@ -86,16 +86,15 @@ impl Stage for DummySurfaceHeating {
       .fields
       .read(SURFACE_TEMPERATURE)
       .expect("dummy stage declares surface temperature as a read");
-
-    for cell in 0..field.len() {
-      info!("{:?}", field.state(CellId::from(cell)));
-    }
+    let after = field.state(CellId::from(0));
 
     info!(
-      "dummy stage wrote surface temperature for {:?}: {} cells (mesh has {})",
+      "dummy stage wrote surface temperature for {:?}: {} cells (mesh has {}), sample {:?} -> {:?}",
       ctx.world.world_id,
       field.len(),
-      mesh_cell_count
+      mesh_cell_count,
+      before,
+      after
     );
 
     Ok(())
@@ -110,20 +109,51 @@ fn main() -> AetherResult<()> {
 
   Profiler::init();
 
-  let mesh = Arc::new(StructuredBlock::uniform(
-    [0.0; 3].into(),
-    [1.0; 3],
-    [2, 1, 1],
-    Box::new(IdentityMap::<3>),
+  let angular_dims = [4, 4];
+  let surface_radial_layers = 2;
+  let atmosphere_radial_layers = 3;
+
+  let surface_mesh = Arc::new(CubeSphere::shell(
+    CubeSphereShellSpec::uniform(
+      [angular_dims[0], angular_dims[1], surface_radial_layers],
+      0.9,
+      1.0,
+    )
+    .with_boundaries(BoundaryTag::Ground, BoundaryTag::AtmosphereEdge),
   ));
-  let cell_count = mesh.cell_count();
+  let atmosphere_mesh = Arc::new(CubeSphere::shell(
+    CubeSphereShellSpec::uniform(
+      [angular_dims[0], angular_dims[1], atmosphere_radial_layers],
+      1.0,
+      1.2,
+    )
+    .with_boundaries(BoundaryTag::Ground, BoundaryTag::AtmosphereEdge),
+  ));
+  let surface_cell_count = surface_mesh.cell_count();
 
   let mut tessera = Tessera::new();
-  let mesh_for_registry: Arc<dyn Mesh<3>> = mesh;
-  tessera.register_mesh(MeshKey::SURFACE, mesh_for_registry);
+  let surface_for_registry: Arc<dyn Mesh<3>> = surface_mesh;
+  let atmosphere_for_registry: Arc<dyn Mesh<3>> = atmosphere_mesh;
+  tessera.register_mesh(MeshKey::SURFACE, surface_for_registry);
+  tessera.register_mesh(MeshKey::ATMOSPHERE, atmosphere_for_registry);
+
+  let radial_coupler = RadialStackCoupler::new(
+    angular_dims,
+    surface_radial_layers,
+    atmosphere_radial_layers,
+  );
+  let radial_pair_count = radial_coupler.pairs().len();
+  tessera.add_coupler(MeshKey::SURFACE, MeshKey::ATMOSPHERE, radial_coupler);
+  info!(
+    "registered surface-atmosphere radial coupler with {} face pairs",
+    radial_pair_count
+  );
 
   let mut pleroma = Pleroma::new();
-  pleroma.register_field(SURFACE_TEMPERATURE, SoaField::<1>::zeros(cell_count));
+  pleroma.register_field(
+    SURFACE_TEMPERATURE,
+    SoaField::<1>::zeros(surface_cell_count),
+  );
 
   let mut nexus = Nexus::new();
   nexus.add(DummySurfaceHeating::new());
