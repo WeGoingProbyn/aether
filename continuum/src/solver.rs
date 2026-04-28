@@ -1,14 +1,12 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use utility::{domain::CellId, profile, thread::pool::Pool};
+use utility::{domain::CellId, profile};
 
-use pleroma::core::exchange::exchange_ghosts;
 use pleroma::core::storage::FieldStorage;
 
 use tessera::geometry::{CellGeometry, FaceGeometry};
 use tessera::mesh::Mesh;
-use tessera::partition::Decomposition;
 use tessera::topology::{FaceConnection, Topology};
 
 use crate::{
@@ -45,12 +43,16 @@ impl SolverConfig {
   pub fn dt_max(&self) -> f64 {
     self.dt_max
   }
+
+  pub fn integrator(&self) -> TimeIntegration {
+    self.integrator
+  }
 }
 
 #[derive(Clone)]
-struct SolverScratch<const N: usize> {
-  state_cache: Vec<[f64; N]>,
-  residual_accum: Vec<[f64; N]>,
+pub(crate) struct SolverScratch<const N: usize> {
+  pub(crate) state_cache: Vec<[f64; N]>,
+  pub(crate) residual_accum: Vec<[f64; N]>,
   cell_state: [f64; N],
 }
 
@@ -65,7 +67,7 @@ impl<const N: usize> Default for SolverScratch<N> {
 }
 
 impl<const N: usize> SolverScratch<N> {
-  fn ensure_len(&mut self, count: usize) {
+  pub(crate) fn ensure_len(&mut self, count: usize) {
     if self.state_cache.len() != count {
       self.state_cache.resize(count, [0.0; N]);
     }
@@ -121,7 +123,7 @@ where
     &self.config
   }
 
-  fn gather_state_cache<S, G>(
+  pub(crate) fn gather_state_cache<S, G>(
     state: &S,
     geometry: &G,
     cache: &mut Vec<[f64; N]>,
@@ -139,7 +141,7 @@ where
     }
   }
 
-  fn compute_dt_from_cache<G>(
+  pub(crate) fn compute_dt_from_cache<G>(
     config: &SolverConfig,
     law: &L,
     state_cache: &[[f64; N]],
@@ -165,7 +167,7 @@ where
     dt_min
   }
 
-  fn compute_residual_from_cache_with_accum<S, M>(
+  pub(crate) fn compute_residual_from_cache_with_accum<S, M>(
     law: &L,
     flux_solver: &F,
     state_cache: &[[f64; N]],
@@ -381,7 +383,7 @@ where
     dt
   }
 
-  fn ensure_scratch_slots(&mut self, count: usize) {
+  pub(crate) fn ensure_scratch_slots(&mut self, count: usize) {
     let required = count.max(1);
     if self.scratches.len() >= required {
       return;
@@ -389,201 +391,21 @@ where
     self.scratches.resize_with(required, SolverScratch::default);
   }
 
-  fn refresh_parallel_state_caches<M, S>(
-    decomp: &Decomposition<D, M>,
-    states: &[S],
-    scratches: &mut [SolverScratch<N>],
-  ) where
-    M: Mesh<D>,
-    S: FieldStorage<N>,
-  {
-    for ((partition, state), scratch) in decomp
-      .partitions
-      .iter()
-      .zip(states.iter())
-      .zip(scratches.iter_mut())
-    {
-      scratch.ensure_len(partition.cell_count());
-      Self::gather_state_cache(state, partition, &mut scratch.state_cache);
-    }
-  }
-
-  fn parallel_compute_residuals_from_cache<M, S>(
-    pool: &Pool,
-    law: &L,
-    flux_solver: &F,
-    decomp: &Decomposition<D, M>,
-    scratches: &mut [SolverScratch<N>],
-    residuals: &mut [S],
-    bcs: &BoundaryRegistry<D, N>,
-  ) where
-    M: Mesh<D>,
-    L: ConservationLaw<D, N> + Sync,
-    F: NumericalFlux<D, N> + Sync,
-    S: FieldStorage<N>,
-  {
-    let tasks: Vec<_> = scratches
-      .iter_mut()
-      .zip(residuals.iter_mut())
-      .zip(decomp.partitions.iter())
-      .map(|((scratch, residual), partition)| {
-        move || {
-          Self::compute_residual_from_cache_with_accum(
-            law,
-            flux_solver,
-            &scratch.state_cache,
-            &mut scratch.residual_accum,
-            residual,
-            partition,
-            bcs,
-          );
-        }
-      })
-      .collect();
-
-    pool.dispatch(tasks);
-  }
-
-  fn parallel_axpy<S>(
-    pool: &Pool,
-    states: &mut [S],
-    residuals: &[S],
-    alpha: f64,
-  ) where
-    S: FieldStorage<N>,
-  {
-    let tasks: Vec<_> = states
-      .iter_mut()
-      .zip(residuals.iter())
-      .map(|(state, residual)| {
-        move || {
-          state.axpy(alpha, residual);
-        }
-      })
-      .collect();
-
-    pool.dispatch(tasks);
-  }
-
-  fn parallel_fix_owned<M, S>(
-    pool: &Pool,
-    law: &L,
-    decomp: &Decomposition<D, M>,
-    states: &mut [S],
-  ) where
-    M: Mesh<D>,
-    L: ConservationLaw<D, N> + Sync,
-    F: NumericalFlux<D, N> + Sync,
-    S: FieldStorage<N>,
-  {
-    let tasks: Vec<_> = states
-      .iter_mut()
-      .zip(decomp.partitions.iter())
-      .map(|(state, partition)| {
-        move || {
-          let mut cell_state = [0.0; N];
-          for i in 0..partition.num_owned() {
-            let cell = CellId::from(i);
-            state.state_into(cell, &mut cell_state);
-            law.fix_state(&mut cell_state);
-            state.write(cell, &cell_state);
-          }
-        }
-      })
-      .collect();
-
-    pool.dispatch(tasks);
-  }
-
-  #[profile]
-  pub fn parallel_step<M, S>(
+  pub(crate) fn partitioned_parts(
     &mut self,
-    pool: &Pool,
-    decomp: &Decomposition<D, M>,
-    states: &mut [S],
-    residuals: &mut [S],
-    bcs: &BoundaryRegistry<D, N>,
-  ) -> f64
-  where
-    M: Mesh<D>,
-    L: ConservationLaw<D, N> + Sync,
-    F: NumericalFlux<D, N> + Sync,
-    S: FieldStorage<N>,
-  {
-    exchange_ghosts(decomp, states);
+    partition_count: usize,
+  ) -> (&L, &F, &SolverConfig, &mut [SolverScratch<N>]) {
+    self.ensure_scratch_slots(partition_count);
+    (
+      &self.law,
+      &self.flux,
+      &self.config,
+      &mut self.scratches[..partition_count],
+    )
+  }
 
-    let dt = {
-      self.ensure_scratch_slots(decomp.partitions.len());
-      let (law, flux, config, scratches) = (
-        &self.law,
-        &self.flux,
-        &self.config,
-        &mut self.scratches[..decomp.partitions.len()],
-      );
-
-      Self::refresh_parallel_state_caches(decomp, states, scratches);
-
-      let dt = decomp
-        .partitions
-        .iter()
-        .enumerate()
-        .map(|(i, partition)| {
-          Self::compute_dt_from_cache(
-            config,
-            law,
-            &scratches[i].state_cache,
-            partition,
-          )
-        })
-        .fold(config.dt_max, f64::min);
-
-      match config.integrator {
-        TimeIntegration::ForwardEuler => {
-          Self::parallel_compute_residuals_from_cache(
-            pool, law, flux, decomp, scratches, residuals, bcs,
-          );
-          Self::parallel_axpy(pool, states, residuals, dt);
-        }
-
-        TimeIntegration::Rk2 => {
-          let u_old: Vec<S> =
-            states.iter().map(|state| state.clone_state()).collect();
-
-          Self::parallel_compute_residuals_from_cache(
-            pool, law, flux, decomp, scratches, residuals, bcs,
-          );
-          Self::parallel_axpy(pool, states, residuals, dt);
-
-          exchange_ghosts(decomp, states);
-          Self::refresh_parallel_state_caches(decomp, states, scratches);
-          Self::parallel_compute_residuals_from_cache(
-            pool, law, flux, decomp, scratches, residuals, bcs,
-          );
-          Self::parallel_axpy(pool, states, residuals, dt);
-
-          // Combine stages: state = 0.5 * u_old + 0.5 * state
-          let tasks: Vec<_> = states
-            .iter_mut()
-            .zip(u_old.iter())
-            .map(|(state, old_state)| {
-              move || {
-                let stage2 = state.clone_state();
-                state.weighted_sum(0.5, old_state, 0.5, &stage2);
-              }
-            })
-            .collect();
-
-          pool.dispatch(tasks);
-        }
-      }
-
-      Self::parallel_fix_owned(pool, law, decomp, states);
-      dt
-    };
-
+  pub(crate) fn advance_clock(&mut self, dt: f64) {
     self.time += dt;
     self.step += 1;
-
-    dt
   }
 }

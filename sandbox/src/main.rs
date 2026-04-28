@@ -138,6 +138,7 @@ fn main() -> AetherResult<()> {
 
   let mut aether = Aether::new(worlds, Pool::default());
   aether.step(60.0)?;
+  aether.step(20.0)?;
 
   Profiler::print(&mut LogWriter::new(Level::Info));
   Ok(())

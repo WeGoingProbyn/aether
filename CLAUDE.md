@@ -75,14 +75,15 @@ The solver is generic over dimension `D`, state size `N`, conservation law `L: C
 
 **Solver** (`solver.rs`):
 - `FvmSolver<D, N, L, F>` drives time integration.
-- `step()` — serial single step; `parallel_step()` — partitioned parallel step via `Pool`.
+- `step()` — serial/reference single step.
+- Partitioned CPU execution lives in `cpu.rs` via `CpuFvmRunner`, which is the layer that depends on `Pool`.
 - `SolverConfig` takes CFL coefficient, max Δt, and `TimeIntegration` (`ForwardEuler` or `Rk2`).
 - Internal `Scratch` buffers avoid hot-loop allocations (do not remove these).
 
 **Domain decomposition** (`partition.rs`):
 - `decompose_structured()` splits a `StructuredBlock` into 1D stripes with ghost layers.
 - `PartitionMesh<D, M>` holds `local_to_global_cell` mapping and ghost descriptors.
-- `Decomposition<D, M>` is the multi-partition container passed to `parallel_step()`.
+- `Decomposition<D, M>` is the multi-partition container passed to `CpuFvmRunner::step()`.
 
 **Boundary conditions** (`boundary.rs`):
 - Implement `BoundaryCondition<D, N>` trait (`ghost_state(interior, normal) → [f64; N]`).

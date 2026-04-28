@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use continuum::boundary::{BoundaryRegistry, Transmissive};
+use continuum::cpu::CpuFvmRunner;
 use continuum::model::{Euler2D, RusanovFlux};
 use continuum::solver::{FvmSolver, SolverConfig, TimeIntegration};
 use pleroma::core::storage::{CellView, FieldStorage, SoaField};
@@ -77,6 +78,7 @@ fn parallel_rk2_matches_serial_and_updates_solver_state() {
   let mut parallel_solver =
     FvmSolver::new(config, Euler2D::new(gamma), RusanovFlux);
   let pool = Pool::new(2).unwrap();
+  let cpu = CpuFvmRunner::new(&pool);
 
   let dt_serial = serial_solver.step(
     &mut serial_state,
@@ -85,8 +87,8 @@ fn parallel_rk2_matches_serial_and_updates_solver_state() {
     &bcs,
   );
 
-  let dt_parallel = parallel_solver.parallel_step(
-    &pool,
+  let dt_parallel = cpu.step(
+    &mut parallel_solver,
     &decomp,
     &mut partition_states,
     &mut partition_residuals,

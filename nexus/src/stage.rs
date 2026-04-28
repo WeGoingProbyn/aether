@@ -26,7 +26,7 @@ pub struct WorldView<'a> {
   pub tessera: &'a Tessera,
   /// Typed read/write into pleroma, scoped to the keys the stage declared.
   pub fields: WorldAccess<'a>,
-  /// For inner parallelism (e.g. `continuum::FvmSolver::parallel_step`).
+  /// For inner CPU execution policy (e.g. `continuum::cpu::CpuFvmRunner`).
   pub pool: &'a Pool,
   /// Time step picked by the integration driver.
   pub dt: f64,
