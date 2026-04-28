@@ -55,6 +55,9 @@ impl From<usize> for FaceId {
 
 pub type Point<const D: usize> = Vector<f64, D>;
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct WorldId(pub usize);
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum FieldName {
   Temperature,

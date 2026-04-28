@@ -37,7 +37,7 @@ impl Stage for Probe {
   fn writes(&self) -> &[FieldKey] {
     &self.writes
   }
-  fn run(&self, _ctx: StageContext<'_>) -> AetherResult<()> {
+  fn run(&mut self, _ctx: StageContext<'_>) -> AetherResult<()> {
     self.log.lock().unwrap().push(self.name);
     Ok(())
   }

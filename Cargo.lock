@@ -84,7 +84,9 @@ dependencies = [
 name = "sandbox"
 version = "0.1.0"
 dependencies = [
- "continuum",
+ "aether",
+ "cosmo",
+ "nexus",
  "pleroma",
  "tessera",
  "utility",

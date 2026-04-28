@@ -25,6 +25,7 @@ use pleroma::Pleroma;
 use pleroma::prelude::FieldKey;
 use tessera::world_mesh::Tessera;
 use utility::collections::graph::Graph;
+use utility::domain::WorldId;
 use utility::error::{AetherError, AetherResult, ErrorDomain};
 use utility::thread::pool::Pool;
 
@@ -193,7 +194,8 @@ impl CompiledNexus {
   }
 
   pub fn tick(
-    &self,
+    &mut self,
+    world_id: WorldId,
     tessera: &Tessera,
     pleroma: &mut Pleroma,
     pool: &Pool,
@@ -204,11 +206,14 @@ impl CompiledNexus {
       let error_slot: Arc<Mutex<Option<AetherError>>> =
         Arc::new(Mutex::new(None));
 
-      let mut tasks: Vec<Box<dyn FnOnce() + Send>> =
+      let mut tasks: Vec<Box<dyn FnOnce() + Send + '_>> =
         Vec::with_capacity(layer.len());
 
-      for &StageId(idx) in layer {
-        let stage: &dyn Stage = self.stages[idx].as_ref();
+      for (idx, stage) in self.stages.iter_mut().enumerate() {
+        if !layer.iter().any(|stage_id| stage_id.0 == idx) {
+          continue;
+        }
+
         let reads = stage.reads().to_vec();
         let writes = stage.writes().to_vec();
 
@@ -221,11 +226,12 @@ impl CompiledNexus {
 
         let ctx = StageContext {
           world: WorldView {
+            world_id,
             tessera,
             fields: view,
+            pool,
+            dt,
           },
-          pool,
-          dt,
         };
         let err_slot = Arc::clone(&error_slot);
 

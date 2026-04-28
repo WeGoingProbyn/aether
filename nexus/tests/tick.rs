@@ -6,7 +6,7 @@
 
 use nexus::{
   CellView, FieldKey, FieldName, FieldStorage, MeshKey, Nexus, SoaField, Stage,
-  StageContext,
+  StageContext, WorldId,
 };
 use pleroma::Pleroma;
 use tessera::world_mesh::Tessera;
@@ -38,7 +38,7 @@ impl Stage for Setter {
   fn writes(&self) -> &[FieldKey] {
     &self.writes
   }
-  fn run(&self, mut ctx: StageContext<'_>) -> AetherResult<()> {
+  fn run(&mut self, mut ctx: StageContext<'_>) -> AetherResult<()> {
     let field: &mut SoaField<N> = ctx
       .world
       .fields
@@ -64,7 +64,7 @@ impl Stage for Doubler {
   fn writes(&self) -> &[FieldKey] {
     std::slice::from_ref(&self.destination)
   }
-  fn run(&self, mut ctx: StageContext<'_>) -> AetherResult<()> {
+  fn run(&mut self, mut ctx: StageContext<'_>) -> AetherResult<()> {
     let src_value = {
       let src: &SoaField<N> = ctx.world.fields.read(self.source).unwrap();
       *src.state(CellId::from(0)).as_state()
@@ -106,9 +106,11 @@ fn parallel_independent_writers_both_succeed() {
     value: 11.0,
   });
 
-  let compiled = s.build(&world).unwrap();
+  let mut compiled = s.build(&world).unwrap();
   assert_eq!(compiled.layer_count(), 1);
-  compiled.tick(&tessera, &mut world, &pool, 0.0).unwrap();
+  compiled
+    .tick(WorldId(0), &tessera, &mut world, &pool, 0.0)
+    .unwrap();
 
   let p: &SoaField<N> = world.read(PRESSURE).unwrap();
   let t: &SoaField<N> = world.read(TEMPERATURE).unwrap();
@@ -142,9 +144,11 @@ fn raw_chain_propagates_value_through_layers() {
     destination: HUMIDITY,
   });
 
-  let compiled = s.build(&world).unwrap();
+  let mut compiled = s.build(&world).unwrap();
   assert_eq!(compiled.layer_count(), 3);
-  compiled.tick(&tessera, &mut world, &pool, 0.0).unwrap();
+  compiled
+    .tick(WorldId(0), &tessera, &mut world, &pool, 0.0)
+    .unwrap();
 
   let p: &SoaField<N> = world.read(PRESSURE).unwrap();
   let t: &SoaField<N> = world.read(TEMPERATURE).unwrap();
@@ -183,7 +187,7 @@ impl Stage for Boom {
   fn writes(&self) -> &[FieldKey] {
     &[]
   }
-  fn run(&self, _ctx: StageContext<'_>) -> AetherResult<()> {
+  fn run(&mut self, _ctx: StageContext<'_>) -> AetherResult<()> {
     Err(AetherError::new(BoomError::Boom))
   }
 }
@@ -197,7 +201,7 @@ fn stage_errors_surface_through_tick() {
   let mut s = Nexus::new();
   s.add(Boom);
 
-  let compiled = s.build(&world).unwrap();
-  let result = compiled.tick(&tessera, &mut world, &pool, 0.0);
+  let mut compiled = s.build(&world).unwrap();
+  let result = compiled.tick(WorldId(0), &tessera, &mut world, &pool, 0.0);
   assert!(result.is_err());
 }

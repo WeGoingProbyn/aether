@@ -6,6 +6,8 @@ license = "Apache-2.0"
 
 [dependencies]
 utility = { path = "../utility" }
-continuum = { path = "../continuum" }
 tessera = { path = "../tessera" }
 pleroma = { path = "../pleroma" }
+aether = { path = "../aether" }
+cosmo = { path = "../cosmo" }
+nexus = { path = "../nexus" }

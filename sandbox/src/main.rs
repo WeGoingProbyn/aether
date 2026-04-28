@@ -1,24 +1,106 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use continuum::boundary::{BoundaryRegistry, ReflectiveWall, Transmissive};
-use continuum::model::{Euler2D, RusanovFlux};
-use continuum::solver::{FvmSolver, SolverConfig, TimeIntegration};
+use aether::core::{Aether, World};
+use cosmo::factory;
+use nexus::{
+  FieldKey, FieldName, FieldStorage, MeshKey, Nexus, SoaField, Stage,
+  StageContext, WorldId,
+};
+use pleroma::Pleroma;
+use tessera::{
+  geometry::{CellGeometry, IdentityMap},
+  mesh::{Mesh, StructuredBlock},
+  world_mesh::Tessera,
+};
 
-use pleroma::core::storage::{CellView, FieldStorage, SoaField};
-
-use tessera::geometry::{CellGeometry, IdentityMap};
-use tessera::mesh::StructuredBlock;
-use tessera::partition::decompose_structured;
-
-use utility::domain::{BoundaryTag, CellId};
+use utility::domain::CellId;
 use utility::error::AetherResult;
 use utility::info;
 use utility::logger::{Level, LogWriter, Logger, StdSink};
 use utility::profiler::Profiler;
 use utility::thread::pool::Pool;
+
+const SURFACE_TEMPERATURE: FieldKey =
+  FieldKey::new(MeshKey::SURFACE, FieldName::Temperature);
+
+struct DummySurfaceHeating {
+  writes: [FieldKey; 1],
+  reads: [FieldKey; 1],
+}
+
+impl DummySurfaceHeating {
+  fn new() -> Self {
+    Self {
+      writes: [SURFACE_TEMPERATURE],
+      reads: [SURFACE_TEMPERATURE],
+    }
+  }
+}
+
+impl Stage for DummySurfaceHeating {
+  fn name(&self) -> &'static str {
+    "dummy_surface_heating"
+  }
+
+  fn reads(&self) -> &[FieldKey] {
+    &self.reads
+  }
+
+  fn writes(&self) -> &[FieldKey] {
+    &self.writes
+  }
+
+  fn run(&mut self, mut ctx: StageContext<'_>) -> AetherResult<()> {
+    let mesh_cell_count = ctx
+      .world
+      .tessera
+      .mesh(MeshKey::SURFACE)
+      .map(|mesh| mesh.cell_count())
+      .unwrap_or(0);
+
+    let field: &SoaField<1> = ctx
+      .world
+      .fields
+      .read(SURFACE_TEMPERATURE)
+      .expect("dummy stage declares surface temperature as a read");
+
+    for cell in 0..field.len() {
+      info!("{:?}", field.state(CellId::from(cell)));
+    }
+
+    let field: &mut SoaField<1> = ctx
+      .world
+      .fields
+      .write(SURFACE_TEMPERATURE)
+      .expect("dummy stage declares surface temperature as a write");
+
+    for cell in 0..field.len() {
+      field.write(CellId::from(cell), &[288.0 + ctx.world.dt]);
+    }
+
+    let field: &SoaField<1> = ctx
+      .world
+      .fields
+      .read(SURFACE_TEMPERATURE)
+      .expect("dummy stage declares surface temperature as a read");
+
+    for cell in 0..field.len() {
+      info!("{:?}", field.state(CellId::from(cell)));
+    }
+
+    info!(
+      "dummy stage wrote surface temperature for {:?}: {} cells (mesh has {})",
+      ctx.world.world_id,
+      field.len(),
+      mesh_cell_count
+    );
+
+    Ok(())
+  }
+}
 
 fn main() -> AetherResult<()> {
   Logger::init(
@@ -27,81 +109,36 @@ fn main() -> AetherResult<()> {
   );
 
   Profiler::init();
-  let pool = Pool::default();
 
-  let dims = [1000, 1];
   let mesh = Arc::new(StructuredBlock::uniform(
-    [0.0, 0.0].into(),
-    [1.0, 0.01],
-    dims,
-    Box::new(IdentityMap::<2>),
+    [0.0; 3].into(),
+    [1.0; 3],
+    [2, 1, 1],
+    Box::new(IdentityMap::<3>),
   ));
+  let cell_count = mesh.cell_count();
 
-  let gamma = 1.4;
-  let num_partitions = 4;
-  let decomp = decompose_structured(Arc::clone(&mesh), dims, num_partitions, 1);
+  let mut tessera = Tessera::new();
+  let mesh_for_registry: Arc<dyn Mesh<3>> = mesh;
+  tessera.register_mesh(MeshKey::SURFACE, mesh_for_registry);
 
-  // Create per-partition fields
-  let mut states: Vec<SoaField<4>> = decomp
-    .partitions
-    .iter()
-    .map(|p| {
-      SoaField::from_fn(p.cell_count(), |cell| {
-        let global = p.local_to_global(cell);
-        let x = mesh.cell_centroid(global)[0];
-        if x < 0.5 {
-          let rho = 1.0;
-          let p = 1.0;
-          [rho, 0.0, 0.0, p / (gamma - 1.0)]
-        } else {
-          let rho = 0.125;
-          let p = 0.1;
-          [rho, 0.0, 0.0, p / (gamma - 1.0)]
-        }
-      })
-    })
-    .collect();
+  let mut pleroma = Pleroma::new();
+  pleroma.register_field(SURFACE_TEMPERATURE, SoaField::<1>::zeros(cell_count));
 
-  let mut residuals = decomp
-    .partitions
-    .iter()
-    .map(|p| SoaField::zeros(p.cell_count()))
-    .collect::<Vec<SoaField<4>>>();
+  let mut nexus = Nexus::new();
+  nexus.add(DummySurfaceHeating::new());
+  let compiled_nexus = nexus.build(&pleroma)?;
 
-  let mut bcs = BoundaryRegistry::new();
-  bcs.register(BoundaryTag::Left, Transmissive);
-  bcs.register(BoundaryTag::Right, Transmissive);
-  bcs.register(BoundaryTag::Bottom, ReflectiveWall);
-  bcs.register(BoundaryTag::Top, ReflectiveWall);
+  let world_id = WorldId(0);
+  let world =
+    World::new(world_id, factory::earth(), tessera, pleroma, compiled_nexus);
 
-  let config = SolverConfig::new(0.5, 1e-4, TimeIntegration::ForwardEuler);
-  let mut solver = FvmSolver::new(config, Euler2D::new(1.4), RusanovFlux);
+  let mut worlds = HashMap::new();
+  worlds.insert(world_id, world);
 
-  let mut time = 0.0;
-  let mut step = 0;
-  while time < 0.2 {
-    let dt =
-      solver.parallel_step(&pool, &decomp, &mut states, &mut residuals, &bcs);
-    time += dt;
-    step += 1;
-    info!("step={}, t={:.6}, dt={:.6}", step, time, dt);
-  }
+  let mut aether = Aether::new(worlds, Pool::default());
+  aether.step(60.0)?;
 
-  // Print density profile — gather from partitions
-  for (i, partition) in decomp.partitions.iter().enumerate() {
-    for j in 0..partition.num_owned() {
-      let cell = CellId::from(j);
-      let global = partition.local_to_global(cell);
-      let s = states[i].state(cell);
-      info!(
-        "{:.4} {:.4}",
-        mesh.cell_centroid(global)[0],
-        s.as_state()[0]
-      );
-    }
-  }
-
-  pool.flush_profiler();
   Profiler::print(&mut LogWriter::new(Level::Info));
   Ok(())
 }

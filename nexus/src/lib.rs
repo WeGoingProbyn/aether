@@ -11,6 +11,7 @@ pub mod stage;
 
 pub use pleroma::Pleroma;
 pub use pleroma::prelude::*;
+pub use utility::domain::WorldId;
 
 pub use schedule::*;
 pub use stage::*;
