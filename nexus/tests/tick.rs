@@ -1,20 +1,24 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-//! End-to-end `CompiledSchedule::tick` — the schedule actually runs stages,
+//! End-to-end `CompiledNexus::tick` — nexus actually runs stages,
 //! propagates writer output to readers, and surfaces stage errors.
 
-use std::sync::{Arc, Mutex};
-
 use nexus::{
-  CellView, FieldKey, FieldStorage, Schedule, SoaField, Stage, StageContext,
+  CellView, FieldKey, FieldName, FieldStorage, MeshKey, Nexus, SoaField, Stage,
+  StageContext,
 };
 use pleroma::Pleroma;
+use tessera::world_mesh::Tessera;
 use utility::domain::CellId;
 use utility::error::{AetherError, AetherResult, ErrorDomain};
 use utility::thread::pool::Pool;
 
 const N: usize = 1;
+const PRESSURE: FieldKey = FieldKey::new(MeshKey::SURFACE, FieldName::Pressure);
+const TEMPERATURE: FieldKey =
+  FieldKey::new(MeshKey::SURFACE, FieldName::Temperature);
+const HUMIDITY: FieldKey = FieldKey::new(MeshKey::SURFACE, FieldName::Humidity);
 
 struct Setter {
   name: &'static str,
@@ -37,6 +41,7 @@ impl Stage for Setter {
   fn run(&self, mut ctx: StageContext<'_>) -> AetherResult<()> {
     let field: &mut SoaField<N> = ctx
       .world
+      .fields
       .write(self.target)
       .expect("declared write should resolve");
     field.write(CellId::from(0), &[self.value]);
@@ -61,10 +66,11 @@ impl Stage for Doubler {
   }
   fn run(&self, mut ctx: StageContext<'_>) -> AetherResult<()> {
     let src_value = {
-      let src: &SoaField<N> = ctx.world.read(self.source).unwrap();
+      let src: &SoaField<N> = ctx.world.fields.read(self.source).unwrap();
       *src.state(CellId::from(0)).as_state()
     };
-    let dst: &mut SoaField<N> = ctx.world.write(self.destination).unwrap();
+    let dst: &mut SoaField<N> =
+      ctx.world.fields.write(self.destination).unwrap();
     dst.write(CellId::from(0), &[src_value[0] * 2.0]);
     Ok(())
   }
@@ -72,39 +78,40 @@ impl Stage for Doubler {
 
 fn make_world() -> Pleroma {
   let mut world = Pleroma::new();
-  world.register_field(FieldKey::Pressure, SoaField::<N>::zeros(1));
-  world.register_field(FieldKey::Temperature, SoaField::<N>::zeros(1));
-  world.register_field(FieldKey::Humidity, SoaField::<N>::zeros(1));
+  world.register_field(PRESSURE, SoaField::<N>::zeros(1));
+  world.register_field(TEMPERATURE, SoaField::<N>::zeros(1));
+  world.register_field(HUMIDITY, SoaField::<N>::zeros(1));
   world
 }
 
 #[test]
 fn parallel_independent_writers_both_succeed() {
   let mut world = make_world();
+  let tessera = Tessera::default();
   let pool = Pool::default();
 
-  let mut s = Schedule::new();
+  let mut s = Nexus::new();
   s.add(Setter {
     name: "set_p",
     reads: vec![],
-    writes: vec![FieldKey::Pressure],
-    target: FieldKey::Pressure,
+    writes: vec![PRESSURE],
+    target: PRESSURE,
     value: 7.0,
   });
   s.add(Setter {
     name: "set_t",
     reads: vec![],
-    writes: vec![FieldKey::Temperature],
-    target: FieldKey::Temperature,
+    writes: vec![TEMPERATURE],
+    target: TEMPERATURE,
     value: 11.0,
   });
 
   let compiled = s.build(&world).unwrap();
   assert_eq!(compiled.layer_count(), 1);
-  compiled.tick(&mut world, &pool, 0.0).unwrap();
+  compiled.tick(&tessera, &mut world, &pool, 0.0).unwrap();
 
-  let p: &SoaField<N> = world.read(FieldKey::Pressure).unwrap();
-  let t: &SoaField<N> = world.read(FieldKey::Temperature).unwrap();
+  let p: &SoaField<N> = world.read(PRESSURE).unwrap();
+  let t: &SoaField<N> = world.read(TEMPERATURE).unwrap();
   assert_eq!(p.state(CellId::from(0)).as_state(), &[7.0]);
   assert_eq!(t.state(CellId::from(0)).as_state(), &[11.0]);
 }
@@ -112,35 +119,36 @@ fn parallel_independent_writers_both_succeed() {
 #[test]
 fn raw_chain_propagates_value_through_layers() {
   let mut world = make_world();
+  let tessera = Tessera::default();
   let pool = Pool::default();
 
-  let mut s = Schedule::new();
+  let mut s = Nexus::new();
   // layer 0: set Pressure = 5
   s.add(Setter {
     name: "set_p",
     reads: vec![],
-    writes: vec![FieldKey::Pressure],
-    target: FieldKey::Pressure,
+    writes: vec![PRESSURE],
+    target: PRESSURE,
     value: 5.0,
   });
   // layer 1: Temperature = Pressure * 2 = 10
   s.add(Doubler {
-    source: FieldKey::Pressure,
-    destination: FieldKey::Temperature,
+    source: PRESSURE,
+    destination: TEMPERATURE,
   });
   // layer 2: Humidity = Temperature * 2 = 20
   s.add(Doubler {
-    source: FieldKey::Temperature,
-    destination: FieldKey::Humidity,
+    source: TEMPERATURE,
+    destination: HUMIDITY,
   });
 
   let compiled = s.build(&world).unwrap();
   assert_eq!(compiled.layer_count(), 3);
-  compiled.tick(&mut world, &pool, 0.0).unwrap();
+  compiled.tick(&tessera, &mut world, &pool, 0.0).unwrap();
 
-  let p: &SoaField<N> = world.read(FieldKey::Pressure).unwrap();
-  let t: &SoaField<N> = world.read(FieldKey::Temperature).unwrap();
-  let h: &SoaField<N> = world.read(FieldKey::Humidity).unwrap();
+  let p: &SoaField<N> = world.read(PRESSURE).unwrap();
+  let t: &SoaField<N> = world.read(TEMPERATURE).unwrap();
+  let h: &SoaField<N> = world.read(HUMIDITY).unwrap();
   assert_eq!(p.state(CellId::from(0)).as_state(), &[5.0]);
   assert_eq!(t.state(CellId::from(0)).as_state(), &[10.0]);
   assert_eq!(h.state(CellId::from(0)).as_state(), &[20.0]);
@@ -183,12 +191,13 @@ impl Stage for Boom {
 #[test]
 fn stage_errors_surface_through_tick() {
   let mut world = make_world();
+  let tessera = Tessera::default();
   let pool = Pool::default();
 
-  let mut s = Schedule::new();
+  let mut s = Nexus::new();
   s.add(Boom);
 
   let compiled = s.build(&world).unwrap();
-  let result = compiled.tick(&mut world, &pool, 0.0);
+  let result = compiled.tick(&tessera, &mut world, &pool, 0.0);
   assert!(result.is_err());
 }

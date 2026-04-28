@@ -12,7 +12,7 @@ members = [
   "terra",
   "pleroma",
   "tessera",
-  "syzygy",
+  "syzygy", "aether",
 ]
 
 resolver = "2"

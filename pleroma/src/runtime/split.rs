@@ -11,16 +11,13 @@
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::sync::Arc;
 
-use tessera::mesh::Mesh;
-use utility::domain::{FieldKey, MeshKey};
+use utility::domain::FieldKey;
 
 use crate::runtime::slot::FieldSlot;
 
 pub(crate) struct SplitBorrow<'a> {
   pub(crate) fields: *const HashMap<FieldKey, FieldSlot>,
-  pub(crate) meshes: *const HashMap<MeshKey, Arc<dyn Mesh<3>>>,
   // PhantomData<&'a mut ()> — `schedule_access(&mut self)` is the only way
   // to produce a `SplitBorrow`, so this morally holds an exclusive borrow on
   // Pleroma for the duration. WorldAccess views are aliased slices of that
@@ -28,7 +25,7 @@ pub(crate) struct SplitBorrow<'a> {
   pub(crate) _phantom: PhantomData<&'a mut ()>,
 }
 
-// SAFETY: the underlying registries are `Send + Sync` (FieldSlot manually so;
-// mesh map is Arc'd). Raw pointers are valid for `'a`.
+// SAFETY: the underlying registry is `Send + Sync` (`FieldSlot` manually so).
+// Raw pointers are valid for `'a`.
 unsafe impl Send for SplitBorrow<'_> {}
 unsafe impl Sync for SplitBorrow<'_> {}

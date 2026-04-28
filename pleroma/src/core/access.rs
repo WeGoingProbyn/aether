@@ -7,10 +7,8 @@
 //! callers from forging one.
 
 use std::any::TypeId;
-use std::sync::Arc;
 
-use tessera::mesh::Mesh;
-use utility::domain::{FieldKey, MeshKey};
+use utility::domain::FieldKey;
 
 use crate::runtime::slot::SlotView;
 use crate::runtime::split::SplitBorrow;
@@ -27,15 +25,6 @@ pub struct WorldAccess<'a> {
 }
 
 impl<'a> WorldAccess<'a> {
-  /// Look up a registered mesh. Mesh access is read-only and uncontended,
-  /// so it doesn't need to be declared in the stage's reads/writes.
-  pub fn mesh_for(&self, key: MeshKey) -> Option<&Arc<dyn Mesh<3>>> {
-    // SAFETY: `meshes` lives at least as long as `'a` (held mutably by the
-    // parent ScheduleAccess); we only hand out a shared reference.
-    let meshes = unsafe { &*self.slot_view.meshes };
-    meshes.get(&key)
-  }
-
   /// Read a field. Returns `None` if the key wasn't declared as a read or
   /// write, the field isn't registered, or the requested type `S` doesn't
   /// match the stored type.
@@ -102,7 +91,6 @@ impl<'a> ScheduleAccess<'a> {
     WorldAccess {
       slot_view: SlotView {
         fields: self.inner.fields,
-        meshes: self.inner.meshes,
         reads: reads.to_vec(),
         writes: writes.to_vec(),
         _phantom: std::marker::PhantomData,

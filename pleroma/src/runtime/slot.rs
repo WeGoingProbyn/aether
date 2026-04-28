@@ -12,10 +12,8 @@ use std::any::{Any, TypeId};
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::sync::Arc;
 
-use tessera::mesh::Mesh;
-use utility::domain::{FieldKey, MeshKey};
+use utility::domain::FieldKey;
 
 /// One registered field. Holds an `UnsafeCell<Box<dyn Any + Send + Sync>>` so
 /// the registry can hand out aliased typed references when the schedule has
@@ -32,12 +30,11 @@ pub(crate) struct FieldSlot {
 unsafe impl Send for FieldSlot {}
 unsafe impl Sync for FieldSlot {}
 
-/// Typed handle into the registry carried inside a `WorldAccess`. Holds raw
-/// pointers to the field + mesh maps and the keys this view is allowed to
-/// touch. Construction is `pub(crate)` — only `crate::runtime` can build one.
+/// Typed handle into the registry carried inside a `WorldAccess`. Holds a raw
+/// pointer to the field map and the keys this view is allowed to touch.
+/// Construction is `pub(crate)` — only `crate::runtime` can build one.
 pub(crate) struct SlotView<'a> {
   pub(crate) fields: *const HashMap<FieldKey, FieldSlot>,
-  pub(crate) meshes: *const HashMap<MeshKey, Arc<dyn Mesh<3>>>,
   pub(crate) reads: Vec<FieldKey>,
   pub(crate) writes: Vec<FieldKey>,
   pub(crate) _phantom: PhantomData<&'a HashMap<FieldKey, FieldSlot>>,

@@ -1,9 +1,9 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-//! Schedule construction and execution.
+//! Nexus construction and execution.
 //!
-//! `Schedule::build` turns a list of stages plus their declared reads/writes
+//! `Nexus::build` turns a list of stages plus their declared reads/writes
 //! into a layered DAG. Edges fall out of three relationships:
 //!
 //! - **RAW** (read-after-write): stage `B` reads what stage `A` writes.
@@ -11,11 +11,11 @@
 //! - **WAW** (write-after-write): both write the same field.
 //!
 //! Whenever two stages have any of those conflicts, the earlier-added stage
-//! runs first. Callers can pin extra ordering with `Schedule::before`. Cycles
+//! runs first. Callers can pin extra ordering with `Nexus::before`. Cycles
 //! (whether from the data flow or from contradictory `before` hints) are
 //! surfaced as errors during `build`.
 //!
-//! `CompiledSchedule::tick` walks the resulting layers; within a layer all
+//! `CompiledNexus::tick` walks the resulting layers; within a layer all
 //! stages have pairwise-disjoint conflicts, so they fan out across the
 //! thread pool via the `pleroma::ScheduleAccess` split-borrow.
 
@@ -23,32 +23,33 @@ use std::sync::{Arc, Mutex};
 
 use pleroma::Pleroma;
 use pleroma::prelude::FieldKey;
+use tessera::world_mesh::Tessera;
 use utility::collections::graph::Graph;
 use utility::error::{AetherError, AetherResult, ErrorDomain};
 use utility::thread::pool::Pool;
 
-use crate::stage::{Stage, StageContext};
+use crate::stage::{Stage, StageContext, WorldView};
 
-/// Stable identifier for a stage inside one `Schedule`. Returned by
-/// `Schedule::add` and used for `before` ordering hints.
+/// Stable identifier for a stage inside one `Nexus`. Returned by
+/// `Nexus::add` and used for `before` ordering hints.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct StageId(pub(crate) usize);
 
 impl StageId {
-  /// Position of this stage in its `Schedule` — also its index in the
-  /// flattened topological order returned by `CompiledSchedule::topo_order`.
+  /// Position of this stage in its `Nexus` — also its index in the
+  /// flattened topological order returned by `CompiledNexus::topo_order`.
   pub fn index(&self) -> usize {
     self.0
   }
 }
 
 #[derive(Default)]
-pub struct Schedule {
+pub struct Nexus {
   stages: Vec<Box<dyn Stage>>,
   ordering_hints: Vec<(StageId, StageId)>,
 }
 
-impl Schedule {
+impl Nexus {
   pub fn new() -> Self {
     Self::default()
   }
@@ -66,7 +67,7 @@ impl Schedule {
     self.ordering_hints.push((a, b));
   }
 
-  pub fn build(self, _world: &Pleroma) -> AetherResult<CompiledSchedule> {
+  pub fn build(self, _world: &Pleroma) -> AetherResult<CompiledNexus> {
     let n = self.stages.len();
 
     // Build a graph keyed by stage index. Node data is unit — the StageId
@@ -92,7 +93,7 @@ impl Schedule {
     // contradictory data-flow conflict (caught below by topological_sort).
     for (a, b) in &self.ordering_hints {
       if a.0 >= n || b.0 >= n {
-        return Err(AetherError::new(ScheduleError::UnknownStage).context(
+        return Err(AetherError::new(NexusError::UnknownStage).context(
           format!(
             "before hint {:?} -> {:?} references stage out of range (n = {})",
             a, b, n
@@ -108,7 +109,7 @@ impl Schedule {
 
     let layers = build_layers(&graph, n)?;
 
-    Ok(CompiledSchedule {
+    Ok(CompiledNexus {
       stages: self.stages,
       layers,
       topo_order,
@@ -159,21 +160,21 @@ fn build_layers(
 
   if placed != n {
     return Err(
-      AetherError::new(ScheduleError::Cycle)
-        .context("schedule contains a cycle (unexpected after topo sort)"),
+      AetherError::new(NexusError::Cycle)
+        .context("nexus contains a cycle (unexpected after topo sort)"),
     );
   }
 
   Ok(layers)
 }
 
-pub struct CompiledSchedule {
+pub struct CompiledNexus {
   stages: Vec<Box<dyn Stage>>,
   layers: Vec<Vec<StageId>>,
   topo_order: Vec<usize>,
 }
 
-impl CompiledSchedule {
+impl CompiledNexus {
   pub fn stage_count(&self) -> usize {
     self.stages.len()
   }
@@ -193,12 +194,13 @@ impl CompiledSchedule {
 
   pub fn tick(
     &self,
-    world: &mut Pleroma,
+    tessera: &Tessera,
+    pleroma: &mut Pleroma,
     pool: &Pool,
     dt: f64,
   ) -> AetherResult<()> {
     for layer in &self.layers {
-      let access = world.schedule_access();
+      let access = pleroma.schedule_access();
       let error_slot: Arc<Mutex<Option<AetherError>>> =
         Arc::new(Mutex::new(None));
 
@@ -218,7 +220,10 @@ impl CompiledSchedule {
         let view = unsafe { access.view_for(&reads, &writes) };
 
         let ctx = StageContext {
-          world: view,
+          world: WorldView {
+            tessera,
+            fields: view,
+          },
           pool,
           dt,
         };
@@ -236,7 +241,7 @@ impl CompiledSchedule {
 
       pool.dispatch(tasks);
 
-      drop(access);
+      //drop(access);
 
       let err = error_slot.lock().unwrap().take();
       if let Some(e) = err {
@@ -248,24 +253,24 @@ impl CompiledSchedule {
 }
 
 #[derive(Debug)]
-pub enum ScheduleError {
+pub enum NexusError {
   UnknownStage,
   Cycle,
 }
 
-impl ErrorDomain for ScheduleError {
+impl ErrorDomain for NexusError {
   fn domain(&self) -> &str {
-    "nexus schedule"
+    "nexus"
   }
 }
 
-impl std::fmt::Display for ScheduleError {
+impl std::fmt::Display for NexusError {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
-      ScheduleError::UnknownStage => {
+      NexusError::UnknownStage => {
         write!(f, "ordering hint references a stage that wasn't added")
       }
-      ScheduleError::Cycle => write!(f, "schedule has a cycle"),
+      NexusError::Cycle => write!(f, "nexus has a cycle"),
     }
   }
 }

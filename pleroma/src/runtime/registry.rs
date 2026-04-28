@@ -5,22 +5,19 @@ use std::any::{Any, TypeId};
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::sync::Arc;
 
-use tessera::mesh::Mesh;
-use utility::domain::{FieldKey, MeshKey};
+use utility::domain::FieldKey;
 
 use crate::core::access::ScheduleAccess;
 use crate::core::storage::FieldStorage;
 use crate::runtime::slot::FieldSlot;
 use crate::runtime::split::SplitBorrow;
 
-/// Aggregator for every simulation field plus the meshes they're bound to.
+/// Aggregator for every simulation field.
 /// Constructed by sandbox/init code from a cosmo seed; physics crates never
 /// hold a `Pleroma` directly — they reach state via `WorldAccess` from
 /// nexus.
 pub struct Pleroma {
-  meshes: HashMap<MeshKey, Arc<dyn Mesh<3>>>,
   fields: HashMap<FieldKey, FieldSlot>,
 }
 
@@ -33,13 +30,8 @@ impl Default for Pleroma {
 impl Pleroma {
   pub fn new() -> Self {
     Pleroma {
-      meshes: HashMap::new(),
       fields: HashMap::new(),
     }
-  }
-
-  pub fn register_mesh(&mut self, key: MeshKey, mesh: Arc<dyn Mesh<3>>) {
-    self.meshes.insert(key, mesh);
   }
 
   /// Register a field. The concrete `S` is captured in the slot's TypeId
@@ -93,14 +85,9 @@ impl Pleroma {
     ScheduleAccess {
       inner: SplitBorrow {
         fields: &self.fields as *const _,
-        meshes: &self.meshes as *const _,
         _phantom: PhantomData,
       },
     }
-  }
-
-  pub fn meshes(&self) -> &HashMap<MeshKey, Arc<dyn Mesh<3>>> {
-    &self.meshes
   }
 
   /// Cell count of a registered field, without needing to know its concrete

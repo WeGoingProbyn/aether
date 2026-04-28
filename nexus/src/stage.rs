@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use pleroma::prelude::WorldAccess;
+use tessera::world_mesh::Tessera;
 use utility::{domain::FieldKey, error::AetherResult, thread::pool::Pool};
 
-/// One unit of physics work inside a `Schedule`. Stages declare which fields
+/// One unit of physics work inside a `Nexus`. Stages declare which fields
 /// they read and write; nexus uses those declarations to build a DAG and run
 /// non-conflicting stages in parallel.
 pub trait Stage: Send + Sync {
@@ -14,9 +15,16 @@ pub trait Stage: Send + Sync {
   fn run(&self, ctx: StageContext<'_>) -> AetherResult<()>;
 }
 
-pub struct StageContext<'a> {
+pub struct WorldView<'a> {
+  /// Read-only geometry, topology, couplers, and partition metadata.
+  pub tessera: &'a Tessera,
   /// Typed read/write into pleroma, scoped to the keys the stage declared.
-  pub world: WorldAccess<'a>,
+  pub fields: WorldAccess<'a>,
+}
+
+pub struct StageContext<'a> {
+  /// Stage-scoped world view assembled by nexus from tessera + pleroma.
+  pub world: WorldView<'a>,
   /// For inner parallelism (e.g. `continuum::FvmSolver::parallel_step`).
   pub pool: &'a Pool,
   /// Time step picked by the integration driver.

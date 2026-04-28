@@ -1,0 +1,12 @@
+[package]
+name = "aether"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+utility = { path = "../utility" }
+tessera = { path = "../tessera" }
+pleroma = { path = "../pleroma" }
+nexus = { path = "../nexus" }
+cosmo = { path = "../cosmo" }

@@ -56,7 +56,7 @@ impl From<usize> for FaceId {
 pub type Point<const D: usize> = Vector<f64, D>;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum FieldKey {
+pub enum FieldName {
   Temperature,
   VelocityX,
   VelocityY,
@@ -74,3 +74,37 @@ pub enum MeshType {
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct MeshKey(MeshType);
+
+impl MeshKey {
+  pub const ATMOSPHERE: MeshKey = MeshKey(MeshType::Atmosphere);
+  pub const SURFACE: MeshKey = MeshKey(MeshType::Surface);
+  pub const MANTLE: MeshKey = MeshKey(MeshType::Mantle);
+
+  pub const fn new(mesh_type: MeshType) -> Self {
+    MeshKey(mesh_type)
+  }
+
+  pub const fn mesh_type(self) -> MeshType {
+    self.0
+  }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct FieldKey {
+  mesh: MeshKey,
+  name: FieldName,
+}
+
+impl FieldKey {
+  pub const fn new(mesh: MeshKey, name: FieldName) -> Self {
+    Self { mesh, name }
+  }
+
+  pub const fn mesh(self) -> MeshKey {
+    self.mesh
+  }
+
+  pub const fn name(self) -> FieldName {
+    self.name
+  }
+}

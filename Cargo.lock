@@ -11,6 +11,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether"
+version = "0.1.0"
+dependencies = [
+ "cosmo",
+ "nexus",
+ "pleroma",
+ "tessera",
+ "utility",
+]
+
+[[package]]
 name = "continuum"
 version = "0.1.0"
 dependencies = [
@@ -39,6 +50,7 @@ name = "nexus"
 version = "0.1.0"
 dependencies = [
  "pleroma",
+ "tessera",
  "utility",
 ]
 
