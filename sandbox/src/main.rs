@@ -5,6 +5,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use aether::core::{Aether, World};
 use cosmo::factory;
+use eidolon::{
+  export::write_render_frame_vtu,
+  extract::{scalar_component_layer, tessera_debug_frame},
+  ir::{LayerId, MeshRepresentation, Palette, RenderLayer, RenderMeshId},
+};
 use nexus::{
   FieldKey, FieldName, FieldStorage, MeshKey, Nexus, SoaField, Stage,
   StageContext, WorldId,
@@ -111,7 +116,7 @@ fn main() -> AetherResult<()> {
 
   let angular_dims = [4, 4];
   let surface_radial_layers = 2;
-  let atmosphere_radial_layers = 3;
+  let atmosphere_radial_layers = 10;
 
   let surface_mesh = Arc::new(CubeSphere::shell(
     CubeSphereShellSpec::uniform(
@@ -169,6 +174,39 @@ fn main() -> AetherResult<()> {
   let mut aether = Aether::new(worlds, Pool::default());
   aether.step(60.0)?;
   aether.step(20.0)?;
+
+  let world = aether
+    .world(world_id)
+    .expect("sandbox world should still be registered");
+  let mut frame = tessera_debug_frame(0, 80.0, world.id(), world.tessera());
+  if let Some(surface_temperature) =
+    world.pleroma().read::<SoaField<1>>(SURFACE_TEMPERATURE)
+  {
+    let target = RenderMeshId {
+      world: world.id(),
+      mesh: MeshKey::SURFACE,
+      representation: MeshRepresentation::BoundaryFaces,
+    };
+    let mut layer = scalar_component_layer(
+      LayerId("surface_temperature"),
+      "surface_temperature",
+      target,
+      SURFACE_TEMPERATURE,
+      surface_temperature,
+      0,
+    );
+    layer.palette = Palette::thermal();
+    frame.worlds[0].layers.push(RenderLayer::Scalar(layer));
+  }
+
+  let written = write_render_frame_vtu(&frame, "output/eidolon")?;
+  info!(
+    "eidolon wrote {} debug VTK files to output/eidolon",
+    written.len()
+  );
+  for path in written {
+    info!("eidolon debug VTK: {}", path.display());
+  }
 
   Profiler::print(&mut LogWriter::new(Level::Info));
   Ok(())

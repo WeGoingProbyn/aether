@@ -9,6 +9,9 @@ pub use utility::domain::{CellId, FaceId, Point};
 
 pub trait CellGeometry<const D: usize>: Send + Sync {
   fn cell_centroid(&self, cell: CellId) -> &Point<D>;
+  fn cell_world_centroid(&self, cell: CellId) -> Point<D> {
+    self.cell_centroid(cell).clone()
+  }
   fn cell_volume(&self, cell: CellId) -> f64;
   fn cell_metrics(&self, cell: CellId) -> &CellMetrics<D>;
   fn cell_count(&self) -> usize;
@@ -16,6 +19,12 @@ pub trait CellGeometry<const D: usize>: Send + Sync {
 
 pub trait FaceGeometry<const D: usize>: Send + Sync {
   fn face_centroid(&self, face: FaceId) -> &Point<D>;
+  fn face_world_centroid(&self, face: FaceId) -> Point<D> {
+    self.face_centroid(face).clone()
+  }
+  fn face_world_vertices(&self, _face: FaceId) -> Option<Vec<Point<D>>> {
+    None
+  }
   fn face_area_vector(&self, face: FaceId) -> Vector<f64, D>;
   fn face_area(&self, face: FaceId) -> f64;
   fn face_metrics(&self, face: FaceId) -> &FaceMetrics<D>;

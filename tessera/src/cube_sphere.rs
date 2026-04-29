@@ -219,7 +219,7 @@ impl GeometryMap<2, 3> for GnomonicPanel {
 
   /// ∂v_local/∂ξ = (sec²ξ / g^(3/2)) · ( 1 + tan²η,  -tan ξ · tan η,  -tan ξ)
   /// ∂v_local/∂η = (sec²η / g^(3/2)) · (-tan ξ · tan η,  1 + tan²ξ,  -tan η)  
-  fn jacobian(&self, comp: &Point<2>) -> Matrix<f64, 2, 3> {
+  fn jacobian(&self, _: &Point<2>) -> Matrix<f64, 2, 3> {
     unimplemented!()
   }
 
@@ -437,6 +437,30 @@ fn axis_of(av: &Vector<f64, 3>) -> usize {
   }
 }
 
+fn local_face_axis_and_indices(
+  dims: [usize; 3],
+  face: FaceId,
+) -> (usize, [usize; 3]) {
+  let mut local = face.index();
+  for axis in 0..3 {
+    let count = StructuredBlock::<3>::face_count_for_axis(&dims, axis);
+    if local < count {
+      return (axis, StructuredBlock::<3>::face_indices(&dims, axis, local));
+    }
+    local -= count;
+  }
+  panic!("face {} is out of bounds for dims {:?}", face.index(), dims);
+}
+
+fn other_axes(axis: usize) -> [usize; 2] {
+  match axis {
+    0 => [1, 2],
+    1 => [0, 2],
+    2 => [0, 1],
+    _ => unreachable!(),
+  }
+}
+
 /// Fixed slot for each panel in the `CubeSphere::panels` array.
 fn panel_index(id: PanelId) -> usize {
   match id {
@@ -472,6 +496,7 @@ const PANEL_ORDER: [PanelId; 6] = [
 pub struct CubeSphere {
   panels: [StructuredBlock<3>; 6],
   dims: [usize; 3],
+  axis_edges: [Vec<f64>; 3],
   cells_per_panel: usize,
 
   // Each global face references one panel's local face for its geometry.
@@ -695,6 +720,7 @@ impl CubeSphere {
     CubeSphere {
       panels,
       dims,
+      axis_edges: [xi_edges, eta_edges, radial_edges],
       cells_per_panel,
       face_panel,
       face_local,
@@ -722,6 +748,37 @@ impl CubeSphere {
     let panel_id = PANEL_ORDER[panel_idx];
     GnomonicShellPanel::new(panel_id)
       .to_physical(self.panels[panel_idx].cell_centroid(local))
+  }
+
+  /// World-space centroid of `face`. Cube-sphere `face_centroid` returns
+  /// computational `(ξ, η, r)`; this projects through the owning panel's
+  /// gnomonic map to give an actual `(x, y, z)`.
+  pub fn face_world_centroid(&self, face: FaceId) -> Point<3> {
+    let (panel_idx, local) = self.face_to_panel_index(face);
+    let panel_id = PANEL_ORDER[panel_idx];
+    GnomonicShellPanel::new(panel_id)
+      .to_physical(self.panels[panel_idx].face_centroid(local))
+  }
+
+  /// World-space vertices of the face. Faces are quadrilateral for the 3D
+  /// shell; callers can triangulate `[0, 1, 2]` and `[0, 2, 3]`.
+  pub fn face_world_vertices(&self, face: FaceId) -> Vec<Point<3>> {
+    let (panel_idx, local) = self.face_to_panel_index(face);
+    let panel_id = PANEL_ORDER[panel_idx];
+    let (axis, ijk) = local_face_axis_and_indices(self.dims, local);
+    let other_axes = other_axes(axis);
+    let a = other_axes[0];
+    let b = other_axes[1];
+
+    let mut corners = Vec::with_capacity(4);
+    for (edge_a, edge_b) in [(0, 0), (1, 0), (1, 1), (0, 1)] {
+      let mut comp = [0.0; 3];
+      comp[axis] = self.axis_edges[axis][ijk[axis]];
+      comp[a] = self.axis_edges[a][ijk[a] + edge_a];
+      comp[b] = self.axis_edges[b][ijk[b] + edge_b];
+      corners.push(GnomonicShellPanel::new(panel_id).to_physical(&comp.into()));
+    }
+    corners
   }
 
   /// Build a per-cell radial gravity field — `g · (-r̂)` evaluated at each
@@ -787,9 +844,14 @@ impl CubeSphere {
     )
   }
 
-  fn face_to_panel(&self, face: FaceId) -> (&StructuredBlock<3>, FaceId) {
+  fn face_to_panel_index(&self, face: FaceId) -> (usize, FaceId) {
     let p = self.face_panel[face.index()] as usize;
-    (&self.panels[p], self.face_local[face.index()])
+    (p, self.face_local[face.index()])
+  }
+
+  fn face_to_panel(&self, face: FaceId) -> (&StructuredBlock<3>, FaceId) {
+    let (p, local) = self.face_to_panel_index(face);
+    (&self.panels[p], local)
   }
 }
 
@@ -808,6 +870,9 @@ impl CellGeometry<3> for CubeSphere {
   }
   fn cell_count(&self) -> usize {
     6 * self.cells_per_panel
+  }
+  fn cell_world_centroid(&self, cell: CellId) -> Point<3> {
+    CubeSphere::cell_world_centroid(self, cell)
   }
 }
 
@@ -829,6 +894,12 @@ impl FaceGeometry<3> for CubeSphere {
   }
   fn face_count(&self) -> usize {
     self.face_panel.len()
+  }
+  fn face_world_centroid(&self, face: FaceId) -> Point<3> {
+    CubeSphere::face_world_centroid(self, face)
+  }
+  fn face_world_vertices(&self, face: FaceId) -> Option<Vec<Point<3>>> {
+    Some(CubeSphere::face_world_vertices(self, face))
   }
 }
 

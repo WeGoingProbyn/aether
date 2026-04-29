@@ -40,6 +40,11 @@ dependencies = [
 [[package]]
 name = "eidolon"
 version = "0.1.0"
+dependencies = [
+ "pleroma",
+ "tessera",
+ "utility",
+]
 
 [[package]]
 name = "gravitas"
@@ -86,6 +91,7 @@ version = "0.1.0"
 dependencies = [
  "aether",
  "cosmo",
+ "eidolon",
  "nexus",
  "pleroma",
  "tessera",

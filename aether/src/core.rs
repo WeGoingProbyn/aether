@@ -83,4 +83,12 @@ impl Aether {
     }
     Ok(())
   }
+
+  pub fn world(&self, id: WorldId) -> Option<&World> {
+    self.worlds.get(&id)
+  }
+
+  pub fn worlds(&self) -> impl Iterator<Item = &World> {
+    self.worlds.values()
+  }
 }
