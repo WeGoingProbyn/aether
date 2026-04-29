@@ -15,7 +15,7 @@ use nexus::{
   StageContext, WorldId,
 };
 use pleroma::Pleroma;
-use syzygy::ScalarRelaxation;
+use syzygy::ScalarInterfaceFlux;
 use tessera::{
   coupling::MeshCoupler,
   cube_sphere::{CubeSphere, CubeSphereShellSpec},
@@ -36,6 +36,8 @@ const SURFACE_TEMPERATURE: FieldKey =
   FieldKey::new(MeshKey::SURFACE, FieldName::Temperature);
 const ATMOSPHERE_TEMPERATURE: FieldKey =
   FieldKey::new(MeshKey::ATMOSPHERE, FieldName::Temperature);
+const ATMOSPHERE_TEMPERATURE_TENDENCY: FieldKey =
+  FieldKey::new(MeshKey::ATMOSPHERE, FieldName::TemperatureTendency);
 
 struct DummySurfaceHeating {
   writes: [FieldKey; 1],
@@ -166,17 +168,23 @@ fn main() -> AetherResult<()> {
   );
   pleroma.register_field(
     ATMOSPHERE_TEMPERATURE,
+    SoaField::<1>::from_fn(atmosphere_cell_count, |_| [260.0]),
+  );
+  pleroma.register_field(
+    ATMOSPHERE_TEMPERATURE_TENDENCY,
     SoaField::<1>::zeros(atmosphere_cell_count),
   );
 
   let mut nexus = Nexus::new();
   nexus.add(DummySurfaceHeating::new());
-  nexus.add(ScalarRelaxation::new(
+  nexus.add(ScalarInterfaceFlux::from_coupler(
+    &tessera,
     radial_coupler_index,
     SURFACE_TEMPERATURE,
     ATMOSPHERE_TEMPERATURE,
+    ATMOSPHERE_TEMPERATURE_TENDENCY,
     0.01,
-  ));
+  )?);
   let compiled_nexus = nexus.build(&pleroma)?;
 
   let world_id = WorldId(0);
@@ -227,6 +235,26 @@ fn main() -> AetherResult<()> {
       target,
       ATMOSPHERE_TEMPERATURE,
       atmosphere_temperature,
+      0,
+    );
+    layer.palette = Palette::thermal();
+    frame.worlds[0].layers.push(RenderLayer::Scalar(layer));
+  }
+  if let Some(atmosphere_temperature_tendency) = world
+    .pleroma()
+    .read::<SoaField<1>>(ATMOSPHERE_TEMPERATURE_TENDENCY)
+  {
+    let target = RenderMeshId {
+      world: world.id(),
+      mesh: MeshKey::ATMOSPHERE,
+      representation: MeshRepresentation::BoundaryFaces,
+    };
+    let mut layer = scalar_component_layer(
+      LayerId("atmosphere_temperature_tendency"),
+      "atmosphere_temperature_tendency",
+      target,
+      ATMOSPHERE_TEMPERATURE_TENDENCY,
+      atmosphere_temperature_tendency,
       0,
     );
     layer.palette = Palette::thermal();

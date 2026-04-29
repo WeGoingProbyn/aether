@@ -61,6 +61,7 @@ pub struct WorldId(pub usize);
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum FieldName {
   Temperature,
+  TemperatureTendency,
   VelocityX,
   VelocityY,
   VelocityZ,

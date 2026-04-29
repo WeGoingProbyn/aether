@@ -10,35 +10,38 @@ use utility::{
 
 use crate::{error::SyzygyError, stencil::CouplingStencil};
 
-/// Minimal scalar coupling law for validating cross-mesh data flow.
+/// Computes a target-side scalar tendency from an interface stencil.
 ///
-/// For every stencil entry, this relaxes the target cell toward the source
-/// cell:
+/// The stage reads a source scalar field and a target scalar field, then
+/// overwrites a target-mesh tendency field:
 ///
-/// `target += rate_per_second * dt * (source - target)`
+/// `tendency += conductance * weight * area / distance * (source - target)`
 ///
-/// This is not intended to be a final physical law; it is the first Syzygy
-/// stage shape that proves ownership and scheduling.
-pub struct ScalarRelaxation {
+/// This keeps Syzygy responsible for cross-physics exchange terms without
+/// directly mutating the target prognostic state.
+pub struct ScalarInterfaceFlux {
   stencil: CouplingStencil,
   source: FieldKey,
   target: FieldKey,
-  rate_per_second: f64,
+  tendency: FieldKey,
+  conductance: f64,
   reads: [FieldKey; 2],
   writes: [FieldKey; 1],
 }
 
-impl ScalarRelaxation {
+impl ScalarInterfaceFlux {
   pub fn new(
     stencil: CouplingStencil,
     source: FieldKey,
     target: FieldKey,
-    rate_per_second: f64,
+    tendency: FieldKey,
+    conductance: f64,
   ) -> AetherResult<Self> {
-    validate_rate(rate_per_second)?;
+    validate_conductance(conductance)?;
     validate_field_meshes(
-      source.mesh(),
-      target.mesh(),
+      source,
+      target,
+      tendency,
       stencil.source_mesh(),
       stencil.target_mesh(),
     )?;
@@ -46,9 +49,10 @@ impl ScalarRelaxation {
       stencil,
       source,
       target,
-      rate_per_second,
+      tendency,
+      conductance,
       reads: [source, target],
-      writes: [target],
+      writes: [tendency],
     })
   }
 
@@ -57,7 +61,8 @@ impl ScalarRelaxation {
     coupler_index: usize,
     source: FieldKey,
     target: FieldKey,
-    rate_per_second: f64,
+    tendency: FieldKey,
+    conductance: f64,
   ) -> AetherResult<Self> {
     let stencil = CouplingStencil::from_tessera_coupler(
       tessera,
@@ -65,7 +70,7 @@ impl ScalarRelaxation {
       source.mesh(),
       target.mesh(),
     )?;
-    Self::new(stencil, source, target, rate_per_second)
+    Self::new(stencil, source, target, tendency, conductance)
   }
 
   pub fn stencil(&self) -> &CouplingStencil {
@@ -80,14 +85,18 @@ impl ScalarRelaxation {
     self.target
   }
 
-  pub fn rate_per_second(&self) -> f64 {
-    self.rate_per_second
+  pub fn tendency(&self) -> FieldKey {
+    self.tendency
+  }
+
+  pub fn conductance(&self) -> f64 {
+    self.conductance
   }
 }
 
-impl Stage for ScalarRelaxation {
+impl Stage for ScalarInterfaceFlux {
   fn name(&self) -> &'static str {
-    "syzygy_scalar_relaxation"
+    "syzygy_scalar_interface_flux"
   }
 
   fn reads(&self) -> &[FieldKey] {
@@ -99,8 +108,7 @@ impl Stage for ScalarRelaxation {
   }
 
   fn run(&mut self, mut ctx: StageContext<'_>) -> AetherResult<()> {
-    let coefficient = self.rate_per_second * ctx.world.dt;
-    let updates = {
+    let tendencies = {
       let source: &SoaField<1> =
         ctx.world.fields.read(self.source).ok_or_else(|| {
           AetherError::new(SyzygyError::MissingReadField)
@@ -112,59 +120,73 @@ impl Stage for ScalarRelaxation {
             .context(format!("{:?}", self.target))
         })?;
 
-      proposed_updates(&self.stencil, source, target, coefficient)?
+      compute_tendencies(&self.stencil, source, target, self.conductance)?
     };
 
-    let target: &mut SoaField<1> =
-      ctx.world.fields.write(self.target).ok_or_else(|| {
+    let tendency: &mut SoaField<1> =
+      ctx.world.fields.write(self.tendency).ok_or_else(|| {
         AetherError::new(SyzygyError::MissingWriteField)
-          .context(format!("{:?}", self.target))
+          .context(format!("{:?}", self.tendency))
       })?;
-    for (cell, value) in updates {
-      target.write(cell, &[value]);
+
+    if tendency.len() != tendencies.len() {
+      return Err(AetherError::new(SyzygyError::CellOutOfBounds).context(
+        format!(
+          "tendency field length {} does not match target field length {}",
+          tendency.len(),
+          tendencies.len()
+        ),
+      ));
+    }
+
+    for (cell, value) in tendencies.into_iter().enumerate() {
+      tendency.write(CellId::from(cell), &[value]);
     }
 
     Ok(())
   }
 }
 
-fn validate_rate(rate_per_second: f64) -> AetherResult<()> {
-  if rate_per_second.is_finite() {
+fn validate_conductance(conductance: f64) -> AetherResult<()> {
+  if conductance.is_finite() {
     Ok(())
   } else {
     Err(
-      AetherError::new(SyzygyError::InvalidRate)
-        .context(format!("rate_per_second = {}", rate_per_second)),
+      AetherError::new(SyzygyError::InvalidConductance)
+        .context(format!("conductance = {}", conductance)),
     )
   }
 }
 
 fn validate_field_meshes(
-  source: utility::domain::MeshKey,
-  target: utility::domain::MeshKey,
+  source: FieldKey,
+  target: FieldKey,
+  tendency: FieldKey,
   stencil_source: utility::domain::MeshKey,
   stencil_target: utility::domain::MeshKey,
 ) -> AetherResult<()> {
-  if source == stencil_source && target == stencil_target {
+  if source.mesh() == stencil_source
+    && target.mesh() == stencil_target
+    && tendency.mesh() == stencil_target
+  {
     Ok(())
   } else {
     Err(
       AetherError::new(SyzygyError::FieldMeshMismatch).context(format!(
-        "source {:?}, target {:?}, stencil {:?} -> {:?}",
-        source, target, stencil_source, stencil_target
+        "source {:?}, target {:?}, tendency {:?}, stencil {:?} -> {:?}",
+        source, target, tendency, stencil_source, stencil_target
       )),
     )
   }
 }
 
-fn proposed_updates(
+fn compute_tendencies(
   stencil: &CouplingStencil,
   source: &SoaField<1>,
   target: &SoaField<1>,
-  coefficient: f64,
-) -> AetherResult<Vec<(CellId, f64)>> {
-  let mut sums = vec![0.0; target.len()];
-  let mut weights = vec![0.0; target.len()];
+  conductance: f64,
+) -> AetherResult<Vec<f64>> {
+  let mut tendencies = vec![0.0; target.len()];
 
   for entry in stencil.entries() {
     ensure_cell_in_bounds(entry.source_cell, source.len(), "source")?;
@@ -172,22 +194,13 @@ fn proposed_updates(
 
     let source_value = source.state(entry.source_cell).as_state()[0];
     let target_value = target.state(entry.target_cell).as_state()[0];
-    let proposed = target_value + coefficient * (source_value - target_value);
-    let index = entry.target_cell.index();
-    sums[index] += proposed * entry.weight;
-    weights[index] += entry.weight;
+    let distance = entry.distance.max(f64::EPSILON);
+    let exchange = conductance * entry.weight * entry.area / distance
+      * (source_value - target_value);
+    tendencies[entry.target_cell.index()] += exchange;
   }
 
-  Ok(
-    sums
-      .into_iter()
-      .zip(weights)
-      .enumerate()
-      .filter_map(|(index, (sum, weight))| {
-        (weight > 0.0).then(|| (CellId::from(index), sum / weight))
-      })
-      .collect(),
-  )
+  Ok(tendencies)
 }
 
 fn ensure_cell_in_bounds(
@@ -215,8 +228,8 @@ mod tests {
 
   use nexus::{FieldName, MeshKey, Nexus, Pleroma, WorldId};
   use tessera::{
-    coupling::MeshCoupler, cube_sphere::CubeSphere, geometry::CellGeometry,
-    mesh::Mesh, radial_stack::RadialStackCoupler, world_mesh::Tessera,
+    cube_sphere::CubeSphere, geometry::CellGeometry, mesh::Mesh,
+    radial_stack::RadialStackCoupler, world_mesh::Tessera,
   };
   use utility::thread::pool::Pool;
 
@@ -226,9 +239,11 @@ mod tests {
     FieldKey::new(MeshKey::SURFACE, FieldName::Temperature);
   const ATMOSPHERE_TEMPERATURE: FieldKey =
     FieldKey::new(MeshKey::ATMOSPHERE, FieldName::Temperature);
+  const ATMOSPHERE_TEMPERATURE_TENDENCY: FieldKey =
+    FieldKey::new(MeshKey::ATMOSPHERE, FieldName::TemperatureTendency);
 
   #[test]
-  fn scalar_relaxation_uses_tessera_coupler_geometry() {
+  fn scalar_interface_flux_writes_target_tendency_without_mutating_target() {
     let angular_dims = [2, 2];
     let surface_layers = 2;
     let atmosphere_layers = 2;
@@ -250,11 +265,11 @@ mod tests {
     let atmosphere_for_registry: Arc<dyn Mesh<3>> = atmosphere;
     tessera.register_mesh(MeshKey::SURFACE, surface_for_registry);
     tessera.register_mesh(MeshKey::ATMOSPHERE, atmosphere_for_registry);
-    let coupler =
-      RadialStackCoupler::new(angular_dims, surface_layers, atmosphere_layers);
-    let pair_count = coupler.pairs().len();
-    let coupler_index =
-      tessera.add_coupler(MeshKey::SURFACE, MeshKey::ATMOSPHERE, coupler);
+    let coupler_index = tessera.add_coupler(
+      MeshKey::SURFACE,
+      MeshKey::ATMOSPHERE,
+      RadialStackCoupler::new(angular_dims, surface_layers, atmosphere_layers),
+    );
 
     let mut pleroma = Pleroma::new();
     pleroma.register_field(
@@ -263,45 +278,51 @@ mod tests {
     );
     pleroma.register_field(
       ATMOSPHERE_TEMPERATURE,
-      SoaField::<1>::zeros(atmosphere_cell_count),
+      SoaField::<1>::from_fn(atmosphere_cell_count, |_| [250.0]),
+    );
+    pleroma.register_field(
+      ATMOSPHERE_TEMPERATURE_TENDENCY,
+      SoaField::<1>::from_fn(atmosphere_cell_count, |_| [-1.0]),
     );
 
     let mut nexus = Nexus::new();
     nexus.add(
-      ScalarRelaxation::from_coupler(
+      ScalarInterfaceFlux::from_coupler(
         &tessera,
         coupler_index,
         SURFACE_TEMPERATURE,
         ATMOSPHERE_TEMPERATURE,
-        1.0,
+        ATMOSPHERE_TEMPERATURE_TENDENCY,
+        0.5,
       )
       .unwrap(),
     );
     let mut compiled = nexus.build(&pleroma).unwrap();
     compiled
-      .tick(WorldId(0), &tessera, &mut pleroma, &Pool::default(), 0.5)
+      .tick(WorldId(0), &tessera, &mut pleroma, &Pool::default(), 1.0)
       .unwrap();
 
     let atmosphere: &SoaField<1> =
       pleroma.read(ATMOSPHERE_TEMPERATURE).unwrap();
-    let stencil = CouplingStencil::from_tessera_coupler(
-      &tessera,
-      coupler_index,
-      MeshKey::SURFACE,
-      MeshKey::ATMOSPHERE,
-    )
-    .unwrap();
-    let touched = stencil
-      .entries()
-      .iter()
-      .filter(|entry| {
-        atmosphere
-          .state(entry.target_cell)
-          .as_state()
-          .first()
-          .is_some_and(|value| (*value - 150.0).abs() < 1e-10)
-      })
-      .count();
-    assert_eq!(touched, pair_count);
+    let tendency: &SoaField<1> =
+      pleroma.read(ATMOSPHERE_TEMPERATURE_TENDENCY).unwrap();
+
+    assert_eq!(atmosphere.state(CellId::from(0)).as_state(), &[250.0]);
+    assert!(
+      tendency
+        .component(0)
+        .as_ref()
+        .iter()
+        .any(|value| *value > 0.0),
+      "warm surface should produce positive atmosphere-side tendencies"
+    );
+    assert!(
+      tendency
+        .component(0)
+        .as_ref()
+        .iter()
+        .any(|value| *value == 0.0),
+      "uncoupled atmosphere cells should be reset to zero"
+    );
   }
 }

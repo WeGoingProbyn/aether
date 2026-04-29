@@ -53,6 +53,7 @@ pub struct CoupledFace {
   pub area: f64,
   pub area_a: f64,
   pub area_b: f64,
+  pub distance: f64,
 }
 
 impl CoupledFace {
@@ -90,6 +91,7 @@ impl CoupledFace {
     let cell_a = mesh_a.cell_world_centroid(owner_a);
     let cell_b = mesh_b.cell_world_centroid(owner_b);
     let delta = &cell_b - &cell_a;
+    let distance = delta.magnitude();
     let normal_a_to_b =
       unit_or_fallback(delta, mesh_a.face_area_vector(pair.a()));
     let area_a = mesh_a.face_metrics(pair.a()).phys_area;
@@ -107,6 +109,7 @@ impl CoupledFace {
       area: 0.5 * (area_a + area_b),
       area_a,
       area_b,
+      distance,
     }
   }
 }
