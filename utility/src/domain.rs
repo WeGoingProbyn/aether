@@ -58,6 +58,9 @@ pub type Point<const D: usize> = Vector<f64, D>;
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct WorldId(pub usize);
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct SystemId(pub usize);
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum FieldName {
   Temperature,

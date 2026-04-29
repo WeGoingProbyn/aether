@@ -16,10 +16,12 @@ dependencies = [
 name = "aether"
 version = "0.1.0"
 dependencies = [
+ "aer",
  "cosmo",
  "nexus",
  "pleroma",
  "syzygy",
+ "terra",
  "tessera",
  "utility",
 ]
@@ -52,6 +54,9 @@ dependencies = [
 [[package]]
 name = "gravitas"
 version = "0.1.0"
+dependencies = [
+ "tempus",
+]
 
 [[package]]
 name = "nexus"
@@ -98,6 +103,7 @@ dependencies = [
  "eidolon",
  "nexus",
  "pleroma",
+ "terra",
  "tessera",
  "utility",
 ]
@@ -123,8 +129,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tempus"
+version = "0.1.0"
+
+[[package]]
 name = "terra"
 version = "0.1.0"
+dependencies = [
+ "nexus",
+ "tessera",
+ "utility",
+]
 
 [[package]]
 name = "tessera"

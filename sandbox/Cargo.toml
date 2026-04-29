@@ -13,3 +13,4 @@ aer = { path = "../aer" }
 cosmo = { path = "../cosmo" }
 nexus = { path = "../nexus" }
 eidolon = { path = "../eidolon" }
+terra = { path = "../terra" }

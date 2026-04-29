@@ -4,7 +4,7 @@ use cosmo::kind::{BodyKind, CelestialBody};
 use nexus::{AtmosphereConstants, CompiledNexus, WorldConstants, WorldId};
 use pleroma::Pleroma;
 use tessera::world_mesh::Tessera;
-use utility::{error::AetherResult, thread::pool::Pool};
+use utility::{domain::SystemId, error::AetherResult, thread::pool::Pool};
 
 /// Runtime state for one simulated body.
 pub struct World {
@@ -123,28 +123,116 @@ fn atmosphere_constants_from_seed(
   }
 }
 
-pub struct Aether {
+/// Runtime state for one generated star/planet system.
+///
+/// System-level physics such as N-body gravity belongs here. World-local
+/// physics still lives inside each `World` and is ticked after the system
+/// layer.
+pub struct System {
+  id: SystemId,
   worlds: HashMap<WorldId, World>,
-  pool: Pool,
 }
 
-impl Aether {
-  pub fn new(worlds: HashMap<WorldId, World>, pool: Pool) -> Self {
-    Self { worlds, pool }
+impl System {
+  pub fn new(id: SystemId, worlds: HashMap<WorldId, World>) -> Self {
+    Self { id, worlds }
   }
 
-  pub fn step(&mut self, dt: f64) -> AetherResult<()> {
-    for world in self.worlds.values_mut() {
-      world.tick(&self.pool, dt)?;
-    }
-    Ok(())
+  pub fn single(id: SystemId, world: World) -> Self {
+    let mut worlds = HashMap::new();
+    worlds.insert(world.id(), world);
+    Self::new(id, worlds)
+  }
+
+  pub fn id(&self) -> SystemId {
+    self.id
+  }
+
+  pub fn insert_world(&mut self, world: World) -> Option<World> {
+    self.worlds.insert(world.id(), world)
   }
 
   pub fn world(&self, id: WorldId) -> Option<&World> {
     self.worlds.get(&id)
   }
 
+  pub fn world_mut(&mut self, id: WorldId) -> Option<&mut World> {
+    self.worlds.get_mut(&id)
+  }
+
   pub fn worlds(&self) -> impl Iterator<Item = &World> {
     self.worlds.values()
+  }
+
+  pub fn worlds_mut(&mut self) -> impl Iterator<Item = &mut World> {
+    self.worlds.values_mut()
+  }
+
+  pub fn tick(&mut self, pool: &Pool, dt: f64) -> AetherResult<()> {
+    // Future system-level nexus/resources run here before world-local physics.
+    for world in self.worlds.values_mut() {
+      world.tick(pool, dt)?;
+    }
+    Ok(())
+  }
+}
+
+pub struct Aether {
+  systems: HashMap<SystemId, System>,
+  pool: Pool,
+}
+
+impl Aether {
+  pub fn new(systems: HashMap<SystemId, System>, pool: Pool) -> Self {
+    Self { systems, pool }
+  }
+
+  pub fn from_worlds(worlds: HashMap<WorldId, World>, pool: Pool) -> Self {
+    let mut systems = HashMap::new();
+    systems.insert(SystemId(0), System::new(SystemId(0), worlds));
+    Self::new(systems, pool)
+  }
+
+  pub fn step(&mut self, dt: f64) -> AetherResult<()> {
+    for system in self.systems.values_mut() {
+      system.tick(&self.pool, dt)?;
+    }
+    Ok(())
+  }
+
+  pub fn system(&self, id: SystemId) -> Option<&System> {
+    self.systems.get(&id)
+  }
+
+  pub fn system_mut(&mut self, id: SystemId) -> Option<&mut System> {
+    self.systems.get_mut(&id)
+  }
+
+  pub fn systems(&self) -> impl Iterator<Item = &System> {
+    self.systems.values()
+  }
+
+  pub fn systems_mut(&mut self) -> impl Iterator<Item = &mut System> {
+    self.systems.values_mut()
+  }
+
+  pub fn insert_system(&mut self, system: System) -> Option<System> {
+    self.systems.insert(system.id(), system)
+  }
+
+  pub fn world(&self, id: WorldId) -> Option<&World> {
+    self.systems.values().find_map(|system| system.world(id))
+  }
+
+  pub fn world_in_system(
+    &self,
+    system_id: SystemId,
+    world_id: WorldId,
+  ) -> Option<&World> {
+    self.system(system_id)?.world(world_id)
+  }
+
+  pub fn worlds(&self) -> impl Iterator<Item = &World> {
+    self.systems.values().flat_map(System::worlds)
   }
 }

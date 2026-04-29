@@ -10,9 +10,11 @@ members = [
   "nexus",
   "eidolon",
   "terra",
+  "tempus",
   "pleroma",
   "tessera",
-  "syzygy", "aether",
+  "syzygy",
+  "aether",
 ]
 
 resolver = "2"

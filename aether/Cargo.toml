@@ -11,3 +11,7 @@ pleroma = { path = "../pleroma" }
 nexus = { path = "../nexus" }
 cosmo = { path = "../cosmo" }
 syzygy = { path = "../syzygy" }
+
+[dev-dependencies]
+aer = { path = "../aer" }
+terra = { path = "../terra" }
