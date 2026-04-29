@@ -62,6 +62,7 @@ pub struct WorldId(pub usize);
 pub enum FieldName {
   Temperature,
   TemperatureTendency,
+  EulerState,
   VelocityX,
   VelocityY,
   VelocityZ,

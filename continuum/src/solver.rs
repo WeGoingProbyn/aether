@@ -5,9 +5,9 @@ use utility::{domain::CellId, profile};
 
 use pleroma::core::storage::FieldStorage;
 
-use tessera::geometry::{CellGeometry, FaceGeometry};
+use tessera::geometry::CellGeometry;
 use tessera::mesh::Mesh;
-use tessera::topology::{FaceConnection, Topology};
+use tessera::topology::FaceConnection;
 
 use crate::{
   boundary::BoundaryRegistry,
@@ -42,6 +42,10 @@ impl SolverConfig {
 
   pub fn dt_max(&self) -> f64 {
     self.dt_max
+  }
+
+  pub fn set_dt_max(&mut self, dt_max: f64) {
+    self.dt_max = dt_max;
   }
 
   pub fn integrator(&self) -> TimeIntegration {
@@ -123,13 +127,17 @@ where
     &self.config
   }
 
+  pub fn config_mut(&mut self) -> &mut SolverConfig {
+    &mut self.config
+  }
+
   pub(crate) fn gather_state_cache<S, G>(
     state: &S,
     geometry: &G,
     cache: &mut Vec<[f64; N]>,
   ) where
     S: FieldStorage<N>,
-    G: CellGeometry<D>,
+    G: CellGeometry<D> + ?Sized,
   {
     let cell_count = geometry.cell_count();
     if cache.len() != cell_count {
@@ -148,7 +156,7 @@ where
     mesh: &G,
   ) -> f64
   where
-    G: CellGeometry<D>,
+    G: Mesh<D> + ?Sized,
   {
     let mut dt_min = config.dt_max;
 
@@ -157,8 +165,8 @@ where
     {
       let speed = law.max_wave_speed(cell_state);
       if speed > 1e-14 {
-        let vol = mesh.cell_volume(CellId::from(i));
-        let dx = vol.powf(1.0 / D as f64);
+        let cell = CellId::from(i);
+        let dx = characteristic_length(mesh, cell);
         let dt_local = config.cfl * dx / speed;
         dt_min = dt_min.min(dt_local);
       }
@@ -177,7 +185,7 @@ where
     bcs: &BoundaryRegistry<D, N>,
   ) where
     S: FieldStorage<N>,
-    M: Mesh<D>,
+    M: Mesh<D> + ?Sized,
   {
     let cell_count = mesh.cell_count();
     debug_assert_eq!(state_cache.len(), cell_count);
@@ -239,15 +247,15 @@ where
     // Divide by volume + add source terms
     for (i, accum_state) in accumulated.iter().enumerate().take(cell_count) {
       let cell = CellId::from(i);
-      let vol = mesh.cell_volume(cell);
       let metrics = mesh.cell_metrics(cell);
+      let vol = metrics.phys_volume;
 
       let source =
         law.source(&state_cache[i], cell, mesh.cell_centroid(cell), metrics);
 
       let mut out = [0.0; N];
       for j in 0..N {
-        out[j] = accum_state[j] / vol + source[j] * metrics.sqrt_metric;
+        out[j] = accum_state[j] / vol + source[j];
       }
 
       residual.write(cell, &out);
@@ -255,11 +263,11 @@ where
   }
 
   #[profile]
-  pub fn compute_dt(
-    &self,
-    state: &impl FieldStorage<N>,
-    mesh: &impl Mesh<D>,
-  ) -> f64 {
+  pub fn compute_dt<S, M>(&self, state: &S, mesh: &M) -> f64
+  where
+    S: FieldStorage<N>,
+    M: Mesh<D> + ?Sized,
+  {
     let mut dt_min = self.config.dt_max;
     let mut cell_state = [0.0; N];
 
@@ -269,8 +277,7 @@ where
 
       let speed = self.law.max_wave_speed(&cell_state);
       if speed > 1e-14 {
-        let vol = mesh.cell_volume(cell);
-        let dx = vol.powf(1.0 / D as f64);
+        let dx = characteristic_length(mesh, cell);
         let dt_local = self.config.cfl * dx / speed;
         dt_min = dt_min.min(dt_local);
       }
@@ -280,14 +287,15 @@ where
   }
 
   #[profile]
-  pub fn compute_residual<S>(
+  pub fn compute_residual<S, M>(
     &self,
     state: &S,
     residual: &mut S,
-    mesh: &impl Mesh<D>,
+    mesh: &M,
     bcs: &BoundaryRegistry<D, N>,
   ) where
     S: FieldStorage<N>,
+    M: Mesh<D> + ?Sized,
   {
     let mut state_cache = Vec::new();
     let mut residual_accum = Vec::new();
@@ -304,13 +312,17 @@ where
   }
 
   #[profile]
-  pub fn step<S: FieldStorage<N>>(
+  pub fn step<S, M>(
     &mut self,
     state: &mut S,
     residual: &mut S,
-    mesh: &(impl CellGeometry<D> + FaceGeometry<D> + Topology),
+    mesh: &M,
     bcs: &BoundaryRegistry<D, N>,
-  ) -> f64 {
+  ) -> f64
+  where
+    S: FieldStorage<N>,
+    M: Mesh<D> + ?Sized,
+  {
     let dt = {
       self.ensure_scratch_slots(1);
       let (law, flux, config, scratch) =
@@ -407,5 +419,23 @@ where
   pub(crate) fn advance_clock(&mut self, dt: f64) {
     self.time += dt;
     self.step += 1;
+  }
+}
+
+fn characteristic_length<const D: usize, M>(mesh: &M, cell: CellId) -> f64
+where
+  M: Mesh<D> + ?Sized,
+{
+  let volume = mesh.cell_metrics(cell).phys_volume;
+  let max_face_area = mesh
+    .cell_faces(cell)
+    .iter()
+    .map(|&face| mesh.face_metrics(face).phys_area)
+    .fold(0.0, f64::max);
+
+  if max_face_area > 0.0 && max_face_area.is_finite() {
+    volume / max_face_area
+  } else {
+    volume.powf(1.0 / D as f64)
   }
 }

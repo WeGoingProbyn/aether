@@ -9,6 +9,8 @@ use utility::{
   thread::pool::Pool,
 };
 
+use crate::constants::WorldConstants;
+
 /// One unit of physics work inside a `Nexus`. Stages declare which fields
 /// they read and write; nexus uses those declarations to build a DAG and run
 /// non-conflicting stages in parallel.
@@ -24,6 +26,8 @@ pub struct WorldView<'a> {
   pub world_id: WorldId,
   /// Read-only geometry, topology, couplers, and partition metadata.
   pub tessera: &'a Tessera,
+  /// Immutable per-world constants derived during world setup.
+  pub constants: &'a WorldConstants,
   /// Typed read/write into pleroma, scoped to the keys the stage declared.
   pub fields: WorldAccess<'a>,
   /// For inner CPU execution policy (e.g. `continuum::cpu::CpuFvmRunner`).

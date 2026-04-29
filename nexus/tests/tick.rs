@@ -6,7 +6,7 @@
 
 use nexus::{
   CellView, FieldKey, FieldName, FieldStorage, MeshKey, Nexus, SoaField, Stage,
-  StageContext, WorldId,
+  StageContext, WorldConstants, WorldId,
 };
 use pleroma::Pleroma;
 use tessera::world_mesh::Tessera;
@@ -109,7 +109,14 @@ fn parallel_independent_writers_both_succeed() {
   let mut compiled = s.build(&world).unwrap();
   assert_eq!(compiled.layer_count(), 1);
   compiled
-    .tick(WorldId(0), &tessera, &mut world, &pool, 0.0)
+    .tick(
+      WorldId(0),
+      &tessera,
+      &WorldConstants::default(),
+      &mut world,
+      &pool,
+      0.0,
+    )
     .unwrap();
 
   let p: &SoaField<N> = world.read(PRESSURE).unwrap();
@@ -147,7 +154,14 @@ fn raw_chain_propagates_value_through_layers() {
   let mut compiled = s.build(&world).unwrap();
   assert_eq!(compiled.layer_count(), 3);
   compiled
-    .tick(WorldId(0), &tessera, &mut world, &pool, 0.0)
+    .tick(
+      WorldId(0),
+      &tessera,
+      &WorldConstants::default(),
+      &mut world,
+      &pool,
+      0.0,
+    )
     .unwrap();
 
   let p: &SoaField<N> = world.read(PRESSURE).unwrap();
@@ -202,6 +216,13 @@ fn stage_errors_surface_through_tick() {
   s.add(Boom);
 
   let mut compiled = s.build(&world).unwrap();
-  let result = compiled.tick(WorldId(0), &tessera, &mut world, &pool, 0.0);
+  let result = compiled.tick(
+    WorldId(0),
+    &tessera,
+    &WorldConstants::default(),
+    &mut world,
+    &pool,
+    0.0,
+  );
   assert!(result.is_err());
 }

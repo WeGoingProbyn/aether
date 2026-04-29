@@ -9,7 +9,7 @@ utility = { path = "../utility" }
 tessera = { path = "../tessera" }
 pleroma = { path = "../pleroma" }
 aether = { path = "../aether" }
+aer = { path = "../aer" }
 cosmo = { path = "../cosmo" }
 nexus = { path = "../nexus" }
 eidolon = { path = "../eidolon" }
-syzygy = { path = "../syzygy" }

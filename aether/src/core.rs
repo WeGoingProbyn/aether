@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use cosmo::kind::CelestialBody;
-use nexus::{CompiledNexus, WorldId};
+use cosmo::kind::{BodyKind, CelestialBody};
+use nexus::{AtmosphereConstants, CompiledNexus, WorldConstants, WorldId};
 use pleroma::Pleroma;
 use tessera::world_mesh::Tessera;
 use utility::{error::AetherResult, thread::pool::Pool};
@@ -10,6 +10,7 @@ use utility::{error::AetherResult, thread::pool::Pool};
 pub struct World {
   id: WorldId,
   seed: CelestialBody,
+  constants: WorldConstants,
   tessera: Tessera,
   pleroma: Pleroma,
   nexus: CompiledNexus,
@@ -23,9 +24,11 @@ impl World {
     pleroma: Pleroma,
     nexus: CompiledNexus,
   ) -> Self {
+    let constants = world_constants_from_seed(&seed);
     Self {
       id,
       seed,
+      constants,
       tessera,
       pleroma,
       nexus,
@@ -38,6 +41,10 @@ impl World {
 
   pub fn seed(&self) -> &CelestialBody {
     &self.seed
+  }
+
+  pub fn constants(&self) -> &WorldConstants {
+    &self.constants
   }
 
   pub fn tessera(&self) -> &Tessera {
@@ -61,9 +68,58 @@ impl World {
   }
 
   pub fn tick(&mut self, pool: &Pool, dt: f64) -> AetherResult<()> {
-    self
-      .nexus
-      .tick(self.id, &self.tessera, &mut self.pleroma, pool, dt)
+    self.nexus.tick(
+      self.id,
+      &self.tessera,
+      &self.constants,
+      &mut self.pleroma,
+      pool,
+      dt,
+    )
+  }
+}
+
+pub fn world_constants_from_seed(seed: &CelestialBody) -> WorldConstants {
+  WorldConstants {
+    mass: seed.mass(),
+    radius: seed.radius(),
+    surface_gravity: seed.surface_gravity(),
+    atmosphere: atmosphere_constants_from_seed(seed),
+  }
+}
+
+fn atmosphere_constants_from_seed(
+  seed: &CelestialBody,
+) -> Option<AtmosphereConstants> {
+  match seed.kind() {
+    BodyKind::RockyBody(body) => {
+      let atmosphere = body.atmosphere.as_ref()?;
+      let properties = atmosphere.properties(body.surface_temperature);
+      Some(AtmosphereConstants {
+        reference_temperature: body.surface_temperature,
+        reference_pressure: body.surface_pressure,
+        gamma: properties.gamma,
+        gas_constant: properties.gas_constant,
+        molar_mass: properties.molar_mass,
+        albedo: atmosphere.albedo,
+        angular_velocity: body.angular_velocity,
+        axial_tilt: body.axial_tilt,
+      })
+    }
+    BodyKind::GasGiant(body) => {
+      let properties = body.atmosphere.properties(body.reference_temperature);
+      Some(AtmosphereConstants {
+        reference_temperature: body.reference_temperature,
+        reference_pressure: body.reference_pressure,
+        gamma: properties.gamma,
+        gas_constant: properties.gas_constant,
+        molar_mass: properties.molar_mass,
+        albedo: body.atmosphere.albedo,
+        angular_velocity: body.angular_velocity,
+        axial_tilt: body.axial_tilt,
+      })
+    }
+    BodyKind::Star(_) => None,
   }
 }
 

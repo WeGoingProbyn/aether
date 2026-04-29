@@ -29,7 +29,10 @@ use utility::domain::WorldId;
 use utility::error::{AetherError, AetherResult, ErrorDomain};
 use utility::thread::pool::Pool;
 
-use crate::stage::{Stage, StageContext, WorldView};
+use crate::{
+  constants::WorldConstants,
+  stage::{Stage, StageContext, WorldView},
+};
 
 /// Stable identifier for a stage inside one `Nexus`. Returned by
 /// `Nexus::add` and used for `before` ordering hints.
@@ -197,6 +200,7 @@ impl CompiledNexus {
     &mut self,
     world_id: WorldId,
     tessera: &Tessera,
+    constants: &WorldConstants,
     pleroma: &mut Pleroma,
     pool: &Pool,
     dt: f64,
@@ -228,6 +232,7 @@ impl CompiledNexus {
           world: WorldView {
             world_id,
             tessera,
+            constants,
             fields: view,
             pool,
             dt,

@@ -10,3 +10,4 @@ tessera = { path = "../tessera" }
 pleroma = { path = "../pleroma" }
 nexus = { path = "../nexus" }
 cosmo = { path = "../cosmo" }
+syzygy = { path = "../syzygy" }

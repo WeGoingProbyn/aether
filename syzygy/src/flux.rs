@@ -226,7 +226,7 @@ fn ensure_cell_in_bounds(
 mod tests {
   use std::sync::Arc;
 
-  use nexus::{FieldName, MeshKey, Nexus, Pleroma, WorldId};
+  use nexus::{FieldName, MeshKey, Nexus, Pleroma, WorldConstants, WorldId};
   use tessera::{
     cube_sphere::CubeSphere, geometry::CellGeometry, mesh::Mesh,
     radial_stack::RadialStackCoupler, world_mesh::Tessera,
@@ -299,7 +299,14 @@ mod tests {
     );
     let mut compiled = nexus.build(&pleroma).unwrap();
     compiled
-      .tick(WorldId(0), &tessera, &mut pleroma, &Pool::default(), 1.0)
+      .tick(
+        WorldId(0),
+        &tessera,
+        &WorldConstants::default(),
+        &mut pleroma,
+        &Pool::default(),
+        1.0,
+      )
       .unwrap();
 
     let atmosphere: &SoaField<1> =

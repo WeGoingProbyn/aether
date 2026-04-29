@@ -7,6 +7,8 @@ name = "aer"
 version = "0.1.0"
 dependencies = [
  "continuum",
+ "nexus",
+ "tessera",
  "utility",
 ]
 
@@ -17,6 +19,7 @@ dependencies = [
  "cosmo",
  "nexus",
  "pleroma",
+ "syzygy",
  "tessera",
  "utility",
 ]
@@ -89,12 +92,12 @@ dependencies = [
 name = "sandbox"
 version = "0.1.0"
 dependencies = [
+ "aer",
  "aether",
  "cosmo",
  "eidolon",
  "nexus",
  "pleroma",
- "syzygy",
  "tessera",
  "utility",
 ]

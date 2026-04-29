@@ -1,31 +1,21 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
-use aether::core::{Aether, World};
-use cosmo::factory;
+use aer::{AtmosphereModel, AtmosphereShellLayout, AtmosphereSpec};
+use aether::{core::Aether, factory::WorldFactory};
+use cosmo::factory as cosmo_factory;
 use eidolon::{
   export::write_render_frame_vtu,
   extract::{scalar_component_layer, tessera_debug_frame},
   ir::{LayerId, MeshRepresentation, Palette, RenderLayer, RenderMeshId},
 };
 use nexus::{
-  FieldKey, FieldName, FieldStorage, MeshKey, Nexus, SoaField, Stage,
-  StageContext, WorldId,
+  FieldKey, FieldName, FieldStorage, MeshKey, SoaField, Stage, StageContext,
+  WorldId,
 };
-use pleroma::Pleroma;
-use syzygy::ScalarInterfaceFlux;
-use tessera::{
-  coupling::MeshCoupler,
-  cube_sphere::{CubeSphere, CubeSphereShellSpec},
-  geometry::CellGeometry,
-  mesh::Mesh,
-  radial_stack::RadialStackCoupler,
-  world_mesh::Tessera,
-};
-
-use utility::domain::{BoundaryTag, CellId};
+use utility::domain::CellId;
 use utility::error::AetherResult;
 use utility::info;
 use utility::logger::{Level, LogWriter, Logger, StdSink};
@@ -34,10 +24,6 @@ use utility::thread::pool::Pool;
 
 const SURFACE_TEMPERATURE: FieldKey =
   FieldKey::new(MeshKey::SURFACE, FieldName::Temperature);
-const ATMOSPHERE_TEMPERATURE: FieldKey =
-  FieldKey::new(MeshKey::ATMOSPHERE, FieldName::Temperature);
-const ATMOSPHERE_TEMPERATURE_TENDENCY: FieldKey =
-  FieldKey::new(MeshKey::ATMOSPHERE, FieldName::TemperatureTendency);
 
 struct DummySurfaceHeating {
   writes: [FieldKey; 1],
@@ -122,86 +108,86 @@ fn main() -> AetherResult<()> {
   let angular_dims = [4, 4];
   let surface_radial_layers = 2;
   let atmosphere_radial_layers = 10;
+  let atmosphere_height = 20_000.0;
+  let surface_depth = 10_000.0;
+  let world_id = WorldId(0);
+  let seed = cosmo_factory::earth();
+  let mut world_factory = WorldFactory::new(world_id, seed);
+  let world_constants = world_factory.constants();
+  let shell_layout = AtmosphereShellLayout::new(
+    &world_constants,
+    atmosphere_height,
+    surface_depth,
+  )?;
 
-  let surface_mesh = Arc::new(CubeSphere::shell(
-    CubeSphereShellSpec::uniform(
-      [angular_dims[0], angular_dims[1], surface_radial_layers],
-      0.9,
-      1.0,
-    )
-    .with_boundaries(BoundaryTag::Ground, BoundaryTag::AtmosphereEdge),
-  ));
-  let atmosphere_mesh = Arc::new(CubeSphere::shell(
-    CubeSphereShellSpec::uniform(
-      [angular_dims[0], angular_dims[1], atmosphere_radial_layers],
-      1.0,
-      1.2,
-    )
-    .with_boundaries(BoundaryTag::Ground, BoundaryTag::AtmosphereEdge),
-  ));
-  let surface_cell_count = surface_mesh.cell_count();
-  let atmosphere_cell_count = atmosphere_mesh.cell_count();
-
-  let mut tessera = Tessera::new();
-  let surface_for_registry: Arc<dyn Mesh<3>> = surface_mesh;
-  let atmosphere_for_registry: Arc<dyn Mesh<3>> = atmosphere_mesh;
-  tessera.register_mesh(MeshKey::SURFACE, surface_for_registry);
-  tessera.register_mesh(MeshKey::ATMOSPHERE, atmosphere_for_registry);
-
-  let radial_coupler = RadialStackCoupler::new(
-    angular_dims,
-    surface_radial_layers,
-    atmosphere_radial_layers,
+  world_factory = world_factory.cube_sphere_surface(
+    shell_layout.surface_shell_spec(angular_dims, surface_radial_layers),
   );
-  let radial_pair_count = radial_coupler.pairs().len();
-  let radial_coupler_index =
-    tessera.add_coupler(MeshKey::SURFACE, MeshKey::ATMOSPHERE, radial_coupler);
+  world_factory = world_factory.cube_sphere_atmosphere(
+    shell_layout.atmosphere_shell_spec(angular_dims, atmosphere_radial_layers),
+  );
+  let radial_coupler_index = world_factory
+    .add_radial_stack_coupler(MeshKey::SURFACE, MeshKey::ATMOSPHERE)?;
+  let radial_pair_count = world_factory
+    .tessera()
+    .coupler_view(radial_coupler_index)
+    .map(|view| view.pair_count())
+    .unwrap_or(0);
   info!(
     "registered surface-atmosphere radial coupler with {} face pairs",
     radial_pair_count
   );
 
-  let mut pleroma = Pleroma::new();
-  pleroma.register_field(
-    SURFACE_TEMPERATURE,
-    SoaField::<1>::zeros(surface_cell_count),
-  );
-  pleroma.register_field(
-    ATMOSPHERE_TEMPERATURE,
-    SoaField::<1>::from_fn(atmosphere_cell_count, |_| [260.0]),
-  );
-  pleroma.register_field(
-    ATMOSPHERE_TEMPERATURE_TENDENCY,
-    SoaField::<1>::zeros(atmosphere_cell_count),
-  );
+  let surface_mesh = world_factory
+    .tessera()
+    .mesh(MeshKey::SURFACE)
+    .expect("surface mesh was just registered")
+    .clone();
+  let atmosphere_mesh = world_factory
+    .tessera()
+    .mesh(MeshKey::ATMOSPHERE)
+    .expect("atmosphere mesh was just registered")
+    .clone();
+  let surface_cell_count = surface_mesh.cell_count();
+  let atmosphere_model = AtmosphereModel::new(MeshKey::ATMOSPHERE)
+    .with_cfl(0.25)
+    .with_current_state_background_correction();
+  let atmosphere_fields = atmosphere_model.fields();
 
-  let mut nexus = Nexus::new();
-  nexus.add(DummySurfaceHeating::new());
-  nexus.add(ScalarInterfaceFlux::from_coupler(
-    &tessera,
+  let atmosphere_spec = AtmosphereSpec::from_world_constants(&world_constants)?;
+  world_factory.register_field(
+    SURFACE_TEMPERATURE,
+    atmosphere_spec.temperature_field(surface_cell_count),
+  );
+  atmosphere_model.register_fields(
+    world_factory.pleroma_mut(),
+    atmosphere_mesh.as_ref(),
+    &world_constants,
+    shell_layout.reference_radius(),
+  )?;
+
+  world_factory.add_stage(DummySurfaceHeating::new());
+  world_factory.add_scalar_interface_flux(
     radial_coupler_index,
     SURFACE_TEMPERATURE,
-    ATMOSPHERE_TEMPERATURE,
-    ATMOSPHERE_TEMPERATURE_TENDENCY,
-    0.01,
-  )?);
-  let compiled_nexus = nexus.build(&pleroma)?;
-
-  let world_id = WorldId(0);
-  let world =
-    World::new(world_id, factory::earth(), tessera, pleroma, compiled_nexus);
+    atmosphere_fields.temperature,
+    atmosphere_fields.temperature_tendency,
+    1.0e-15,
+  )?;
+  atmosphere_model.add_stages(world_factory.nexus_mut())?;
+  let world = world_factory.build()?;
 
   let mut worlds = HashMap::new();
   worlds.insert(world_id, world);
 
   let mut aether = Aether::new(worlds, Pool::default());
-  aether.step(60.0)?;
-  aether.step(20.0)?;
+  aether.step(0.05)?;
+  aether.step(0.05)?;
 
   let world = aether
     .world(world_id)
     .expect("sandbox world should still be registered");
-  let mut frame = tessera_debug_frame(0, 80.0, world.id(), world.tessera());
+  let mut frame = tessera_debug_frame(0, 0.1, world.id(), world.tessera());
   if let Some(surface_temperature) =
     world.pleroma().read::<SoaField<1>>(SURFACE_TEMPERATURE)
   {
@@ -221,8 +207,9 @@ fn main() -> AetherResult<()> {
     layer.palette = Palette::thermal();
     frame.worlds[0].layers.push(RenderLayer::Scalar(layer));
   }
-  if let Some(atmosphere_temperature) =
-    world.pleroma().read::<SoaField<1>>(ATMOSPHERE_TEMPERATURE)
+  if let Some(atmosphere_temperature) = world
+    .pleroma()
+    .read::<SoaField<1>>(atmosphere_fields.temperature)
   {
     let target = RenderMeshId {
       world: world.id(),
@@ -233,7 +220,7 @@ fn main() -> AetherResult<()> {
       LayerId("atmosphere_temperature"),
       "atmosphere_temperature",
       target,
-      ATMOSPHERE_TEMPERATURE,
+      atmosphere_fields.temperature,
       atmosphere_temperature,
       0,
     );
@@ -242,7 +229,7 @@ fn main() -> AetherResult<()> {
   }
   if let Some(atmosphere_temperature_tendency) = world
     .pleroma()
-    .read::<SoaField<1>>(ATMOSPHERE_TEMPERATURE_TENDENCY)
+    .read::<SoaField<1>>(atmosphere_fields.temperature_tendency)
   {
     let target = RenderMeshId {
       world: world.id(),
@@ -253,8 +240,48 @@ fn main() -> AetherResult<()> {
       LayerId("atmosphere_temperature_tendency"),
       "atmosphere_temperature_tendency",
       target,
-      ATMOSPHERE_TEMPERATURE_TENDENCY,
+      atmosphere_fields.temperature_tendency,
       atmosphere_temperature_tendency,
+      0,
+    );
+    layer.palette = Palette::thermal();
+    frame.worlds[0].layers.push(RenderLayer::Scalar(layer));
+  }
+  if let Some(atmosphere_pressure) = world
+    .pleroma()
+    .read::<SoaField<1>>(atmosphere_fields.pressure)
+  {
+    let target = RenderMeshId {
+      world: world.id(),
+      mesh: MeshKey::ATMOSPHERE,
+      representation: MeshRepresentation::BoundaryFaces,
+    };
+    let mut layer = scalar_component_layer(
+      LayerId("atmosphere_pressure"),
+      "atmosphere_pressure",
+      target,
+      atmosphere_fields.pressure,
+      atmosphere_pressure,
+      0,
+    );
+    layer.palette = Palette::thermal();
+    frame.worlds[0].layers.push(RenderLayer::Scalar(layer));
+  }
+  if let Some(atmosphere_euler_state) = world
+    .pleroma()
+    .read::<SoaField<5>>(atmosphere_fields.euler_state)
+  {
+    let target = RenderMeshId {
+      world: world.id(),
+      mesh: MeshKey::ATMOSPHERE,
+      representation: MeshRepresentation::BoundaryFaces,
+    };
+    let mut layer = scalar_component_layer(
+      LayerId("atmosphere_density"),
+      "atmosphere_density",
+      target,
+      atmosphere_fields.euler_state,
+      atmosphere_euler_state,
       0,
     );
     layer.palette = Palette::thermal();
