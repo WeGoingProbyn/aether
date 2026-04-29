@@ -1,14 +1,16 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 use tessera::coupling::{MeshCoupler, Side};
 use tessera::cube_sphere::{CubeSphere, GnomonicShellPanel, PanelId};
 use tessera::geometry::{FaceGeometry, GeometryMap};
+use tessera::mesh::Mesh;
 use tessera::radial_stack::RadialStackCoupler;
 use tessera::topology::{FaceConnection, Topology};
-use utility::domain::{CellId, FaceId, Point};
+use tessera::world_mesh::Tessera;
+use utility::domain::{CellId, FaceId, MeshKey, Point};
 
 fn panel_of(cell: CellId, dims: [usize; 3]) -> GnomonicShellPanel {
   const PANELS: [PanelId; 6] = [
@@ -170,4 +172,44 @@ fn radial_stack_rejects_non_interface_faces() {
 
   assert_eq!(coupler.paired_face(Side::A, lower_ground_face), None);
   assert_eq!(coupler.paired_face(Side::B, upper_outer_face), None);
+}
+
+#[test]
+fn tessera_coupler_view_exposes_interface_geometry() {
+  let n = 2;
+  let lower_radial_layers = 2;
+  let upper_radial_layers = 2;
+  let lower = Arc::new(CubeSphere::new([n, n, lower_radial_layers], 1.0, 2.0));
+  let upper = Arc::new(CubeSphere::new([n, n, upper_radial_layers], 2.0, 3.0));
+  let lower_for_registry: Arc<dyn Mesh<3>> = lower;
+  let upper_for_registry: Arc<dyn Mesh<3>> = upper;
+
+  let mut tessera = Tessera::new();
+  tessera.register_mesh(MeshKey::SURFACE, lower_for_registry);
+  tessera.register_mesh(MeshKey::ATMOSPHERE, upper_for_registry);
+  let coupler_index = tessera.add_coupler(
+    MeshKey::SURFACE,
+    MeshKey::ATMOSPHERE,
+    RadialStackCoupler::new([n, n], lower_radial_layers, upper_radial_layers),
+  );
+
+  let view = tessera
+    .coupler_view(coupler_index)
+    .expect("registered coupler should resolve both meshes");
+  assert_eq!(view.pair_count(), 6 * n * n);
+
+  let coupled = view.faces().next().expect("coupler should have faces");
+  assert_eq!(coupled.mesh_a, MeshKey::SURFACE);
+  assert_eq!(coupled.mesh_b, MeshKey::ATMOSPHERE);
+  assert_eq!(coupled.owner_for(MeshKey::SURFACE), Some(coupled.owner_a));
+  assert_eq!(
+    coupled.owner_for(MeshKey::ATMOSPHERE),
+    Some(coupled.owner_b)
+  );
+  assert!(coupled.area > 0.0);
+  assert!((coupled.normal_a_to_b.magnitude() - 1.0).abs() < 1e-10);
+  assert!(
+    (coupled.centroid.magnitude() - 2.0).abs() < 1e-10,
+    "interface centroid should lie on shared radius"
+  );
 }

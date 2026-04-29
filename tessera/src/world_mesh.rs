@@ -5,7 +5,11 @@ use std::{any::Any, collections::HashMap, sync::Arc};
 
 use utility::domain::MeshKey;
 
-use crate::{coupling::MeshCoupler, mesh::Mesh, partition::Decomposition};
+use crate::{
+  coupling::{CoupledFace, MeshCoupler},
+  mesh::Mesh,
+  partition::Decomposition,
+};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct DecompositionKey(&'static str);
@@ -65,6 +69,38 @@ impl CouplerEntry {
 
   pub fn coupler(&self) -> &dyn MeshCoupler {
     self.coupler.as_ref()
+  }
+}
+
+pub struct CouplerView<'a> {
+  entry: &'a CouplerEntry,
+  mesh_a: &'a dyn Mesh<3>,
+  mesh_b: &'a dyn Mesh<3>,
+}
+
+impl<'a> CouplerView<'a> {
+  pub fn mesh_a(&self) -> MeshKey {
+    self.entry.mesh_a
+  }
+
+  pub fn mesh_b(&self) -> MeshKey {
+    self.entry.mesh_b
+  }
+
+  pub fn pair_count(&self) -> usize {
+    self.entry.coupler.pairs().len()
+  }
+
+  pub fn faces(&self) -> impl Iterator<Item = CoupledFace> + '_ {
+    self.entry.coupler.pairs().iter().map(|pair| {
+      CoupledFace::from_pair(
+        self.entry.mesh_a,
+        self.mesh_a,
+        self.entry.mesh_b,
+        self.mesh_b,
+        *pair,
+      )
+    })
   }
 }
 
@@ -165,6 +201,17 @@ impl Tessera {
 
   pub fn couplers(&self) -> &[CouplerEntry] {
     &self.couplers
+  }
+
+  pub fn coupler_view(&self, index: usize) -> Option<CouplerView<'_>> {
+    let entry = self.couplers.get(index)?;
+    let mesh_a = self.mesh(entry.mesh_a)?.as_ref();
+    let mesh_b = self.mesh(entry.mesh_b)?.as_ref();
+    Some(CouplerView {
+      entry,
+      mesh_a,
+      mesh_b,
+    })
   }
 
   pub fn couplers_between(

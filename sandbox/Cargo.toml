@@ -12,3 +12,4 @@ aether = { path = "../aether" }
 cosmo = { path = "../cosmo" }
 nexus = { path = "../nexus" }
 eidolon = { path = "../eidolon" }
+syzygy = { path = "../syzygy" }

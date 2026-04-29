@@ -1,14 +1,9 @@
-pub fn add(left: u64, right: u64) -> u64 {
-  left + right
-}
+// Copyright 2026 William Probyn
+// SPDX-License-Identifier: Apache-2.0
 
-#[cfg(test)]
-mod tests {
-  use super::*;
+//! Syzygy owns coupling semantics between physics modules. It consumes
+//! read-only mesh/coupler geometry from Tessera and field access from Nexus.
 
-  #[test]
-  fn it_works() {
-    let result = add(2, 2);
-    assert_eq!(result, 4);
-  }
-}
+pub mod scalar;
+
+pub use scalar::{ScalarRelaxation, SyzygyError};

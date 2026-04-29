@@ -15,6 +15,7 @@ use nexus::{
   StageContext, WorldId,
 };
 use pleroma::Pleroma;
+use syzygy::ScalarRelaxation;
 use tessera::{
   coupling::MeshCoupler,
   cube_sphere::{CubeSphere, CubeSphereShellSpec},
@@ -33,6 +34,8 @@ use utility::thread::pool::Pool;
 
 const SURFACE_TEMPERATURE: FieldKey =
   FieldKey::new(MeshKey::SURFACE, FieldName::Temperature);
+const ATMOSPHERE_TEMPERATURE: FieldKey =
+  FieldKey::new(MeshKey::ATMOSPHERE, FieldName::Temperature);
 
 struct DummySurfaceHeating {
   writes: [FieldKey; 1],
@@ -135,6 +138,7 @@ fn main() -> AetherResult<()> {
     .with_boundaries(BoundaryTag::Ground, BoundaryTag::AtmosphereEdge),
   ));
   let surface_cell_count = surface_mesh.cell_count();
+  let atmosphere_cell_count = atmosphere_mesh.cell_count();
 
   let mut tessera = Tessera::new();
   let surface_for_registry: Arc<dyn Mesh<3>> = surface_mesh;
@@ -148,7 +152,8 @@ fn main() -> AetherResult<()> {
     atmosphere_radial_layers,
   );
   let radial_pair_count = radial_coupler.pairs().len();
-  tessera.add_coupler(MeshKey::SURFACE, MeshKey::ATMOSPHERE, radial_coupler);
+  let radial_coupler_index =
+    tessera.add_coupler(MeshKey::SURFACE, MeshKey::ATMOSPHERE, radial_coupler);
   info!(
     "registered surface-atmosphere radial coupler with {} face pairs",
     radial_pair_count
@@ -159,9 +164,19 @@ fn main() -> AetherResult<()> {
     SURFACE_TEMPERATURE,
     SoaField::<1>::zeros(surface_cell_count),
   );
+  pleroma.register_field(
+    ATMOSPHERE_TEMPERATURE,
+    SoaField::<1>::zeros(atmosphere_cell_count),
+  );
 
   let mut nexus = Nexus::new();
   nexus.add(DummySurfaceHeating::new());
+  nexus.add(ScalarRelaxation::new(
+    radial_coupler_index,
+    SURFACE_TEMPERATURE,
+    ATMOSPHERE_TEMPERATURE,
+    0.01,
+  ));
   let compiled_nexus = nexus.build(&pleroma)?;
 
   let world_id = WorldId(0);
@@ -193,6 +208,25 @@ fn main() -> AetherResult<()> {
       target,
       SURFACE_TEMPERATURE,
       surface_temperature,
+      0,
+    );
+    layer.palette = Palette::thermal();
+    frame.worlds[0].layers.push(RenderLayer::Scalar(layer));
+  }
+  if let Some(atmosphere_temperature) =
+    world.pleroma().read::<SoaField<1>>(ATMOSPHERE_TEMPERATURE)
+  {
+    let target = RenderMeshId {
+      world: world.id(),
+      mesh: MeshKey::ATMOSPHERE,
+      representation: MeshRepresentation::BoundaryFaces,
+    };
+    let mut layer = scalar_component_layer(
+      LayerId("atmosphere_temperature"),
+      "atmosphere_temperature",
+      target,
+      ATMOSPHERE_TEMPERATURE,
+      atmosphere_temperature,
       0,
     );
     layer.palette = Palette::thermal();
