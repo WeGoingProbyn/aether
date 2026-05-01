@@ -56,7 +56,7 @@ impl<const D: usize, S: OdeSystem<D>> OdeStepper<D, S> for Rk4<D> {
     system.rhs(t + 0.5 * dt, &self.scratch, &mut self.k2);
 
     for ((scratch, y_), k2) in self.scratch.iter_mut().zip(&mut *y).zip(&mut self.k2) {
-      *scratch = *y_ + (*k2 + 0.5 + dt);
+      *scratch = *y_ + (*k2 * 0.5 * dt);
     }
     system.rhs(t + 0.5 * dt, &self.scratch, &mut self.k3);
 
