@@ -7,6 +7,7 @@ members = [
   "aer",
   "cosmo",
   "gravitas",
+  "lumen",
   "nexus",
   "eidolon",
   "terra",

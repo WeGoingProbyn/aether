@@ -71,6 +71,8 @@ pub enum FieldName {
   VelocityZ,
   Pressure,
   Humidity,
+  RadiativeHeatingTendency,
+  NetSurfaceFlux,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]

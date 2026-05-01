@@ -63,6 +63,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen"
+version = "0.1.0"
+dependencies = [
+ "nexus",
+ "pleroma",
+ "tessera",
+ "utility",
+]
+
+[[package]]
 name = "nexus"
 version = "0.1.0"
 dependencies = [
