@@ -8,15 +8,16 @@
 
 use std::any::TypeId;
 
-use utility::domain::FieldKey;
+use utility::domain::{FieldKey, ResourceKey};
 
 use crate::runtime::slot::SlotView;
 use crate::runtime::split::SplitBorrow;
 
 /// The typed view a `Stage::run` body sees. Reads/writes are checked against
-/// the keys declared on the stage; calling `read`/`write` for a key the
-/// stage didn't declare returns `None`. Calling `read`/`write` with the
-/// wrong concrete `S` likewise returns `None` (TypeId mismatch).
+/// the keys declared on the stage; calling `read`/`write` (or
+/// `resource`/`resource_mut`) for a key the stage didn't declare returns
+/// `None`. Calling with the wrong concrete type likewise returns `None`
+/// (TypeId mismatch).
 ///
 /// Field visibility is `pub(crate)` so only code inside `pleroma` can
 /// construct one — by convention this only happens inside `crate::runtime`.
@@ -67,6 +68,49 @@ impl<'a> WorldAccess<'a> {
       boxed.downcast_mut::<S>()
     }
   }
+
+  /// Read a resource. Returns `None` if the key wasn't declared as a
+  /// resource read or write, or the requested type `R` doesn't match.
+  pub fn resource<R: 'static>(&self, key: ResourceKey) -> Option<&R> {
+    if !self.slot_view.resource_reads.contains(&key)
+      && !self.slot_view.resource_writes.contains(&key)
+    {
+      return None;
+    }
+    let resources = unsafe { &*self.slot_view.resources };
+    let slot = resources.get(&key)?;
+    if slot.type_id != TypeId::of::<R>() {
+      return None;
+    }
+    // SAFETY: see field `read` — same split-borrow discipline applies to
+    // resources.
+    unsafe {
+      let boxed = &*slot.data.get();
+      boxed.downcast_ref::<R>()
+    }
+  }
+
+  /// Mutably borrow a resource. Returns `None` unless the key was declared
+  /// as a resource write and the requested type matches.
+  pub fn resource_mut<R: 'static>(
+    &mut self,
+    key: ResourceKey,
+  ) -> Option<&mut R> {
+    if !self.slot_view.resource_writes.contains(&key) {
+      return None;
+    }
+    let resources = unsafe { &*self.slot_view.resources };
+    let slot = resources.get(&key)?;
+    if slot.type_id != TypeId::of::<R>() {
+      return None;
+    }
+    // SAFETY: see field `write` — `key` is in this view's
+    // `resource_writes`, so no other live view can observe this slot.
+    unsafe {
+      let boxed = &mut *slot.data.get();
+      boxed.downcast_mut::<R>()
+    }
+  }
 }
 
 /// One DAG-layer's split-borrow handle. Nexus pulls this from
@@ -80,19 +124,24 @@ impl<'a> ScheduleAccess<'a> {
   ///
   /// # Safety
   /// The caller (nexus) must guarantee that across every `view_for` call
-  /// that produces a `WorldAccess` alive at the same time, the union of all
-  /// `reads` is disjoint from the union of all `writes`, and no two
-  /// `writes` overlap.
+  /// that produces a `WorldAccess` alive at the same time, the unions of
+  /// all `reads` are disjoint from the unions of all `writes`, and no two
+  /// `writes` overlap — applied independently to fields and resources.
   pub unsafe fn view_for(
     &self,
     reads: &[FieldKey],
     writes: &[FieldKey],
+    resource_reads: &[ResourceKey],
+    resource_writes: &[ResourceKey],
   ) -> WorldAccess<'a> {
     WorldAccess {
       slot_view: SlotView {
         fields: self.inner.fields,
+        resources: self.inner.resources,
         reads: reads.to_vec(),
         writes: writes.to_vec(),
+        resource_reads: resource_reads.to_vec(),
+        resource_writes: resource_writes.to_vec(),
         _phantom: std::marker::PhantomData,
       },
     }

@@ -8,4 +8,6 @@
 pub use crate::core::access::*;
 pub use crate::core::exchange::exchange_ghosts;
 pub use crate::core::storage::*;
-pub use utility::domain::{FieldKey, FieldName, MeshKey, MeshType};
+pub use utility::domain::{
+  FieldKey, FieldName, MeshKey, MeshType, ResourceKey,
+};

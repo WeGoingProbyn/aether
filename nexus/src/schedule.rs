@@ -22,7 +22,7 @@
 use std::sync::{Arc, Mutex};
 
 use pleroma::Pleroma;
-use pleroma::prelude::FieldKey;
+use pleroma::prelude::{FieldKey, ResourceKey};
 use tessera::world_mesh::Tessera;
 use utility::collections::graph::Graph;
 use utility::domain::WorldId;
@@ -122,12 +122,21 @@ impl Nexus {
 }
 
 fn has_conflict(a: &dyn Stage, b: &dyn Stage) -> bool {
-  intersects(a.writes(), b.reads())  // RAW: a writes, b reads
-    || intersects(a.reads(), b.writes())  // WAR: a reads, b overwrites
-    || intersects(a.writes(), b.writes()) // WAW: both write same key
+  // Field RAW/WAR/WAW.
+  intersects(a.writes(), b.reads())
+    || intersects(a.reads(), b.writes())
+    || intersects(a.writes(), b.writes())
+    // Resource RAW/WAR/WAW — same shape as fields.
+    || resource_intersects(a.resource_writes(), b.resource_reads())
+    || resource_intersects(a.resource_reads(), b.resource_writes())
+    || resource_intersects(a.resource_writes(), b.resource_writes())
 }
 
 fn intersects(a: &[FieldKey], b: &[FieldKey]) -> bool {
+  a.iter().any(|k| b.contains(k))
+}
+
+fn resource_intersects(a: &[ResourceKey], b: &[ResourceKey]) -> bool {
   a.iter().any(|k| b.contains(k))
 }
 
@@ -220,13 +229,17 @@ impl CompiledNexus {
 
         let reads = stage.reads().to_vec();
         let writes = stage.writes().to_vec();
+        let resource_reads = stage.resource_reads().to_vec();
+        let resource_writes = stage.resource_writes().to_vec();
 
         // SAFETY: `build` placed these stages in the same layer only when
-        // none of them have any RAW/WAR/WAW conflict with each other. The
-        // declared reads/writes are therefore pairwise disjoint across the
-        // views we hand out here, which is exactly the precondition
-        // `ScheduleAccess::view_for` requires.
-        let view = unsafe { access.view_for(&reads, &writes) };
+        // none of them have any RAW/WAR/WAW conflict with each other (in
+        // either fields or resources). The declared sets are therefore
+        // pairwise disjoint across the views we hand out here, which is
+        // exactly the precondition `ScheduleAccess::view_for` requires.
+        let view = unsafe {
+          access.view_for(&reads, &writes, &resource_reads, &resource_writes)
+        };
 
         let ctx = StageContext {
           world: WorldView {

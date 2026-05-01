@@ -5,5 +5,10 @@ edition = "2024"
 license = "Apache-2.0"
 
 [dependencies]
+nexus = { path = "../nexus" }
 tempus = { path = "../tempus" }
 utility = { path = "../utility" }
+
+[dev-dependencies]
+pleroma = { path = "../pleroma" }
+tessera = { path = "../tessera" }

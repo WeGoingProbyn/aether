@@ -4,20 +4,22 @@
 //! Split-borrow primitive backing `ScheduleAccess`.
 //!
 //! `Pleroma::schedule_access` produces a `SplitBorrow` for one DAG layer.
-//! Nexus then calls `ScheduleAccess::view_for(reads, writes)` once per
-//! parallel stage; the call is `unsafe` because soundness depends on nexus
-//! having already verified that all simultaneously-running stages have
-//! pairwise-disjoint declared reads/writes.
+//! Nexus then calls `ScheduleAccess::view_for(reads, writes, resource_reads,
+//! resource_writes)` once per parallel stage; the call is `unsafe` because
+//! soundness depends on nexus having already verified that all
+//! simultaneously-running stages have pairwise-disjoint declared
+//! reads/writes (across both fields and resources).
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
-use utility::domain::FieldKey;
+use utility::domain::{FieldKey, ResourceKey};
 
-use crate::runtime::slot::FieldSlot;
+use crate::runtime::slot::{FieldSlot, ResourceSlot};
 
 pub(crate) struct SplitBorrow<'a> {
   pub(crate) fields: *const HashMap<FieldKey, FieldSlot>,
+  pub(crate) resources: *const HashMap<ResourceKey, ResourceSlot>,
   // PhantomData<&'a mut ()> — `schedule_access(&mut self)` is the only way
   // to produce a `SplitBorrow`, so this morally holds an exclusive borrow on
   // Pleroma for the duration. WorldAccess views are aliased slices of that
@@ -25,7 +27,7 @@ pub(crate) struct SplitBorrow<'a> {
   pub(crate) _phantom: PhantomData<&'a mut ()>,
 }
 
-// SAFETY: the underlying registry is `Send + Sync` (`FieldSlot` manually so).
-// Raw pointers are valid for `'a`.
+// SAFETY: the underlying registry is `Send + Sync` (`FieldSlot` /
+// `ResourceSlot` manually so). Raw pointers are valid for `'a`.
 unsafe impl Send for SplitBorrow<'_> {}
 unsafe impl Sync for SplitBorrow<'_> {}

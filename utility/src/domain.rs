@@ -97,6 +97,16 @@ impl MeshKey {
   }
 }
 
+/// Identifier for a typed singleton in pleroma that isn't bound to a mesh.
+/// Used for things like orbital body state, sun direction, planetary spin —
+/// data physics stages need but that doesn't live per-cell on a mesh.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum ResourceKey {
+  Bodies,
+  SunPosition,
+  PlanetSpin,
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct FieldKey {
   mesh: MeshKey,

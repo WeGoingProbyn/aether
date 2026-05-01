@@ -55,7 +55,10 @@ dependencies = [
 name = "gravitas"
 version = "0.1.0"
 dependencies = [
+ "nexus",
+ "pleroma",
  "tempus",
+ "tessera",
  "utility",
 ]
 

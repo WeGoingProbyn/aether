@@ -4,7 +4,7 @@
 use pleroma::prelude::WorldAccess;
 use tessera::world_mesh::Tessera;
 use utility::{
-  domain::{FieldKey, WorldId},
+  domain::{FieldKey, ResourceKey, WorldId},
   error::AetherResult,
   thread::pool::Pool,
 };
@@ -12,12 +12,24 @@ use utility::{
 use crate::constants::WorldConstants;
 
 /// One unit of physics work inside a `Nexus`. Stages declare which fields
-/// they read and write; nexus uses those declarations to build a DAG and run
-/// non-conflicting stages in parallel.
+/// and resources they read and write; nexus uses those declarations to
+/// build a DAG and run non-conflicting stages in parallel.
 pub trait Stage: Send + Sync {
   fn name(&self) -> &'static str;
   fn reads(&self) -> &[FieldKey];
   fn writes(&self) -> &[FieldKey];
+
+  /// Non-mesh-bound resources this stage reads (e.g. body state, sun
+  /// direction). Default is empty.
+  fn resource_reads(&self) -> &[ResourceKey] {
+    &[]
+  }
+
+  /// Non-mesh-bound resources this stage writes. Default is empty.
+  fn resource_writes(&self) -> &[ResourceKey] {
+    &[]
+  }
+
   fn run(&mut self, ctx: StageContext<'_>) -> AetherResult<()>;
 }
 

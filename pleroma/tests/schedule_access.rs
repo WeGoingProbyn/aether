@@ -26,7 +26,8 @@ fn view_for_honors_declared_keys() {
 
   let access = world.schedule_access();
   // SAFETY: the only view alive at any time has disjoint reads/writes.
-  let mut view = unsafe { access.view_for(&[TEMPERATURE], &[PRESSURE]) };
+  let mut view =
+    unsafe { access.view_for(&[TEMPERATURE], &[PRESSURE], &[], &[]) };
 
   // Pressure was declared as a write — should resolve.
   assert!(view.write::<SoaField<N>>(PRESSURE).is_some());
@@ -51,8 +52,8 @@ fn disjoint_writes_run_in_parallel() {
 
   // SAFETY: the two views write to *different* keys; reads/writes are
   // pairwise disjoint, so simultaneous typed mutation is sound.
-  let mut view_t = unsafe { access.view_for(&[], &[TEMPERATURE]) };
-  let mut view_p = unsafe { access.view_for(&[], &[PRESSURE]) };
+  let mut view_t = unsafe { access.view_for(&[], &[TEMPERATURE], &[], &[]) };
+  let mut view_p = unsafe { access.view_for(&[], &[PRESSURE], &[], &[]) };
 
   thread::scope(|s| {
     s.spawn(move || {
