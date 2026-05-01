@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use utility::domain::{CellId, Point};
-use utility::{maths::vector::Vector, profile};
+use utility::{StateDiagnostics, maths::vector::Vector, profile};
 
 use tessera::geometry::CellMetrics;
 
@@ -61,6 +61,23 @@ impl<const D: usize, const N: usize> NumericalFlux<D, N> for RusanovFlux {
   }
 }
 
+#[derive(StateDiagnostics)]
+#[diagnostics(
+  components("rho", "rho_u", "rho_v", "energy"),
+  conserved(
+    ("mass", 0),
+    ("momentum_x", 1),
+    ("momentum_y", 2),
+    ("total_energy", 3),
+  ),
+  extras(
+    ("u", self.velocity(state)[0]),
+    ("v", self.velocity(state)[1]),
+    ("speed", self.speed(state)),
+    ("kinetic_energy_density", self.kinetic_energy_density(state)),
+    ("pressure", self.pressure(state)),
+  ),
+)]
 pub struct Euler2D {
   gamma: f64, // Ratio of specific heats
 }
@@ -70,11 +87,23 @@ impl Euler2D {
     Euler2D { gamma }
   }
 
-  pub fn pressure(&self, state: &[f64; 4]) -> f64 {
+  pub fn velocity(&self, state: &[f64; 4]) -> [f64; 2] {
     let rho = state[0];
-    let u = state[1] / rho;
-    let v = state[2] / rho;
-    (self.gamma - 1.0) * (state[3] - 0.5 * rho * (u * u + v * v))
+    [state[1] / rho, state[2] / rho]
+  }
+
+  pub fn speed(&self, state: &[f64; 4]) -> f64 {
+    let [u, v] = self.velocity(state);
+    (u * u + v * v).sqrt()
+  }
+
+  pub fn kinetic_energy_density(&self, state: &[f64; 4]) -> f64 {
+    let rho = state[0];
+    0.5 / rho * (state[1] * state[1] + state[2] * state[2])
+  }
+
+  pub fn pressure(&self, state: &[f64; 4]) -> f64 {
+    (self.gamma - 1.0) * (state[3] - self.kinetic_energy_density(state))
   }
 }
 
@@ -151,6 +180,25 @@ pub enum GravityField {
 ///
 /// Designed for the cube-sphere shell with Cartesian world-frame momentum
 /// (u, v, w in world xyz).
+#[derive(StateDiagnostics)]
+#[diagnostics(
+  components("rho", "rho_u", "rho_v", "rho_w", "energy"),
+  conserved(
+    ("mass", 0),
+    ("momentum_x", 1),
+    ("momentum_y", 2),
+    ("momentum_z", 3),
+    ("total_energy", 4),
+  ),
+  extras(
+    ("u", self.velocity(state)[0]),
+    ("v", self.velocity(state)[1]),
+    ("w", self.velocity(state)[2]),
+    ("speed", self.speed(state)),
+    ("kinetic_energy_density", self.kinetic_energy_density(state)),
+    ("pressure", self.pressure(state)),
+  ),
+)]
 pub struct Euler3D {
   gamma: f64,
   gravity: GravityField,
@@ -185,12 +233,24 @@ impl Euler3D {
     }
   }
 
-  pub fn pressure(&self, state: &[f64; 5]) -> f64 {
+  pub fn velocity(&self, state: &[f64; 5]) -> [f64; 3] {
     let rho = state[0];
-    let inv_rho = 1.0 / rho;
-    let ke =
-      0.5 * inv_rho * (state[1].powi(2) + state[2].powi(2) + state[3].powi(2));
-    (self.gamma - 1.0) * (state[4] - ke)
+    [state[1] / rho, state[2] / rho, state[3] / rho]
+  }
+
+  pub fn speed(&self, state: &[f64; 5]) -> f64 {
+    let [u, v, w] = self.velocity(state);
+    (u * u + v * v + w * w).sqrt()
+  }
+
+  pub fn kinetic_energy_density(&self, state: &[f64; 5]) -> f64 {
+    let rho = state[0];
+    0.5 / rho
+      * (state[1] * state[1] + state[2] * state[2] + state[3] * state[3])
+  }
+
+  pub fn pressure(&self, state: &[f64; 5]) -> f64 {
+    (self.gamma - 1.0) * (state[4] - self.kinetic_energy_density(state))
   }
 
   pub fn gamma(&self) -> f64 {

@@ -29,9 +29,9 @@ where
   }
 }
 
-impl<T> Default for Quaternion<T> 
-where 
-  T: Default + Copy
+impl<T> Default for Quaternion<T>
+where
+  T: Default + Copy,
 {
   fn default() -> Self {
     Quaternion {
@@ -284,8 +284,8 @@ where
 
 // ================ Index impls =================//
 
-impl<T> Index<usize> for Quaternion<T> 
-where 
+impl<T> Index<usize> for Quaternion<T>
+where
   T: Default + Copy,
 {
   type Output = T;
@@ -295,8 +295,8 @@ where
   }
 }
 
-impl<T> IndexMut<usize> for Quaternion<T> 
-where 
+impl<T> IndexMut<usize> for Quaternion<T>
+where
   T: Default + Copy,
 {
   fn index_mut(&mut self, index: usize) -> &mut T {
@@ -421,7 +421,7 @@ macro_rules! quat_op_assign_impl {
       T: Default + Copy + $trait,
     {
       fn $method(&mut self, rhs: &'a Quaternion<T>) {
-        $trait::$method(&mut self.inner, rhs.inner);    
+        $trait::$method(&mut self.inner, rhs.inner);
       }
     }
 
@@ -592,9 +592,7 @@ where
 {
   type Output = Quaternion<T>;
   fn neg(self) -> Self::Output {
-    Quaternion {
-      inner: -self.inner,
-    }
+    Quaternion { inner: -self.inner }
   }
 }
 

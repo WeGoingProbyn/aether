@@ -1,10 +1,13 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{iter::Sum, ops::{
-  Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Sub,
-  SubAssign,
-}};
+use std::{
+  iter::Sum,
+  ops::{
+    Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Sub,
+    SubAssign,
+  },
+};
 
 use crate::maths::matrix::Matrix;
 
@@ -93,7 +96,7 @@ where
   T: Default + Copy + Sum,
 {
   pub fn sum(&self) -> T {
-    self.into_iter().sum()   
+    self.into_iter().sum()
   }
 }
 
@@ -271,9 +274,7 @@ where
   T: Default + Copy,
 {
   fn from(item: &Vector<T, C>) -> Vector<T, C> {
-    Vector {
-      inner: item.inner,
-    }
+    Vector { inner: item.inner }
   }
 }
 
@@ -293,8 +294,8 @@ where
   }
 }
 
-impl<T, const C: usize> Default for Vector<T, C> 
-where 
+impl<T, const C: usize> Default for Vector<T, C>
+where
   T: Default + Copy,
 {
   fn default() -> Self {
@@ -319,8 +320,8 @@ where
 
 // ====================== Index impls ======================//
 
-impl<T, const C: usize> Index<usize> for Vector<T, C> 
-where 
+impl<T, const C: usize> Index<usize> for Vector<T, C>
+where
   T: Default + Copy,
 {
   type Output = T;
@@ -330,8 +331,8 @@ where
   }
 }
 
-impl<T, const C: usize> IndexMut<usize> for Vector<T, C> 
-where 
+impl<T, const C: usize> IndexMut<usize> for Vector<T, C>
+where
   T: Default + Copy,
 {
   fn index_mut(&mut self, index: usize) -> &mut T {
@@ -343,7 +344,8 @@ where
 
 macro_rules! vector_op_impls {
   ($trait:ident, $method:ident) => {
-    impl<'a, 'b, T, const C: usize> $trait<&'a Vector<T, C>> for &'b Vector<T, C>
+    impl<'a, 'b, T, const C: usize> $trait<&'a Vector<T, C>>
+      for &'b Vector<T, C>
     where
       for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
       T: Default + Copy,
@@ -456,7 +458,7 @@ macro_rules! vector_op_assign_impl {
       T: Default + Copy + $trait,
     {
       fn $method(&mut self, rhs: &'a Vector<T, C>) {
-        $trait::$method(&mut self.inner, rhs.inner);    
+        $trait::$method(&mut self.inner, rhs.inner);
       }
     }
 
@@ -513,7 +515,8 @@ vector_op_assign_scalar_impl!(MulAssign, mul_assign);
 
 // ====================== Mul impls ======================//
 
-impl<'a, T, const K: usize, const N: usize> Mul<&'a Matrix<T, N, K>> for &Vector<T, K>
+impl<'a, T, const K: usize, const N: usize> Mul<&'a Matrix<T, N, K>>
+  for &Vector<T, K>
 where
   for<'x, 'y> &'x T: Mul<&'y T, Output = T> + Add<&'y T, Output = T>,
   T: Default + Copy,
@@ -525,7 +528,8 @@ where
   }
 }
 
-impl<'a, T, const K: usize, const N: usize> Mul<&'a Matrix<T, N, K>> for Vector<T, K>
+impl<'a, T, const K: usize, const N: usize> Mul<&'a Matrix<T, N, K>>
+  for Vector<T, K>
 where
   for<'x, 'y> &'x T: Mul<&'y T, Output = T> + Add<&'y T, Output = T>,
   T: Default + Copy,

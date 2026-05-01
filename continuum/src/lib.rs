@@ -3,6 +3,7 @@
 
 pub mod boundary;
 pub mod cpu;
+pub mod diagnostics;
 pub mod model;
 pub mod output;
 pub mod solver;

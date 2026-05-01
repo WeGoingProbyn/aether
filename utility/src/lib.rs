@@ -3,6 +3,7 @@
 
 pub mod collections;
 pub mod constants;
+pub mod diagnostics;
 pub mod domain;
 pub mod error;
 pub mod logger;
@@ -13,6 +14,7 @@ pub mod thread;
 
 pub use utility_macros::Deserialize;
 pub use utility_macros::Serialize;
+pub use utility_macros::StateDiagnostics;
 pub use utility_macros::profile;
 
 extern crate self as utility;

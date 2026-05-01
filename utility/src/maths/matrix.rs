@@ -316,8 +316,8 @@ where
   }
 }
 
-impl<T, const C: usize, const R: usize> Default for Matrix<T, C, R> 
-where 
+impl<T, const C: usize, const R: usize> Default for Matrix<T, C, R>
+where
   T: Default + Copy,
 {
   fn default() -> Self {
@@ -383,7 +383,7 @@ where
 // ================= Index impls =======================//
 
 impl<T, const C: usize, const R: usize> Index<usize> for Matrix<T, C, R>
-where 
+where
   T: Default + Copy,
 {
   type Output = [T; C];
@@ -394,7 +394,7 @@ where
 }
 
 impl<T, const C: usize, const R: usize> IndexMut<usize> for Matrix<T, C, R>
-where 
+where
   T: Default + Copy,
 {
   fn index_mut(&mut self, index: usize) -> &mut [T; C] {
@@ -406,7 +406,8 @@ where
 
 macro_rules! matrix_op_impl {
   ($trait:ident, $method:ident) => {
-    impl<'a, 'b, T, const C: usize, const R: usize> $trait<&'a Matrix<T, C, R>> for &'b Matrix<T, C, R>
+    impl<'a, 'b, T, const C: usize, const R: usize> $trait<&'a Matrix<T, C, R>>
+      for &'b Matrix<T, C, R>
     where
       for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
       T: Default + Copy,
@@ -416,13 +417,16 @@ macro_rules! matrix_op_impl {
       fn $method(self, rhs: &'a Matrix<T, C, R>) -> Self::Output {
         Matrix {
           inner: std::array::from_fn(|j| {
-            std::array::from_fn(|i| $trait::$method(&self.inner[j][i], &rhs.inner[j][i]))
+            std::array::from_fn(|i| {
+              $trait::$method(&self.inner[j][i], &rhs.inner[j][i])
+            })
           }),
         }
       }
     }
 
-    impl<'a, T, const C: usize, const R: usize> $trait<&'a Matrix<T, C, R>> for Matrix<T, C, R>
+    impl<'a, T, const C: usize, const R: usize> $trait<&'a Matrix<T, C, R>>
+      for Matrix<T, C, R>
     where
       for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
       T: Default + Copy,
@@ -434,7 +438,8 @@ macro_rules! matrix_op_impl {
       }
     }
 
-    impl<'a, T, const C: usize, const R: usize> $trait<Matrix<T, C, R>> for &'a Matrix<T, C, R>
+    impl<'a, T, const C: usize, const R: usize> $trait<Matrix<T, C, R>>
+      for &'a Matrix<T, C, R>
     where
       for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
       T: Default + Copy,
@@ -446,7 +451,8 @@ macro_rules! matrix_op_impl {
       }
     }
 
-    impl<T, const C: usize, const R: usize> $trait<Matrix<T, C, R>> for Matrix<T, C, R>
+    impl<T, const C: usize, const R: usize> $trait<Matrix<T, C, R>>
+      for Matrix<T, C, R>
     where
       for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
       T: Default + Copy,
@@ -462,7 +468,8 @@ macro_rules! matrix_op_impl {
 
 macro_rules! matrix_op_scalar_impl {
   ($trait:ident, $method:ident) => {
-    impl<'a, 'b, T, const C: usize, const R: usize> $trait<&'a T> for &'b Matrix<T, C, R>
+    impl<'a, 'b, T, const C: usize, const R: usize> $trait<&'a T>
+      for &'b Matrix<T, C, R>
     where
       for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
       T: Default + Copy,
@@ -478,7 +485,8 @@ macro_rules! matrix_op_scalar_impl {
       }
     }
 
-    impl<'a, T, const C: usize, const R: usize> $trait<&'a T> for Matrix<T, C, R>
+    impl<'a, T, const C: usize, const R: usize> $trait<&'a T>
+      for Matrix<T, C, R>
     where
       for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
       T: Default + Copy,
@@ -490,7 +498,8 @@ macro_rules! matrix_op_scalar_impl {
       }
     }
 
-    impl<'a, T, const C: usize, const R: usize> $trait<T> for &'a Matrix<T, C, R>
+    impl<'a, T, const C: usize, const R: usize> $trait<T>
+      for &'a Matrix<T, C, R>
     where
       for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
       T: Default + Copy,
@@ -518,7 +527,8 @@ macro_rules! matrix_op_scalar_impl {
 
 macro_rules! matrix_op_assign_impl {
   ($trait:ident, $method:ident) => {
-    impl<'a, T, const C: usize, const R: usize> $trait<&'a Matrix<T, C, R>> for Matrix<T, C, R>
+    impl<'a, T, const C: usize, const R: usize> $trait<&'a Matrix<T, C, R>>
+      for Matrix<T, C, R>
     where
       T: Default + Copy + $trait,
     {
@@ -531,7 +541,8 @@ macro_rules! matrix_op_assign_impl {
       }
     }
 
-    impl<T, const C: usize, const R: usize> $trait<Matrix<T, C, R>> for Matrix<T, C, R>
+    impl<T, const C: usize, const R: usize> $trait<Matrix<T, C, R>>
+      for Matrix<T, C, R>
     where
       T: Default + Copy + $trait,
     {
@@ -592,7 +603,8 @@ matrix_op_assign_scalar_impl!(MulAssign, mul_assign);
 
 // ================= Mul impls =======================//
 
-impl<T, const K: usize, const N: usize, const R: usize> Mul<&Matrix<T, R, K>> for &Matrix<T, K, N>
+impl<T, const K: usize, const N: usize, const R: usize> Mul<&Matrix<T, R, K>>
+  for &Matrix<T, K, N>
 where
   for<'x, 'y> &'x T: Mul<&'y T, Output = T> + Add<&'y T, Output = T>,
   T: Default + Copy,
@@ -616,7 +628,8 @@ where
   }
 }
 
-impl<T, const K: usize, const N: usize, const R: usize> Mul<Matrix<T, R, K>> for Matrix<T, K, N>
+impl<T, const K: usize, const N: usize, const R: usize> Mul<Matrix<T, R, K>>
+  for Matrix<T, K, N>
 where
   for<'x, 'y> &'x T: Mul<&'y T, Output = T> + Add<&'y T, Output = T>,
   T: Default + Copy,
@@ -628,7 +641,8 @@ where
   }
 }
 
-impl<'a, T, const K: usize, const N: usize, const R: usize> Mul<&'a Matrix<T, R, K>> for Matrix<T, K, N>
+impl<'a, T, const K: usize, const N: usize, const R: usize>
+  Mul<&'a Matrix<T, R, K>> for Matrix<T, K, N>
 where
   for<'x, 'y> &'x T: Mul<&'y T, Output = T> + Add<&'y T, Output = T>,
   T: Default + Copy,
@@ -640,7 +654,8 @@ where
   }
 }
 
-impl<T, const K: usize, const N: usize, const R: usize> Mul<Matrix<T, R, K>> for &Matrix<T, K, N>
+impl<T, const K: usize, const N: usize, const R: usize> Mul<Matrix<T, R, K>>
+  for &Matrix<T, K, N>
 where
   for<'x, 'y> &'x T: Mul<&'y T, Output = T> + Add<&'y T, Output = T>,
   T: Default + Copy,

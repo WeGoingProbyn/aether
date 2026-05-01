@@ -1,9 +1,16 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
+mod diagnostics;
+
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse_quote;
+
+#[proc_macro_derive(StateDiagnostics, attributes(diagnostics))]
+pub fn state_diagnostics(input: TokenStream) -> TokenStream {
+  diagnostics::expand(input)
+}
 
 #[proc_macro_attribute]
 pub fn profile(_: TokenStream, item: TokenStream) -> TokenStream {
