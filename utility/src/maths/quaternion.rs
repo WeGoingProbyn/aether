@@ -9,9 +9,10 @@ use std::ops::{
 use crate::maths::{matrix::Matrix, vector::Vector};
 
 /// [x, y, z, w]
+#[derive(PartialEq, Copy, Clone)]
 pub struct Quaternion<T>
 where
-  T: Default,
+  T: Default + Copy,
 {
   inner: Matrix<T, 4, 1>,
 }
@@ -20,7 +21,7 @@ where
 
 impl<T> From<[T; 4]> for Quaternion<T>
 where
-  T: Default,
+  T: Default + Copy,
 {
   fn from(item: [T; 4]) -> Quaternion<T> {
     let new = [item; 1];
@@ -28,7 +29,10 @@ where
   }
 }
 
-impl<T: Default> Default for Quaternion<T> {
+impl<T> Default for Quaternion<T> 
+where 
+  T: Default + Copy
+{
   fn default() -> Self {
     Quaternion {
       inner: Matrix::<T, 4, 1>::default(),
@@ -235,9 +239,10 @@ macro_rules! impl_quaternion_float {
 impl_quaternion_float!(f32);
 impl_quaternion_float!(f64);
 
-impl<T: Default> Quaternion<T>
+impl<T> Quaternion<T>
 where
   for<'x> &'x T: Neg<Output = T>,
+  T: Default + Copy,
 {
   pub fn conjugate(&self) -> Quaternion<T> {
     let mut out = Quaternion {
@@ -248,24 +253,11 @@ where
   }
 }
 
-impl<T> Quaternion<T>
-where
-  T: Default + Neg<Output = T> + Clone,
-{
-  pub fn conjugate_clone(&self) -> Quaternion<T> {
-    let mut out = Quaternion {
-      inner: -self.inner.clone(),
-    };
-    out[3] = -out[3].clone();
-    out
-  }
-}
-
 // ================ Display impls =================//
 
 impl<T> std::fmt::Display for Quaternion<T>
 where
-  T: Default + std::fmt::Display,
+  T: Default + Copy + std::fmt::Display,
 {
   fn fmt(
     &self,
@@ -278,7 +270,7 @@ where
 
 impl<T> std::fmt::Debug for Quaternion<T>
 where
-  T: Default + std::fmt::Display,
+  T: Default + Copy + std::fmt::Display,
 {
   fn fmt(
     &self,
@@ -292,7 +284,10 @@ where
 
 // ================ Index impls =================//
 
-impl<T: Default> Index<usize> for Quaternion<T> {
+impl<T> Index<usize> for Quaternion<T> 
+where 
+  T: Default + Copy,
+{
   type Output = T;
 
   fn index(&self, index: usize) -> &T {
@@ -300,199 +295,194 @@ impl<T: Default> Index<usize> for Quaternion<T> {
   }
 }
 
-impl<T: Default> IndexMut<usize> for Quaternion<T> {
+impl<T> IndexMut<usize> for Quaternion<T> 
+where 
+  T: Default + Copy,
+{
   fn index_mut(&mut self, index: usize) -> &mut T {
     &mut self.inner[0][index]
   }
 }
 
-// ================ Add impls =================//
+// ============= Operator impls ============== //
 
-impl<'a, T: Default> Add<&'a Quaternion<T>> for &Quaternion<T>
-where
-  for<'x> &'x T: Add<&'x T, Output = T>,
-{
-  type Output = Quaternion<T>;
+macro_rules! quat_op_impls {
+  ($trait:ident, $method:ident) => {
+    impl<'a, 'b, T> $trait<&'a Quaternion<T>> for &'b Quaternion<T>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Quaternion<T>;
 
-  fn add(self, rhs: &'a Quaternion<T>) -> Self::Output {
-    Quaternion {
-      inner: &self.inner + &rhs.inner,
+      fn $method(self, rhs: &'a Quaternion<T>) -> Self::Output {
+        Quaternion {
+          inner: $trait::$method(&self.inner, rhs.inner),
+        }
+      }
     }
-  }
-}
 
-impl<T> Add for Quaternion<T>
-where
-  T: Add<Output = T> + Default + Clone,
-{
-  type Output = Self;
+    impl<'a, T> $trait<&'a Quaternion<T>> for Quaternion<T>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Quaternion<T>;
 
-  fn add(self, rhs: Self) -> Self {
-    Quaternion {
-      inner: self.inner + rhs.inner,
+      fn $method(self, rhs: &'a Quaternion<T>) -> Self::Output {
+        $trait::$method(&self, rhs)
+      }
     }
-  }
-}
 
-impl<T> AddAssign for Quaternion<T>
-where
-  T: Default + Clone + AddAssign,
-{
-  fn add_assign(&mut self, rhs: Self) {
-    self.inner += rhs.inner;
-  }
-}
+    impl<'a, T> $trait<Quaternion<T>> for &'a Quaternion<T>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Quaternion<T>;
 
-impl<'a, T: Default> Add<&'a T> for &Quaternion<T>
-where
-  for<'x> &'x T: Add<&'x T, Output = T>,
-{
-  type Output = Quaternion<T>;
-
-  fn add(self, rhs: &'a T) -> Self::Output {
-    Quaternion {
-      inner: &self.inner + rhs,
+      fn $method(self, rhs: Quaternion<T>) -> Self::Output {
+        $trait::$method(self, &rhs)
+      }
     }
-  }
-}
 
-impl<T> Add<T> for Quaternion<T>
-where
-  T: Add<Output = T> + Default + Clone,
-{
-  type Output = Self;
+    impl<T> $trait<Quaternion<T>> for Quaternion<T>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Quaternion<T>;
 
-  fn add(self, rhs: T) -> Self {
-    Quaternion {
-      inner: self.inner + rhs,
+      fn $method(self, rhs: Quaternion<T>) -> Self::Output {
+        $trait::$method(&self, &rhs)
+      }
     }
-  }
+  };
 }
 
-impl<T> AddAssign<T> for Quaternion<T>
-where
-  T: Default + Clone + AddAssign,
-{
-  fn add_assign(&mut self, rhs: T) {
-    self.inner += rhs;
-  }
-}
+macro_rules! quat_op_scalar_impls {
+  ($trait:ident, $method:ident) => {
+    impl<'a, 'b, T: Default> $trait<&'a T> for &'b Quaternion<T>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Quaternion<T>;
 
-// ================ Sub impls =================//
-
-impl<'a, T: Default> Sub<&'a Quaternion<T>> for &Quaternion<T>
-where
-  for<'x> &'x T: Sub<&'x T, Output = T>,
-{
-  type Output = Quaternion<T>;
-
-  fn sub(self, rhs: &'a Quaternion<T>) -> Self::Output {
-    Quaternion {
-      inner: &self.inner - &rhs.inner,
+      fn $method(self, rhs: &'a T) -> Self::Output {
+        Quaternion {
+          inner: $trait::$method(&self.inner, rhs),
+        }
+      }
     }
-  }
-}
 
-impl<T> Sub for Quaternion<T>
-where
-  T: Sub<Output = T> + Default + Clone,
-{
-  type Output = Self;
+    impl<'a, T: Default> $trait<&'a T> for Quaternion<T>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Quaternion<T>;
 
-  fn sub(self, rhs: Self) -> Self {
-    Quaternion {
-      inner: self.inner - rhs.inner,
+      fn $method(self, rhs: &'a T) -> Self::Output {
+        $trait::$method(&self, rhs)
+      }
     }
-  }
-}
 
-impl<T> SubAssign for Quaternion<T>
-where
-  T: Default + Clone + SubAssign,
-{
-  fn sub_assign(&mut self, rhs: Self) {
-    self.inner -= rhs.inner;
-  }
-}
+    impl<'a, T: Default> $trait<T> for &'a Quaternion<T>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Quaternion<T>;
 
-impl<'a, T: Default> Sub<&'a T> for &Quaternion<T>
-where
-  for<'x> &'x T: Sub<&'x T, Output = T>,
-{
-  type Output = Quaternion<T>;
-
-  fn sub(self, rhs: &'a T) -> Self::Output {
-    Quaternion {
-      inner: &self.inner - rhs,
+      fn $method(self, rhs: T) -> Self::Output {
+        $trait::$method(self, &rhs)
+      }
     }
-  }
-}
 
-impl<T> Sub<T> for Quaternion<T>
-where
-  T: Sub<Output = T> + Default + Clone,
-{
-  type Output = Self;
+    impl<T: Default> $trait<T> for Quaternion<T>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Quaternion<T>;
 
-  fn sub(self, rhs: T) -> Self {
-    Quaternion {
-      inner: self.inner - rhs,
+      fn $method(self, rhs: T) -> Self::Output {
+        $trait::$method(&self, &rhs)
+      }
     }
-  }
+  };
 }
 
-impl<T> SubAssign<T> for Quaternion<T>
-where
-  T: Default + Clone + SubAssign,
-{
-  fn sub_assign(&mut self, rhs: T) {
-    self.inner -= rhs;
-  }
-}
-
-// ================ Div impls =================//
-
-impl<'a, T: Default> Div<&'a T> for &Quaternion<T>
-where
-  for<'x> &'x T: Div<&'x T, Output = T>,
-{
-  type Output = Quaternion<T>;
-
-  fn div(self, rhs: &'a T) -> Self::Output {
-    Quaternion {
-      inner: &self.inner / rhs,
+macro_rules! quat_op_assign_impl {
+  ($trait:ident, $method:ident) => {
+    impl<'a, T> $trait<&'a Quaternion<T>> for Quaternion<T>
+    where
+      T: Default + Copy + $trait,
+    {
+      fn $method(&mut self, rhs: &'a Quaternion<T>) {
+        $trait::$method(&mut self.inner, rhs.inner);    
+      }
     }
-  }
-}
 
-impl<T> Div<T> for Quaternion<T>
-where
-  T: Div<Output = T> + Default + Clone,
-{
-  type Output = Self;
-
-  fn div(self, rhs: T) -> Self {
-    Quaternion {
-      inner: self.inner / rhs,
+    impl<T> $trait<Quaternion<T>> for Quaternion<T>
+    where
+      T: Default + Copy + $trait,
+    {
+      fn $method(&mut self, rhs: Quaternion<T>) {
+        $trait::$method(self, &rhs);
+      }
     }
-  }
+  };
 }
 
-impl<T> DivAssign<T> for Quaternion<T>
-where
-  T: Default + Clone + DivAssign,
-{
-  fn div_assign(&mut self, rhs: T) {
-    self.inner /= rhs;
-  }
+macro_rules! quat_op_assign_scalar_impl {
+  ($trait:ident, $method:ident) => {
+    impl<T> $trait<T> for &mut Quaternion<T>
+    where
+      T: Default + Copy + $trait,
+    {
+      fn $method(&mut self, rhs: T) {
+        $trait::$method(&mut self.inner, rhs)
+      }
+    }
+
+    impl<T> $trait<T> for Quaternion<T>
+    where
+      T: Default + Copy + $trait,
+    {
+      fn $method(&mut self, rhs: T) {
+        $trait::$method(&mut self.inner, rhs)
+      }
+    }
+  };
 }
+
+quat_op_impls!(Add, add);
+quat_op_scalar_impls!(Add, add);
+quat_op_assign_impl!(AddAssign, add_assign);
+quat_op_assign_scalar_impl!(AddAssign, add_assign);
+
+quat_op_impls!(Sub, sub);
+quat_op_scalar_impls!(Sub, sub);
+quat_op_assign_impl!(SubAssign, sub_assign);
+quat_op_assign_scalar_impl!(SubAssign, sub_assign);
+
+quat_op_impls!(Div, div);
+quat_op_scalar_impls!(Div, div);
+quat_op_assign_impl!(DivAssign, div_assign);
+quat_op_assign_scalar_impl!(DivAssign, div_assign);
+
+quat_op_scalar_impls!(Mul, mul);
+quat_op_assign_scalar_impl!(MulAssign, mul_assign);
 
 // ================ Mul impls =================//
 
-impl<'a, T: Default> Mul<&'a Quaternion<T>> for &Quaternion<T>
+impl<'a, T> Mul<&'a Quaternion<T>> for &Quaternion<T>
 where
-  for<'x> &'x T:
-    Mul<&'x T, Output = T> + Sub<&'x T, Output = T> + Add<&'x T, Output = T>,
+  for<'x, 'y> &'x T:
+    Mul<&'y T, Output = T> + Sub<&'y T, Output = T> + Add<&'y T, Output = T>,
+  T: Default + Copy,
 {
   type Output = Quaternion<T>;
 
@@ -519,102 +509,73 @@ where
   }
 }
 
-impl<T> Mul for Quaternion<T>
+impl<'a, T> Mul<&'a Quaternion<T>> for Quaternion<T>
 where
-  T: Mul<Output = T> + Sub<Output = T> + Add<Output = T> + Default + Clone,
-{
-  type Output = Self;
-
-  fn mul(self, rhs: Self) -> Self {
-    let mut out = Quaternion::default();
-
-    let a = self[3].clone() * rhs[0].clone() + self[0].clone() * rhs[3].clone();
-    let b = self[1].clone() * rhs[2].clone() - self[2].clone() * rhs[1].clone();
-    out[0] = a + b;
-
-    let c = self[3].clone() * rhs[1].clone() - self[0].clone() * rhs[2].clone();
-    let d = self[1].clone() * rhs[3].clone() + self[2].clone() * rhs[0].clone();
-    out[1] = c + d;
-
-    let d = self[3].clone() * rhs[2].clone() + self[0].clone() * rhs[1].clone();
-    let e = self[1].clone() * rhs[0].clone() - self[2].clone() * rhs[3].clone();
-    out[2] = d - e;
-
-    let f = self[3].clone() * rhs[3].clone() - self[0].clone() * rhs[0].clone();
-    let g = self[1].clone() * rhs[1].clone() + self[2].clone() * rhs[2].clone();
-    out[3] = f - g;
-
-    out
-  }
-}
-
-impl<T> MulAssign for Quaternion<T>
-where
-  T: Default + Clone + Mul<Output = T> + Add<Output = T> + Sub<Output = T>,
-{
-  fn mul_assign(&mut self, rhs: Self) {
-    let mut out = Quaternion::default();
-
-    let a = self[3].clone() * rhs[0].clone() + self[0].clone() * rhs[3].clone();
-    let b = self[1].clone() * rhs[2].clone() - self[2].clone() * rhs[1].clone();
-    out[0] = a + b;
-
-    let c = self[3].clone() * rhs[1].clone() - self[0].clone() * rhs[2].clone();
-    let d = self[1].clone() * rhs[3].clone() + self[2].clone() * rhs[0].clone();
-    out[1] = c + d;
-
-    let d = self[3].clone() * rhs[2].clone() + self[0].clone() * rhs[1].clone();
-    let e = self[1].clone() * rhs[0].clone() - self[2].clone() * rhs[3].clone();
-    out[2] = d - e;
-
-    let f = self[3].clone() * rhs[3].clone() - self[0].clone() * rhs[0].clone();
-    let g = self[1].clone() * rhs[1].clone() + self[2].clone() * rhs[2].clone();
-    out[3] = f - g;
-
-    *self = out
-  }
-}
-
-impl<'a, T: Default> Mul<&'a T> for &Quaternion<T>
-where
-  for<'x> &'x T: Mul<&'x T, Output = T>,
+  for<'x, 'y> &'x T:
+    Mul<&'y T, Output = T> + Sub<&'y T, Output = T> + Add<&'y T, Output = T>,
+  T: Default + Copy,
 {
   type Output = Quaternion<T>;
 
-  fn mul(self, rhs: &'a T) -> Self::Output {
-    Quaternion {
-      inner: &self.inner * rhs,
-    }
+  fn mul(self, rhs: &'a Quaternion<T>) -> Self::Output {
+    Mul::mul(&self, rhs)
   }
 }
 
-impl<T> Mul<T> for Quaternion<T>
+impl<T> Mul<Quaternion<T>> for &Quaternion<T>
 where
-  T: Mul<Output = T> + Default + Clone,
+  for<'x, 'y> &'x T:
+    Mul<&'y T, Output = T> + Sub<&'y T, Output = T> + Add<&'y T, Output = T>,
+  T: Default + Copy,
+{
+  type Output = Quaternion<T>;
+
+  fn mul(self, rhs: Quaternion<T>) -> Self::Output {
+    Mul::mul(self, &rhs)
+  }
+}
+
+impl<T> Mul<Quaternion<T>> for Quaternion<T>
+where
+  for<'x, 'y> &'x T:
+    Mul<&'y T, Output = T> + Sub<&'y T, Output = T> + Add<&'y T, Output = T>,
+  T: Default + Copy,
 {
   type Output = Self;
 
-  fn mul(self, rhs: T) -> Self {
-    Quaternion {
-      inner: self.inner * rhs,
-    }
+  fn mul(self, rhs: Quaternion<T>) -> Self {
+    Mul::mul(&self, &rhs)
   }
 }
 
-impl<T> MulAssign<T> for Quaternion<T>
+impl<'a, T> MulAssign<&'a Quaternion<T>> for Quaternion<T>
 where
-  T: Default + Clone + MulAssign,
+  for<'x, 'y> &'x T:
+    Mul<&'y T, Output = T> + Sub<&'y T, Output = T> + Add<&'y T, Output = T>,
+  T: Default + Copy,
 {
-  fn mul_assign(&mut self, rhs: T) {
-    self.inner *= rhs;
+  fn mul_assign(&mut self, rhs: &'a Quaternion<T>) {
+    *self = *self * rhs;
+  }
+}
+
+impl<T> MulAssign<Quaternion<T>> for Quaternion<T>
+where
+  for<'x, 'y> &'x T:
+    Mul<&'y T, Output = T> + Sub<&'y T, Output = T> + Add<&'y T, Output = T>,
+  T: Default + Copy,
+{
+  fn mul_assign(&mut self, rhs: Quaternion<T>) {
+    *self = *self * rhs;
   }
 }
 
 // ================ Neg/Conjugate impls =================//
 
-impl<T: Default> Neg for &Quaternion<T>
+impl<T> Neg for &Quaternion<T>
 where
   for<'x> &'x T: Neg<Output = T>,
+  T: Default + Copy,
 {
   type Output = Quaternion<T>;
   fn neg(self) -> Self::Output {
@@ -626,12 +587,13 @@ where
 
 impl<T: Default> Neg for Quaternion<T>
 where
-  T: Neg<Output = T> + Clone,
+  for<'x> &'x T: Neg<Output = T>,
+  T: Default + Copy,
 {
   type Output = Quaternion<T>;
   fn neg(self) -> Self::Output {
     Quaternion {
-      inner: -self.inner.clone(),
+      inner: -self.inner,
     }
   }
 }
@@ -640,14 +602,14 @@ where
 
 pub struct QuatIter<'a, T>
 where
-  T: Default,
+  T: Default + Copy,
 {
   inner: &'a Matrix<T, 4, 1>,
 }
 
 impl<'a, T> Iterator for QuatIter<'a, T>
 where
-  T: Default,
+  T: Default + Copy,
 {
   type Item = &'a T;
   fn next(&mut self) -> Option<Self::Item> {
@@ -657,7 +619,7 @@ where
 
 pub struct QuatIterMut<'a, T>
 where
-  T: Default,
+  T: Default + Copy,
 {
   inner: &'a mut Matrix<T, 4, 1>,
   col: usize,
@@ -665,7 +627,7 @@ where
 
 impl<'a, T> Iterator for QuatIterMut<'a, T>
 where
-  T: Default,
+  T: Default + Copy,
 {
   type Item = &'a mut T;
   fn next(&mut self) -> Option<Self::Item> {
@@ -684,7 +646,7 @@ where
 
 pub struct QuatIterInto<T>
 where
-  T: Default + Clone,
+  T: Default + Copy,
 {
   inner: Matrix<T, 4, 1>,
   col: usize,
@@ -692,7 +654,7 @@ where
 
 impl<T> Iterator for QuatIterInto<T>
 where
-  T: Default + Clone,
+  T: Default + Copy,
 {
   type Item = T;
   fn next(&mut self) -> Option<Self::Item> {
@@ -700,7 +662,7 @@ where
       return None;
     }
 
-    let next = self.inner[0][self.col].clone();
+    let next = self.inner[0][self.col];
     self.col += 1;
 
     // This is safe because we never
@@ -711,7 +673,7 @@ where
 
 impl<T> Quaternion<T>
 where
-  T: Default,
+  T: Default + Copy,
 {
   pub fn iter(&self) -> QuatIter<'_, T> {
     QuatIter { inner: &self.inner }
@@ -727,7 +689,7 @@ where
 
 impl<T> IntoIterator for Quaternion<T>
 where
-  T: Default + Clone,
+  T: Default + Copy,
 {
   type Item = T;
   type IntoIter = QuatIterInto<T>;
@@ -811,7 +773,7 @@ mod test {
     let axis: Vector<f32, 3> = [1.0, 2.0, 3.0].into();
     let q = Quaternion::<f32>::from_axis_angle(&axis, 1.2);
     let inv = q.inverse().unwrap();
-    let result = &q * &inv;
+    let result = q * inv;
     // should be identity: [0,0,0,1]
     assert!((result[0]).abs() < 1e-5);
     assert!((result[1]).abs() < 1e-5);
@@ -955,8 +917,8 @@ mod test {
   fn quaternion_multiply_non_commutative() {
     let a: Quaternion<f32> = [1.0, 0.0, 0.0, 1.0].into();
     let b: Quaternion<f32> = [0.0, 1.0, 0.0, 1.0].into();
-    let ab = &a * &b;
-    let ba = &b * &a;
+    let ab = a * b;
+    let ba = b * a;
     // quaternion multiplication is NOT commutative
     assert!(!approx_eq_quat(&ab, &ba, 1e-6));
   }

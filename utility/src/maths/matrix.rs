@@ -6,8 +6,8 @@ use std::ops::{
   SubAssign,
 };
 
-#[derive(PartialEq, Clone)]
-pub struct Matrix<T: Default, const C: usize, const R: usize> {
+#[derive(PartialEq, Copy, Clone)]
+pub struct Matrix<T: Default + Copy, const C: usize, const R: usize> {
   pub(crate) inner: [[T; C]; R],
 }
 
@@ -276,22 +276,7 @@ impl_matrix_float!(f64);
 
 impl<T, const C: usize, const R: usize> Matrix<T, C, R>
 where
-  T: Default + Clone + AddAssign + Mul<Output = T>,
-{
-  pub fn dot_clone(&self, rhs: &Matrix<T, C, R>) -> T {
-    let mut res: T = T::default();
-    for j in 0..R {
-      for i in 0..C {
-        res += self.inner[j][i].clone() * rhs.inner[j][i].clone();
-      }
-    }
-    res
-  }
-}
-
-impl<T, const C: usize, const R: usize> Matrix<T, C, R>
-where
-  T: Default,
+  T: Default + Copy,
   for<'x> &'x T: Mul<&'x T, Output = T> + Add<&'x T, Output = T>,
 {
   pub fn dot(&self, rhs: &Matrix<T, C, R>) -> T {
@@ -324,14 +309,17 @@ where
 
 impl<T, const C: usize, const R: usize> From<[[T; C]; R]> for Matrix<T, C, R>
 where
-  T: Default,
+  T: Default + Copy,
 {
   fn from(item: [[T; C]; R]) -> Matrix<T, C, R> {
     Matrix { inner: item }
   }
 }
 
-impl<T: Default, const C: usize, const R: usize> Default for Matrix<T, C, R> {
+impl<T, const C: usize, const R: usize> Default for Matrix<T, C, R> 
+where 
+  T: Default + Copy,
+{
   fn default() -> Self {
     Matrix {
       inner: std::array::from_fn(|_| std::array::from_fn(|_| T::default())),
@@ -343,7 +331,7 @@ impl<T: Default, const C: usize, const R: usize> Default for Matrix<T, C, R> {
 
 impl<T, const C: usize, const R: usize> std::fmt::Display for Matrix<T, C, R>
 where
-  T: Default + std::fmt::Display,
+  T: Default + Copy + std::fmt::Display,
 {
   fn fmt(
     &self,
@@ -365,7 +353,7 @@ where
 
 impl<T, const C: usize, const R: usize> std::fmt::Debug for Matrix<T, C, R>
 where
-  T: Default + std::fmt::Display,
+  T: Default + Copy + std::fmt::Display,
 {
   fn fmt(
     &self,
@@ -394,8 +382,9 @@ where
 
 // ================= Index impls =======================//
 
-impl<T: Default, const C: usize, const R: usize> Index<usize>
-  for Matrix<T, C, R>
+impl<T, const C: usize, const R: usize> Index<usize> for Matrix<T, C, R>
+where 
+  T: Default + Copy,
 {
   type Output = [T; C];
 
@@ -404,297 +393,209 @@ impl<T: Default, const C: usize, const R: usize> Index<usize>
   }
 }
 
-impl<T: Default, const C: usize, const R: usize> IndexMut<usize>
-  for Matrix<T, C, R>
+impl<T, const C: usize, const R: usize> IndexMut<usize> for Matrix<T, C, R>
+where 
+  T: Default + Copy,
 {
   fn index_mut(&mut self, index: usize) -> &mut [T; C] {
     &mut self.inner[index]
   }
 }
 
-// ================= Add impls =======================//
+// ================= Operator impls =======================//
 
-impl<'a, T: Default, const C: usize, const R: usize> Add<&'a Matrix<T, C, R>>
-  for &Matrix<T, C, R>
-where
-  for<'x> &'x T: Add<&'x T, Output = T>,
-{
-  type Output = Matrix<T, C, R>;
+macro_rules! matrix_op_impl {
+  ($trait:ident, $method:ident) => {
+    impl<'a, 'b, T, const C: usize, const R: usize> $trait<&'a Matrix<T, C, R>> for &'b Matrix<T, C, R>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Matrix<T, C, R>;
 
-  fn add(self, rhs: &'a Matrix<T, C, R>) -> Self::Output {
-    Matrix {
-      inner: std::array::from_fn(|j| {
-        std::array::from_fn(|i| &self.inner[j][i] + &rhs.inner[j][i])
-      }),
-    }
-  }
-}
-
-impl<T, const C: usize, const R: usize> Add for Matrix<T, C, R>
-where
-  T: Add<Output = T> + Default + Clone,
-{
-  type Output = Self;
-
-  fn add(self, rhs: Self) -> Self {
-    Matrix {
-      inner: std::array::from_fn(|j| {
-        std::array::from_fn(|i| {
-          self.inner[j][i].clone() + rhs.inner[j][i].clone()
-        })
-      }),
-    }
-  }
-}
-
-impl<T, const C: usize, const R: usize> AddAssign for Matrix<T, C, R>
-where
-  T: Default + Clone + AddAssign,
-{
-  fn add_assign(&mut self, rhs: Self) {
-    for j in 0..R {
-      for i in 0..C {
-        self.inner[j][i] += rhs.inner[j][i].clone();
+      fn $method(self, rhs: &'a Matrix<T, C, R>) -> Self::Output {
+        Matrix {
+          inner: std::array::from_fn(|j| {
+            std::array::from_fn(|i| $trait::$method(&self.inner[j][i], &rhs.inner[j][i]))
+          }),
+        }
       }
     }
-  }
-}
 
-impl<'a, T: Default, const C: usize, const R: usize> Add<&'a T>
-  for &Matrix<T, C, R>
-where
-  for<'x> &'x T: Add<&'x T, Output = T>,
-{
-  type Output = Matrix<T, C, R>;
+    impl<'a, T, const C: usize, const R: usize> $trait<&'a Matrix<T, C, R>> for Matrix<T, C, R>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Matrix<T, C, R>;
 
-  fn add(self, rhs: &'a T) -> Self::Output {
-    Matrix {
-      inner: std::array::from_fn(|j| {
-        std::array::from_fn(|i| &self.inner[j][i] + rhs)
-      }),
-    }
-  }
-}
-
-impl<T, const C: usize, const R: usize> Add<T> for Matrix<T, C, R>
-where
-  T: Add<Output = T> + Default + Clone,
-{
-  type Output = Self;
-
-  fn add(self, rhs: T) -> Self {
-    Matrix {
-      inner: std::array::from_fn(|j| {
-        std::array::from_fn(|i| self.inner[j][i].clone() + rhs.clone())
-      }),
-    }
-  }
-}
-
-impl<T, const C: usize, const R: usize> AddAssign<T> for Matrix<T, C, R>
-where
-  T: Default + Clone + AddAssign,
-{
-  fn add_assign(&mut self, rhs: T) {
-    for j in 0..R {
-      for i in 0..C {
-        self.inner[j][i] += rhs.clone();
+      fn $method(self, rhs: &'a Matrix<T, C, R>) -> Self::Output {
+        $trait::$method(&self, rhs)
       }
     }
-  }
-}
 
-// ================= Sub impls =======================//
+    impl<'a, T, const C: usize, const R: usize> $trait<Matrix<T, C, R>> for &'a Matrix<T, C, R>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Matrix<T, C, R>;
 
-impl<'a, T: Default, const C: usize, const R: usize> Sub<&'a Matrix<T, C, R>>
-  for &Matrix<T, C, R>
-where
-  for<'x> &'x T: Sub<&'x T, Output = T>,
-{
-  type Output = Matrix<T, C, R>;
-
-  fn sub(self, rhs: &'a Matrix<T, C, R>) -> Self::Output {
-    Matrix {
-      inner: std::array::from_fn(|j| {
-        std::array::from_fn(|i| &self.inner[j][i] - &rhs.inner[j][i])
-      }),
-    }
-  }
-}
-
-impl<T, const C: usize, const R: usize> Sub for Matrix<T, C, R>
-where
-  T: Sub<Output = T> + Default + Clone,
-{
-  type Output = Self;
-
-  fn sub(self, rhs: Self) -> Self {
-    Matrix {
-      inner: std::array::from_fn(|j| {
-        std::array::from_fn(|i| {
-          self.inner[j][i].clone() - rhs.inner[j][i].clone()
-        })
-      }),
-    }
-  }
-}
-
-impl<T, const C: usize, const R: usize> SubAssign for Matrix<T, C, R>
-where
-  T: Default + Clone + SubAssign,
-{
-  fn sub_assign(&mut self, rhs: Self) {
-    for j in 0..R {
-      for i in 0..C {
-        self.inner[j][i] -= rhs.inner[j][i].clone();
+      fn $method(self, rhs: Matrix<T, C, R>) -> Self::Output {
+        $trait::$method(self, &rhs)
       }
     }
-  }
-}
 
-impl<'a, T: Default, const C: usize, const R: usize> Sub<&'a T>
-  for &Matrix<T, C, R>
-where
-  for<'x> &'x T: Sub<&'x T, Output = T>,
-{
-  type Output = Matrix<T, C, R>;
+    impl<T, const C: usize, const R: usize> $trait<Matrix<T, C, R>> for Matrix<T, C, R>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Matrix<T, C, R>;
 
-  fn sub(self, rhs: &'a T) -> Self::Output {
-    Matrix {
-      inner: std::array::from_fn(|j| {
-        std::array::from_fn(|i| &self.inner[j][i] - rhs)
-      }),
-    }
-  }
-}
-
-impl<T, const C: usize, const R: usize> Sub<T> for Matrix<T, C, R>
-where
-  T: Sub<Output = T> + Default + Clone,
-{
-  type Output = Self;
-
-  fn sub(self, rhs: T) -> Self {
-    Matrix {
-      inner: std::array::from_fn(|j| {
-        std::array::from_fn(|i| self.inner[j][i].clone() - rhs.clone())
-      }),
-    }
-  }
-}
-
-impl<T, const C: usize, const R: usize> SubAssign<T> for Matrix<T, C, R>
-where
-  T: Default + Clone + SubAssign,
-{
-  fn sub_assign(&mut self, rhs: T) {
-    for j in 0..R {
-      for i in 0..C {
-        self.inner[j][i] -= rhs.clone();
+      fn $method(self, rhs: Matrix<T, C, R>) -> Self::Output {
+        $trait::$method(&self, &rhs)
       }
     }
-  }
+  };
 }
 
-// ================= Div impls =======================//
+macro_rules! matrix_op_scalar_impl {
+  ($trait:ident, $method:ident) => {
+    impl<'a, 'b, T, const C: usize, const R: usize> $trait<&'a T> for &'b Matrix<T, C, R>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Matrix<T, C, R>;
 
-impl<'a, T: Default, const C: usize, const R: usize> Div<&'a Matrix<T, C, R>>
-  for &Matrix<T, C, R>
-where
-  for<'x> &'x T: Div<&'x T, Output = T>,
-{
-  type Output = Matrix<T, C, R>;
-
-  fn div(self, rhs: &'a Matrix<T, C, R>) -> Self::Output {
-    Matrix {
-      inner: std::array::from_fn(|j| {
-        std::array::from_fn(|i| &self.inner[j][i] / &rhs.inner[j][i])
-      }),
-    }
-  }
-}
-
-impl<T, const C: usize, const R: usize> Div for Matrix<T, C, R>
-where
-  T: Div<Output = T> + Default + Clone,
-{
-  type Output = Self;
-
-  fn div(self, rhs: Self) -> Self {
-    Matrix {
-      inner: std::array::from_fn(|j| {
-        std::array::from_fn(|i| {
-          self.inner[j][i].clone() / rhs.inner[j][i].clone()
-        })
-      }),
-    }
-  }
-}
-
-impl<T, const C: usize, const R: usize> DivAssign for Matrix<T, C, R>
-where
-  T: Default + Clone + DivAssign,
-{
-  fn div_assign(&mut self, rhs: Self) {
-    for j in 0..R {
-      for i in 0..C {
-        self.inner[j][i] /= rhs.inner[j][i].clone();
+      fn $method(self, rhs: &'a T) -> Self::Output {
+        Matrix {
+          inner: std::array::from_fn(|j| {
+            std::array::from_fn(|i| $trait::$method(&self.inner[j][i], rhs))
+          }),
+        }
       }
     }
-  }
-}
 
-impl<'a, T: Default, const C: usize, const R: usize> Div<&'a T>
-  for &Matrix<T, C, R>
-where
-  for<'x> &'x T: Div<&'x T, Output = T>,
-{
-  type Output = Matrix<T, C, R>;
+    impl<'a, T, const C: usize, const R: usize> $trait<&'a T> for Matrix<T, C, R>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Matrix<T, C, R>;
 
-  fn div(self, rhs: &'a T) -> Self::Output {
-    Matrix {
-      inner: std::array::from_fn(|j| {
-        std::array::from_fn(|i| &self.inner[j][i] / rhs)
-      }),
-    }
-  }
-}
-
-impl<T, const C: usize, const R: usize> Div<T> for Matrix<T, C, R>
-where
-  T: Div<Output = T> + Default + Clone,
-{
-  type Output = Self;
-
-  fn div(self, rhs: T) -> Self {
-    Matrix {
-      inner: std::array::from_fn(|j| {
-        std::array::from_fn(|i| self.inner[j][i].clone() / rhs.clone())
-      }),
-    }
-  }
-}
-
-impl<T, const C: usize, const R: usize> DivAssign<T> for Matrix<T, C, R>
-where
-  T: Default + Clone + DivAssign,
-{
-  fn div_assign(&mut self, rhs: T) {
-    for j in 0..R {
-      for i in 0..C {
-        self.inner[j][i] /= rhs.clone();
+      fn $method(self, rhs: &'a T) -> Self::Output {
+        $trait::$method(&self, rhs)
       }
     }
-  }
+
+    impl<'a, T, const C: usize, const R: usize> $trait<T> for &'a Matrix<T, C, R>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Matrix<T, C, R>;
+
+      fn $method(self, rhs: T) -> Self::Output {
+        $trait::$method(self, &rhs)
+      }
+    }
+
+    impl<T, const C: usize, const R: usize> $trait<T> for Matrix<T, C, R>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Matrix<T, C, R>;
+
+      fn $method(self, rhs: T) -> Self::Output {
+        $trait::$method(&self, &rhs)
+      }
+    }
+  };
 }
+
+macro_rules! matrix_op_assign_impl {
+  ($trait:ident, $method:ident) => {
+    impl<'a, T, const C: usize, const R: usize> $trait<&'a Matrix<T, C, R>> for Matrix<T, C, R>
+    where
+      T: Default + Copy + $trait,
+    {
+      fn $method(&mut self, rhs: &'a Matrix<T, C, R>) {
+        for j in 0..R {
+          for i in 0..C {
+            $trait::$method(&mut self.inner[j][i], rhs.inner[j][i])
+          }
+        }
+      }
+    }
+
+    impl<T, const C: usize, const R: usize> $trait<Matrix<T, C, R>> for Matrix<T, C, R>
+    where
+      T: Default + Copy + $trait,
+    {
+      fn $method(&mut self, rhs: Matrix<T, C, R>) {
+        $trait::$method(self, &rhs);
+      }
+    }
+  };
+}
+
+macro_rules! matrix_op_assign_scalar_impl {
+  ($trait:ident, $method:ident) => {
+    impl<T, const C: usize, const R: usize> $trait<T> for &mut Matrix<T, C, R>
+    where
+      T: Default + Copy + $trait,
+    {
+      fn $method(&mut self, rhs: T) {
+        for j in 0..R {
+          for i in 0..C {
+            $trait::$method(&mut self.inner[j][i], rhs)
+          }
+        }
+      }
+    }
+
+    impl<T, const C: usize, const R: usize> $trait<T> for Matrix<T, C, R>
+    where
+      T: Default + Copy + $trait,
+    {
+      fn $method(&mut self, rhs: T) {
+        for j in 0..R {
+          for i in 0..C {
+            $trait::$method(&mut self.inner[j][i], rhs)
+          }
+        }
+      }
+    }
+  };
+}
+
+matrix_op_impl!(Add, add);
+matrix_op_scalar_impl!(Add, add);
+matrix_op_assign_impl!(AddAssign, add_assign);
+matrix_op_assign_scalar_impl!(AddAssign, add_assign);
+
+matrix_op_impl!(Sub, sub);
+matrix_op_scalar_impl!(Sub, sub);
+matrix_op_assign_impl!(SubAssign, sub_assign);
+matrix_op_assign_scalar_impl!(SubAssign, sub_assign);
+
+matrix_op_impl!(Div, div);
+matrix_op_scalar_impl!(Div, div);
+matrix_op_assign_impl!(DivAssign, div_assign);
+matrix_op_assign_scalar_impl!(DivAssign, div_assign);
+
+matrix_op_scalar_impl!(Mul, mul);
+matrix_op_assign_scalar_impl!(MulAssign, mul_assign);
 
 // ================= Mul impls =======================//
 
-impl<T, const K: usize, const N: usize, const R: usize> Mul<&Matrix<T, R, K>>
-  for &Matrix<T, K, N>
+impl<T, const K: usize, const N: usize, const R: usize> Mul<&Matrix<T, R, K>> for &Matrix<T, K, N>
 where
-  T: Default,
-  for<'x> &'x T: Mul<&'x T, Output = T> + Add<&'x T, Output = T>,
+  for<'x, 'y> &'x T: Mul<&'y T, Output = T> + Add<&'y T, Output = T>,
+  T: Default + Copy,
 {
   type Output = Matrix<T, R, N>;
 
@@ -715,90 +616,39 @@ where
   }
 }
 
-impl<T, const K: usize, const N: usize, const R: usize> Mul<Matrix<T, R, K>>
-  for Matrix<T, K, N>
+impl<T, const K: usize, const N: usize, const R: usize> Mul<Matrix<T, R, K>> for Matrix<T, K, N>
 where
-  T: Mul<Output = T> + Add<Output = T> + Default + Clone,
+  for<'x, 'y> &'x T: Mul<&'y T, Output = T> + Add<&'y T, Output = T>,
+  T: Default + Copy,
 {
   type Output = Matrix<T, R, N>;
 
   fn mul(self, rhs: Matrix<T, R, K>) -> Self::Output {
-    let mut out = Matrix::<T, R, N>::default();
-
-    for j in 0..N {
-      for i in 0..R {
-        let mut acc = T::default();
-        for k in 0..K {
-          let prod = self.inner[j][k].clone() * rhs.inner[k][i].clone();
-          acc = acc + prod;
-        }
-        out.inner[j][i] = acc;
-      }
-    }
-    out
+    Mul::mul(&self, &rhs)
   }
 }
 
-impl<T, const K: usize, const N: usize, const R: usize>
-  MulAssign<Matrix<T, R, K>> for Matrix<T, K, N>
+impl<'a, T, const K: usize, const N: usize, const R: usize> Mul<&'a Matrix<T, R, K>> for Matrix<T, K, N>
 where
-  T: Mul<Output = T> + Add<Output = T> + Default + Clone,
+  for<'x, 'y> &'x T: Mul<&'y T, Output = T> + Add<&'y T, Output = T>,
+  T: Default + Copy,
 {
-  fn mul_assign(&mut self, rhs: Matrix<T, R, K>) {
-    for j in 0..N {
-      for i in 0..R {
-        let mut acc = T::default();
-        for k in 0..K {
-          let prod = self.inner[j][k].clone() * rhs.inner[k][i].clone();
-          acc = acc + prod;
-        }
-        self.inner[j][i] = acc;
-      }
-    }
+  type Output = Matrix<T, R, N>;
+
+  fn mul(self, rhs: &'a Matrix<T, R, K>) -> Self::Output {
+    Mul::mul(&self, rhs)
   }
 }
 
-impl<'a, T: Default, const C: usize, const R: usize> Mul<&'a T>
-  for &Matrix<T, C, R>
+impl<T, const K: usize, const N: usize, const R: usize> Mul<Matrix<T, R, K>> for &Matrix<T, K, N>
 where
-  for<'x> &'x T: Mul<&'x T, Output = T>,
+  for<'x, 'y> &'x T: Mul<&'y T, Output = T> + Add<&'y T, Output = T>,
+  T: Default + Copy,
 {
-  type Output = Matrix<T, C, R>;
+  type Output = Matrix<T, R, N>;
 
-  fn mul(self, rhs: &'a T) -> Self::Output {
-    Matrix {
-      inner: std::array::from_fn(|j| {
-        std::array::from_fn(|i| &self.inner[j][i] * rhs)
-      }),
-    }
-  }
-}
-
-impl<T, const C: usize, const R: usize> Mul<T> for Matrix<T, C, R>
-where
-  T: Mul<Output = T> + Default + Clone,
-{
-  type Output = Self;
-
-  fn mul(self, rhs: T) -> Self {
-    Matrix {
-      inner: std::array::from_fn(|j| {
-        std::array::from_fn(|i| self.inner[j][i].clone() * rhs.clone())
-      }),
-    }
-  }
-}
-
-impl<T, const C: usize, const R: usize> MulAssign<T> for Matrix<T, C, R>
-where
-  T: Default + Clone + MulAssign,
-{
-  fn mul_assign(&mut self, rhs: T) {
-    for j in 0..R {
-      for i in 0..C {
-        self.inner[j][i] *= rhs.clone();
-      }
-    }
+  fn mul(self, rhs: Matrix<T, R, K>) -> Self::Output {
+    Mul::mul(self, &rhs)
   }
 }
 
@@ -806,8 +656,8 @@ where
 
 impl<T, const C: usize, const R: usize> Neg for &Matrix<T, C, R>
 where
-  T: Default,
   for<'x> &'x T: Neg<Output = T>,
+  T: Default + Copy,
 {
   type Output = Matrix<T, C, R>;
 
@@ -824,17 +674,12 @@ where
 
 impl<T, const C: usize, const R: usize> Neg for Matrix<T, C, R>
 where
-  T: Default + Clone + Neg<Output = T>,
+  for<'x> &'x T: Neg<Output = T>,
+  T: Default + Copy,
 {
   type Output = Self;
   fn neg(self) -> Self::Output {
-    let mut out = Matrix::default();
-    for j in 0..R {
-      for i in 0..C {
-        out[j][i] = -self[j][i].clone();
-      }
-    }
-    out
+    -(&self)
   }
 }
 
@@ -842,7 +687,7 @@ where
 
 pub struct MatrixIter<'a, T, const C: usize, const R: usize>
 where
-  T: Default,
+  T: Default + Copy,
 {
   inner: &'a Matrix<T, C, R>,
   row: usize,
@@ -851,7 +696,7 @@ where
 
 impl<'a, T, const C: usize, const R: usize> Iterator for MatrixIter<'a, T, C, R>
 where
-  T: Default,
+  T: Default + Copy,
 {
   type Item = &'a T;
 
@@ -874,7 +719,7 @@ where
 
 pub struct MatrixIterMut<'a, T, const C: usize, const R: usize>
 where
-  T: Default,
+  T: Default + Copy,
 {
   inner: &'a mut Matrix<T, C, R>,
   row: usize,
@@ -884,7 +729,7 @@ where
 impl<'a, T, const C: usize, const R: usize> Iterator
   for MatrixIterMut<'a, T, C, R>
 where
-  T: Default,
+  T: Default + Copy,
 {
   type Item = &'a mut T;
 
@@ -909,7 +754,7 @@ where
 
 pub struct MatrixIterInto<T, const C: usize, const R: usize>
 where
-  T: Default,
+  T: Default + Copy,
 {
   inner: Matrix<T, C, R>,
   row: usize,
@@ -918,7 +763,7 @@ where
 
 impl<T, const C: usize, const R: usize> Iterator for MatrixIterInto<T, C, R>
 where
-  T: Default + Clone,
+  T: Default + Copy,
 {
   type Item = T;
 
@@ -927,7 +772,7 @@ where
       return None;
     }
 
-    let next = self.inner[self.row][self.col].clone();
+    let next = self.inner[self.row][self.col];
     self.col += 1;
 
     if self.col >= C {
@@ -941,7 +786,7 @@ where
 
 impl<T, const C: usize, const R: usize> Matrix<T, C, R>
 where
-  T: Default,
+  T: Default + Copy,
 {
   pub fn iter(&self) -> MatrixIter<'_, T, C, R> {
     MatrixIter {
@@ -962,7 +807,7 @@ where
 
 impl<T, const C: usize, const R: usize> IntoIterator for Matrix<T, C, R>
 where
-  T: Default + Clone,
+  T: Default + Copy,
 {
   type Item = T;
   type IntoIter = MatrixIterInto<T, C, R>;
@@ -1022,9 +867,7 @@ mod test {
 
     // 1*4 + 2*5 + 3*6 = 4 + 10 + 18 = 32
     let out = a.dot(&b);
-    let out_clone = a.dot_clone(&b);
     assert_eq!(out, 32.0);
-    assert_eq!(out_clone, 32.0);
   }
 
   #[test]
@@ -1033,13 +876,11 @@ mod test {
 
     let b: Matrix<f32, 2, 3> = [[7.0, 8.0], [9.0, 10.0], [11.0, 12.0]].into();
 
-    let res = &a * &b;
-    let res_clone = a * b;
+    let res = a * b;
 
     let known: Matrix<f32, 2, 2> = [[58.0, 64.0], [139.0, 154.0]].into();
 
     assert_eq!(res, known);
-    assert_eq!(res_clone, known);
   }
 
   fn approx_eq_mat<const C: usize, const R: usize>(
@@ -1121,7 +962,7 @@ mod test {
     let m: Matrix<f32, 2, 2> = [[4.0, 7.0], [2.0, 6.0]].into();
     let inv = m.inverse().unwrap();
     let identity = Matrix::<f32, 2, 2>::identity(1.0);
-    let product = &m * &inv;
+    let product = m * inv;
     assert!(approx_eq_mat(&product, &identity, 1e-5));
   }
 
@@ -1131,7 +972,7 @@ mod test {
       [[3.0, 0.0, 2.0], [2.0, 0.0, -2.0], [0.0, 1.0, 1.0]].into();
     let inv = m.inverse().unwrap();
     let identity = Matrix::<f32, 3, 3>::identity(1.0);
-    let product = &m * &inv;
+    let product = m * inv;
     assert!(approx_eq_mat(&product, &identity, 1e-5));
   }
 
@@ -1146,7 +987,7 @@ mod test {
     .into();
     let inv = m.inverse().unwrap();
     let identity = Matrix::<f32, 4, 4>::identity(1.0);
-    let product = &m * &inv;
+    let product = m * inv;
     assert!(approx_eq_mat(&product, &identity, 1e-5));
   }
 

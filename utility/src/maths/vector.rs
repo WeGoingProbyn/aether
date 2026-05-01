@@ -8,8 +8,8 @@ use std::ops::{
 
 use crate::maths::matrix::Matrix;
 
-#[derive(PartialEq, Clone)]
-pub struct Vector<T: Default, const C: usize> {
+#[derive(PartialEq, Copy, Clone)]
+pub struct Vector<T: Default + Copy, const C: usize> {
   inner: Matrix<T, C, 1>,
 }
 
@@ -19,7 +19,7 @@ macro_rules! impl_vector_float {
   ($t:ty) => {
     impl<const C: usize> Vector<$t, C>
     where
-      for<'x> &'x $t: Mul<&'x $t, Output = $t> + Add<&'x $t, Output = $t>,
+      for<'x, 'y> &'x $t: Mul<&'y $t, Output = $t> + Add<&'y $t, Output = $t>,
     {
       pub fn lerp(&self, v1: &Vector<$t, C>, t: $t) -> Vector<$t, C> {
         self * &(1.0 as $t - t) + v1 * &t
@@ -54,17 +54,8 @@ impl_vector_float!(f64);
 
 impl<T, const C: usize> Vector<T, C>
 where
-  T: Default + Clone + AddAssign + Mul<Output = T>,
-{
-  pub fn dot_clone(&self, rhs: &Vector<T, C>) -> T {
-    self.inner.dot_clone(&rhs.inner)
-  }
-}
-
-impl<T, const C: usize> Vector<T, C>
-where
-  T: Default,
   for<'x> &'x T: Mul<&'x T, Output = T> + Add<&'x T, Output = T>,
+  T: Default + Copy,
 {
   pub fn dot(&self, rhs: &Vector<T, C>) -> T {
     self.inner.dot(&rhs.inner)
@@ -73,7 +64,7 @@ where
 
 impl<T, const C: usize> Vector<T, C>
 where
-  T: Default + Clone + Add<Output = T>,
+  T: Default + Copy + Add<Output = T>,
 {
   pub fn into_sum(self) -> T {
     self.into_iter().reduce(|a, b| a + b).unwrap_or_default()
@@ -82,8 +73,8 @@ where
 
 impl<T, const C: usize> Vector<T, C>
 where
-  T: Default,
   for<'x> &'x T: Add<&'x T, Output = T>,
+  T: Default + Copy,
 {
   pub fn sum(&self) -> T {
     self.iter().fold(T::default(), |acc, x| &acc + x)
@@ -92,8 +83,8 @@ where
 
 impl<T> Vector<T, 3>
 where
-  T: Default,
   for<'x> &'x T: Mul<&'x T, Output = T> + Sub<&'x T, Output = T>,
+  T: Default + Copy,
 {
   #[allow(unused)]
   pub fn cross(&self, other: &Self) -> Vector<T, 3> {
@@ -107,37 +98,18 @@ where
   }
 }
 
-impl<T> Vector<T, 3>
-where
-  T: Default + Sub<Output = T> + Mul<Output = T> + Clone,
-{
-  #[allow(unused)]
-  pub fn cross_clone(&self, other: &Self) -> Vector<T, 3> {
-    let mut out = Vector::<T, 3>::default();
-
-    out[0] =
-      self[1].clone() * other[2].clone() - self[2].clone() * other[1].clone();
-    out[1] =
-      self[2].clone() * other[0].clone() - self[0].clone() * other[2].clone();
-    out[2] =
-      self[0].clone() * other[1].clone() - self[1].clone() * other[0].clone();
-
-    out
-  }
-}
-
 // ============= Iterators =========================//
 
 pub struct VectorIter<'a, T, const C: usize>
 where
-  T: Default,
+  T: Default + Copy,
 {
   inner: &'a Matrix<T, C, 1>,
 }
 
 impl<'a, T, const C: usize> Iterator for VectorIter<'a, T, C>
 where
-  T: Default,
+  T: Default + Copy,
 {
   type Item = &'a T;
   fn next(&mut self) -> Option<Self::Item> {
@@ -172,7 +144,7 @@ where
 
 pub struct VectorIterMut<'a, T, const C: usize>
 where
-  T: Default,
+  T: Default + Copy,
 {
   inner: &'a mut Matrix<T, C, 1>,
   col: usize,
@@ -180,7 +152,7 @@ where
 
 impl<'a, T, const C: usize> Iterator for VectorIterMut<'a, T, C>
 where
-  T: Default,
+  T: Default + Copy,
 {
   type Item = &'a mut T;
   fn next(&mut self) -> Option<Self::Item> {
@@ -199,7 +171,7 @@ where
 
 pub struct VectorIterInto<T, const C: usize>
 where
-  T: Default + Clone,
+  T: Default + Copy,
 {
   inner: Matrix<T, C, 1>,
   col: usize,
@@ -207,7 +179,7 @@ where
 
 impl<T, const C: usize> Iterator for VectorIterInto<T, C>
 where
-  T: Default + Clone,
+  T: Default + Copy,
 {
   type Item = T;
   fn next(&mut self) -> Option<Self::Item> {
@@ -215,7 +187,7 @@ where
       return None;
     }
 
-    let next = self.inner[0][self.col].clone();
+    let next = self.inner[0][self.col];
     self.col += 1;
 
     // This is safe because we never
@@ -226,7 +198,7 @@ where
 
 impl<T, const C: usize> Vector<T, C>
 where
-  T: Default,
+  T: Default + Copy,
 {
   pub fn iter(&self) -> VectorIter<'_, T, C> {
     VectorIter { inner: &self.inner }
@@ -242,7 +214,7 @@ where
 
 impl<T, const C: usize> IntoIterator for Vector<T, C>
 where
-  T: Default + Clone,
+  T: Default + Copy,
 {
   type Item = T;
   type IntoIter = VectorIterInto<T, C>;
@@ -259,7 +231,7 @@ where
 
 impl<T, const C: usize> From<[T; C]> for Vector<T, C>
 where
-  T: Default,
+  T: Default + Copy,
 {
   fn from(item: [T; C]) -> Vector<T, C> {
     let new = [item; 1];
@@ -269,7 +241,7 @@ where
 
 impl<T, const C: usize> From<Matrix<T, C, 1>> for Vector<T, C>
 where
-  T: Default,
+  T: Default + Copy,
 {
   fn from(item: Matrix<T, C, 1>) -> Vector<T, C> {
     Vector {
@@ -280,11 +252,11 @@ where
 
 impl<T, const C: usize> From<&Vector<T, C>> for Vector<T, C>
 where
-  T: Default + Clone,
+  T: Default + Copy,
 {
   fn from(item: &Vector<T, C>) -> Vector<T, C> {
     Vector {
-      inner: item.inner.clone(),
+      inner: item.inner,
     }
   }
 }
@@ -293,7 +265,7 @@ where
 
 impl<T, const C: usize> std::fmt::Debug for Vector<T, C>
 where
-  T: Default + std::fmt::Display,
+  T: Default + Copy + std::fmt::Display,
 {
   fn fmt(
     &self,
@@ -305,7 +277,10 @@ where
   }
 }
 
-impl<T: Default, const C: usize> Default for Vector<T, C> {
+impl<T, const C: usize> Default for Vector<T, C> 
+where 
+  T: Default + Copy,
+{
   fn default() -> Self {
     Vector {
       inner: Matrix::<T, C, 1>::default(),
@@ -315,7 +290,7 @@ impl<T: Default, const C: usize> Default for Vector<T, C> {
 
 impl<T, const C: usize> std::fmt::Display for Vector<T, C>
 where
-  T: Default + std::fmt::Display,
+  T: Default + Copy + std::fmt::Display,
 {
   fn fmt(
     &self,
@@ -328,7 +303,10 @@ where
 
 // ====================== Index impls ======================//
 
-impl<T: Default, const C: usize> Index<usize> for Vector<T, C> {
+impl<T, const C: usize> Index<usize> for Vector<T, C> 
+where 
+  T: Default + Copy,
+{
   type Output = T;
 
   fn index(&self, index: usize) -> &T {
@@ -336,245 +314,217 @@ impl<T: Default, const C: usize> Index<usize> for Vector<T, C> {
   }
 }
 
-impl<T: Default, const C: usize> IndexMut<usize> for Vector<T, C> {
+impl<T, const C: usize> IndexMut<usize> for Vector<T, C> 
+where 
+  T: Default + Copy,
+{
   fn index_mut(&mut self, index: usize) -> &mut T {
     &mut self.inner[0][index]
   }
 }
 
-// ====================== Add impls ======================//
+// ===================== Operator impls ===================//
 
-impl<'a, T: Default, const C: usize> Add<&'a Vector<T, C>> for &Vector<T, C>
-where
-  for<'x> &'x T: Add<&'x T, Output = T>,
-{
-  type Output = Vector<T, C>;
+macro_rules! vector_op_impls {
+  ($trait:ident, $method:ident) => {
+    impl<'a, 'b, T, const C: usize> $trait<&'a Vector<T, C>> for &'b Vector<T, C>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Vector<T, C>;
 
-  fn add(self, rhs: &'a Vector<T, C>) -> Self::Output {
-    Vector {
-      inner: &self.inner + &rhs.inner,
+      fn $method(self, rhs: &'a Vector<T, C>) -> Self::Output {
+        Vector {
+          inner: $trait::$method(self.inner, rhs.inner),
+        }
+      }
     }
-  }
-}
 
-impl<T, const C: usize> Add for Vector<T, C>
-where
-  T: Add<Output = T> + Default + Clone,
-{
-  type Output = Self;
+    impl<'a, T, const C: usize> $trait<&'a Vector<T, C>> for Vector<T, C>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Vector<T, C>;
 
-  fn add(self, rhs: Self) -> Self {
-    Vector {
-      inner: self.inner + rhs.inner,
+      fn $method(self, rhs: &'a Vector<T, C>) -> Self::Output {
+        $trait::$method(&self, rhs)
+      }
     }
-  }
-}
 
-impl<T, const C: usize> AddAssign for Vector<T, C>
-where
-  T: Default + Clone + AddAssign,
-{
-  fn add_assign(&mut self, rhs: Self) {
-    self.inner += rhs.inner;
-  }
-}
+    impl<'a, T, const C: usize> $trait<Vector<T, C>> for &'a Vector<T, C>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Vector<T, C>;
 
-impl<'a, T: Default, const C: usize> Add<&'a T> for &Vector<T, C>
-where
-  for<'x> &'x T: Add<&'x T, Output = T>,
-{
-  type Output = Vector<T, C>;
-
-  fn add(self, rhs: &'a T) -> Self::Output {
-    Vector {
-      inner: &self.inner + rhs,
+      fn $method(self, rhs: Vector<T, C>) -> Self::Output {
+        $trait::$method(self, &rhs)
+      }
     }
-  }
-}
 
-impl<T, const C: usize> Add<T> for Vector<T, C>
-where
-  T: Add<Output = T> + Default + Clone,
-{
-  type Output = Self;
+    impl<T, const C: usize> $trait<Vector<T, C>> for Vector<T, C>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Vector<T, C>;
 
-  fn add(self, rhs: T) -> Self {
-    Vector {
-      inner: self.inner + rhs,
+      fn $method(self, rhs: Vector<T, C>) -> Self::Output {
+        $trait::$method(&self, &rhs)
+      }
     }
-  }
+  };
 }
 
-impl<T, const C: usize> AddAssign<T> for Vector<T, C>
-where
-  T: Default + Clone + AddAssign,
-{
-  fn add_assign(&mut self, rhs: T) {
-    self.inner += rhs;
-  }
-}
+macro_rules! vector_op_scalar_impls {
+  ($trait:ident, $method:ident) => {
+    impl<'a, 'b, T, const C: usize> $trait<&'a T> for &'b Vector<T, C>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Vector<T, C>;
 
-// ====================== Sub impls ======================//
-
-impl<'a, T: Default, const C: usize> Sub<&'a Vector<T, C>> for &Vector<T, C>
-where
-  for<'x> &'x T: Sub<&'x T, Output = T>,
-{
-  type Output = Vector<T, C>;
-
-  fn sub(self, rhs: &'a Vector<T, C>) -> Self::Output {
-    Vector {
-      inner: &self.inner - &rhs.inner,
+      fn $method(self, rhs: &'a T) -> Self::Output {
+        Vector {
+          inner: $trait::$method(&self.inner, rhs),
+        }
+      }
     }
-  }
-}
 
-impl<T, const C: usize> Sub for Vector<T, C>
-where
-  T: Sub<Output = T> + Default + Clone,
-{
-  type Output = Self;
+    impl<'a, T, const C: usize> $trait<&'a T> for Vector<T, C>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Vector<T, C>;
 
-  fn sub(self, rhs: Self) -> Self {
-    Vector {
-      inner: self.inner - rhs.inner,
+      fn $method(self, rhs: &'a T) -> Self::Output {
+        $trait::$method(&self, rhs)
+      }
     }
-  }
-}
 
-impl<T, const C: usize> SubAssign for Vector<T, C>
-where
-  T: Default + Clone + SubAssign,
-{
-  fn sub_assign(&mut self, rhs: Self) {
-    self.inner -= rhs.inner;
-  }
-}
+    impl<'a, T, const C: usize> $trait<T> for &'a Vector<T, C>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Vector<T, C>;
 
-impl<'a, T: Default, const C: usize> Sub<&'a T> for &Vector<T, C>
-where
-  for<'x> &'x T: Sub<&'x T, Output = T>,
-{
-  type Output = Vector<T, C>;
-
-  fn sub(self, rhs: &'a T) -> Self::Output {
-    Vector {
-      inner: &self.inner - rhs,
+      fn $method(self, rhs: T) -> Self::Output {
+        $trait::$method(self, &rhs)
+      }
     }
-  }
-}
 
-impl<T, const C: usize> Sub<T> for Vector<T, C>
-where
-  T: Sub<Output = T> + Default + Clone,
-{
-  type Output = Self;
+    impl<T, const C: usize> $trait<T> for Vector<T, C>
+    where
+      for<'x, 'y> &'x T: $trait<&'y T, Output = T>,
+      T: Default + Copy,
+    {
+      type Output = Vector<T, C>;
 
-  fn sub(self, rhs: T) -> Self {
-    Vector {
-      inner: self.inner - rhs,
+      fn $method(self, rhs: T) -> Self::Output {
+        $trait::$method(&self, &rhs)
+      }
     }
-  }
+  };
 }
 
-impl<T, const C: usize> SubAssign<T> for Vector<T, C>
-where
-  T: Default + Clone + SubAssign,
-{
-  fn sub_assign(&mut self, rhs: T) {
-    self.inner -= rhs;
-  }
-}
-
-// ====================== Div impls ======================//
-
-impl<'a, T: Default, const C: usize> Div<&'a Vector<T, C>> for &Vector<T, C>
-where
-  for<'x> &'x T: Div<&'x T, Output = T>,
-{
-  type Output = Vector<T, C>;
-
-  fn div(self, rhs: &'a Vector<T, C>) -> Self::Output {
-    Vector {
-      inner: &self.inner / &rhs.inner,
+macro_rules! vector_op_assign_impl {
+  ($trait:ident, $method:ident) => {
+    impl<'a, T, const C: usize> $trait<&'a Vector<T, C>> for Vector<T, C>
+    where
+      T: Default + Copy + $trait,
+    {
+      fn $method(&mut self, rhs: &'a Vector<T, C>) {
+        $trait::$method(&mut self.inner, rhs.inner);    
+      }
     }
-  }
-}
 
-impl<T, const C: usize> Div for Vector<T, C>
-where
-  T: Div<Output = T> + Default + Clone,
-{
-  type Output = Self;
-
-  fn div(self, rhs: Self) -> Self {
-    Vector {
-      inner: self.inner / rhs.inner,
+    impl<T, const C: usize> $trait<Vector<T, C>> for Vector<T, C>
+    where
+      T: Default + Copy + $trait,
+    {
+      fn $method(&mut self, rhs: Vector<T, C>) {
+        $trait::$method(self, &rhs);
+      }
     }
-  }
+  };
 }
 
-impl<T, const C: usize> DivAssign for Vector<T, C>
-where
-  T: Default + Clone + DivAssign,
-{
-  fn div_assign(&mut self, rhs: Self) {
-    self.inner /= rhs.inner;
-  }
-}
-
-impl<'a, T: Default, const C: usize> Div<&'a T> for &Vector<T, C>
-where
-  for<'x> &'x T: Div<&'x T, Output = T>,
-{
-  type Output = Vector<T, C>;
-
-  fn div(self, rhs: &'a T) -> Self::Output {
-    Vector {
-      inner: &self.inner / rhs,
+macro_rules! vector_op_assign_scalar_impl {
+  ($trait:ident, $method:ident) => {
+    impl<T, const C: usize> $trait<T> for &mut Vector<T, C>
+    where
+      T: Default + Copy + $trait,
+    {
+      fn $method(&mut self, rhs: T) {
+        $trait::$method(&mut self.inner, rhs)
+      }
     }
-  }
-}
 
-impl<T, const C: usize> Div<T> for Vector<T, C>
-where
-  T: Div<Output = T> + Default + Clone,
-{
-  type Output = Self;
-
-  fn div(self, rhs: T) -> Self {
-    Vector {
-      inner: self.inner / rhs,
+    impl<T, const C: usize> $trait<T> for Vector<T, C>
+    where
+      T: Default + Copy + $trait,
+    {
+      fn $method(&mut self, rhs: T) {
+        $trait::$method(&mut self.inner, rhs)
+      }
     }
-  }
+  };
 }
 
-impl<T, const C: usize> DivAssign<T> for Vector<T, C>
-where
-  T: Default + Clone + DivAssign,
-{
-  fn div_assign(&mut self, rhs: T) {
-    self.inner /= rhs;
-  }
-}
+vector_op_impls!(Add, add);
+vector_op_scalar_impls!(Add, add);
+vector_op_assign_impl!(AddAssign, add_assign);
+vector_op_assign_scalar_impl!(AddAssign, add_assign);
+
+vector_op_impls!(Sub, sub);
+vector_op_scalar_impls!(Sub, sub);
+vector_op_assign_impl!(SubAssign, sub_assign);
+vector_op_assign_scalar_impl!(SubAssign, sub_assign);
+
+vector_op_impls!(Div, div);
+vector_op_scalar_impls!(Div, div);
+vector_op_assign_impl!(DivAssign, div_assign);
+vector_op_assign_scalar_impl!(DivAssign, div_assign);
+
+vector_op_scalar_impls!(Mul, mul);
+vector_op_assign_scalar_impl!(MulAssign, mul_assign);
 
 // ====================== Mul impls ======================//
 
-impl<T, const K: usize, const N: usize> Mul<&Matrix<T, N, K>> for &Vector<T, K>
+impl<'a, T, const K: usize, const N: usize> Mul<&'a Matrix<T, N, K>> for &Vector<T, K>
 where
-  T: Default,
-  for<'x> &'x T: Mul<&'x T, Output = T> + Add<&'x T, Output = T>,
+  for<'x, 'y> &'x T: Mul<&'y T, Output = T> + Add<&'y T, Output = T>,
+  T: Default + Copy,
 {
   type Output = Vector<T, N>;
 
-  fn mul(self, rhs: &Matrix<T, N, K>) -> Self::Output {
-    (&self.inner * rhs).into()
+  fn mul(self, rhs: &'a Matrix<T, N, K>) -> Self::Output {
+    (self.inner * rhs).into()
   }
 }
 
-impl<T, const K: usize, const N: usize> Mul<Matrix<T, N, K>> for Vector<T, K>
+impl<'a, T, const K: usize, const N: usize> Mul<&'a Matrix<T, N, K>> for Vector<T, K>
 where
-  T: Default + Clone + Mul<T, Output = T> + Add<T, Output = T>,
+  for<'x, 'y> &'x T: Mul<&'y T, Output = T> + Add<&'y T, Output = T>,
+  T: Default + Copy,
+{
+  type Output = Vector<T, N>;
+
+  fn mul(self, rhs: &'a Matrix<T, N, K>) -> Self::Output {
+    (self.inner * rhs).into()
+  }
+}
+
+impl<T, const K: usize, const N: usize> Mul<Matrix<T, N, K>> for &Vector<T, K>
+where
+  for<'x, 'y> &'x T: Mul<&'y T, Output = T> + Add<&'y T, Output = T>,
+  T: Default + Copy,
 {
   type Output = Vector<T, N>;
 
@@ -583,48 +533,35 @@ where
   }
 }
 
-impl<T, const K: usize, const N: usize> MulAssign<Matrix<T, N, K>>
-  for Vector<T, K>
+impl<T, const K: usize, const N: usize> Mul<Matrix<T, N, K>> for Vector<T, K>
 where
-  T: Default + Clone + Mul<T, Output = T> + Add<T, Output = T>,
+  for<'x, 'y> &'x T: Mul<&'y T, Output = T> + Add<&'y T, Output = T>,
+  T: Default + Copy,
 {
-  fn mul_assign(&mut self, rhs: Matrix<T, N, K>) {
-    self.inner *= rhs
+  type Output = Vector<T, N>;
+
+  fn mul(self, rhs: Matrix<T, N, K>) -> Self::Output {
+    (self.inner * rhs).into()
   }
 }
 
-impl<'a, T: Default, const C: usize> Mul<&'a T> for &Vector<T, C>
+impl<'a, T, const K: usize> MulAssign<&'a Matrix<T, K, K>> for Vector<T, K>
 where
-  for<'x> &'x T: Mul<&'x T, Output = T>,
+  for<'x, 'y> &'x T: Mul<&'y T, Output = T> + Add<&'y T, Output = T>,
+  T: Default + Copy,
 {
-  type Output = Vector<T, C>;
-
-  fn mul(self, rhs: &'a T) -> Self::Output {
-    Vector {
-      inner: &self.inner * rhs,
-    }
+  fn mul_assign(&mut self, rhs: &'a Matrix<T, K, K>) {
+    self.inner = self.inner * rhs;
   }
 }
 
-impl<T, const C: usize> Mul<T> for Vector<T, C>
+impl<T, const K: usize> MulAssign<Matrix<T, K, K>> for Vector<T, K>
 where
-  T: Mul<Output = T> + Default + Clone,
+  for<'x, 'y> &'x T: Mul<&'y T, Output = T> + Add<&'y T, Output = T>,
+  T: Default + Copy,
 {
-  type Output = Self;
-
-  fn mul(self, rhs: T) -> Self {
-    Vector {
-      inner: self.inner * rhs,
-    }
-  }
-}
-
-impl<T, const C: usize> MulAssign<T> for Vector<T, C>
-where
-  T: Default + Clone + MulAssign,
-{
-  fn mul_assign(&mut self, rhs: T) {
-    self.inner *= rhs;
+  fn mul_assign(&mut self, rhs: Matrix<T, K, K>) {
+    *self *= &rhs;
   }
 }
 
@@ -641,9 +578,7 @@ mod test {
     let two: Vector<f32, 3> = [2.0, 3.0, 4.0].into();
     let res: Vector<f32, 3> = [-1.0, 2.0, -1.0].into();
 
-    let out = one.cross_clone(&two);
     let out_ref = one.cross(&two);
-    assert_eq!(out, res);
     assert_eq!(out_ref, res);
   }
 
@@ -659,11 +594,9 @@ mod test {
 
     let known: Vector<f32, 4> = [83.0, 63.0, 37.0, 75.0].into();
 
-    let res = &a * &b;
-    let res_clone = a * b;
+    let res = a * b;
 
     assert_eq!(res, known);
-    assert_eq!(res_clone, known);
   }
 
   fn approx_eq_vec<const C: usize>(
