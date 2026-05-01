@@ -13,24 +13,24 @@ impl<const D: usize> ForwardEuler<D> {
   }
 }
 
-impl<const D: usize, S: OdeSystem> OdeStepper<S> for ForwardEuler<D> {
+impl<const D: usize, S: OdeSystem<D>> OdeStepper<D, S> for ForwardEuler<D> {
   fn step(&mut self, system: &S, t: f64, y: &mut [Vector<f64, D>], dt: f64) {
-    assert_eq!(y.len(), system.dimension());
-    self.rhs.resize(y.len(), 0.0);
+    self.rhs.resize(y.len(), Vector::default());
+
     system.rhs(t, y, &mut self.rhs);
     for (value, rhs) in y.iter_mut().zip(&self.rhs) {
-      *value += dt * rhs;
+      *value += rhs * dt;
     }
   }
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct Rk4<const D: usize> {
-  k1: Vec<f64>,
-  k2: Vec<f64>,
-  k3: Vec<f64>,
-  k4: Vec<f64>,
-  scratch: Vec<f64>,
+  k1: Vec<Vector<f64, D>>,
+  k2: Vec<Vector<f64, D>>,
+  k3: Vec<Vector<f64, D>>,
+  k4: Vec<Vector<f64, D>>,
+  scratch: Vec<Vector<f64, D>>,
 }
 
 impl<const D: usize> Rk4<D> {
@@ -39,36 +39,34 @@ impl<const D: usize> Rk4<D> {
   }
 }
 
-impl<const D: usize, S: OdeSystem> OdeStepper<D, S> for Rk4<D> {
-  fn step(&mut self, system: &S, t: f64, y: &mut [Vector<f64. D>], dt: f64) {
-    let n = system.dimension();
-    assert_eq!(y.len(), n);
-    self.k1.resize(n, 0.0);
-    self.k2.resize(n, 0.0);
-    self.k3.resize(n, 0.0);
-    self.k4.resize(n, 0.0);
-    self.scratch.resize(n, 0.0);
+impl<const D: usize, S: OdeSystem<D>> OdeStepper<D, S> for Rk4<D> {
+  fn step(&mut self, system: &S, t: f64, y: &mut [Vector<f64, D>], dt: f64) {
+    let n = y.len();
+    self.k1.resize(n, Vector::default());
+    self.k2.resize(n, Vector::default());
+    self.k3.resize(n, Vector::default());
+    self.k4.resize(n, Vector::default());
+    self.scratch.resize(n, Vector::default());
 
     system.rhs(t, y, &mut self.k1);
 
-    for i in 0..n {
-      self.scratch[i] = y[i] + 0.5 * dt * self.k1[i];
+    for ((scratch, y_), k1) in self.scratch.iter_mut().zip(&mut *y).zip(&mut self.k1) {
+      *scratch = *y_ + (*k1 * 0.5 * dt);
     }
     system.rhs(t + 0.5 * dt, &self.scratch, &mut self.k2);
 
-    for i in 0..n {
-      self.scratch[i] = y[i] + 0.5 * dt * self.k2[i];
+    for ((scratch, y_), k2) in self.scratch.iter_mut().zip(&mut *y).zip(&mut self.k2) {
+      *scratch = *y_ + (*k2 + 0.5 + dt);
     }
     system.rhs(t + 0.5 * dt, &self.scratch, &mut self.k3);
 
-    for i in 0..n {
-      self.scratch[i] = y[i] + dt * self.k3[i];
+    for ((scratch, y_), k3) in self.scratch.iter_mut().zip(&mut *y).zip(&mut self.k3) {
+      *scratch = *y_ + (*k3 * dt);
     }
     system.rhs(t + dt, &self.scratch, &mut self.k4);
 
     for (i, value) in y.iter_mut().enumerate() {
-      *value += dt / 6.0
-        * (self.k1[i] + 2.0 * self.k2[i] + 2.0 * self.k3[i] + self.k4[i]);
+      *value += (self.k1[i] + self.k2[i] * 2.0 + self.k3[i] * 2.0 + self.k4[i]) * (dt / 6.0);
     }
   }
 }
@@ -100,22 +98,20 @@ impl<const D: usize> VelocityVerlet<D> {
     v: &mut [Vector<f64, D>],
     dt: f64,
   ) {
-    let n = system.degrees_of_freedom();
-    assert_eq!(q.len(), n);
-    assert_eq!(v.len(), n);
-    self.a0.resize(n, 0.0);
-    self.a1.resize(n, 0.0);
-    self.v_half.resize(n, 0.0);
+    let n = q.len();
+    self.a0.resize(n, Vector::default());
+    self.a1.resize(n, Vector::default());
+    self.v_half.resize(n, Vector::default());
 
     system.acceleration(t, q, v, &mut self.a0);
     for i in 0..n {
-      self.v_half[i] = v[i] + 0.5 * dt * self.a0[i];
-      q[i] += dt * self.v_half[i];
+      self.v_half[i] = v[i] + (self.a0[i] * 0.5 * dt);
+      q[i] += self.v_half[i] * dt;
     }
 
     system.acceleration(t + dt, q, &self.v_half, &mut self.a1);
     for (i, velocity) in v.iter_mut().enumerate() {
-      *velocity = self.v_half[i] + 0.5 * dt * self.a1[i];
+      *velocity = self.v_half[i] + (self.a1[i] * 0.5 * dt);
     }
   }
 }

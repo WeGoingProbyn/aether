@@ -1,19 +1,20 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use tempus::{SecondOrderSystem, VelocityVerlet};
-
-pub const NEWTON_G: f64 = 6.67430e-11;
+use tempus::ode::SecondOrderSystem;
+use tempus::integrator::VelocityVerlet;
+use utility::constants::NEWTON_G;
+use utility::maths::vector::Vector;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PointMassBody {
+pub struct PointMassBody<const D: usize> {
   mass: f64,
-  position: [f64; 3],
-  velocity: [f64; 3],
+  position: Vector<f64, D>,
+  velocity: Vector<f64, D>,
 }
 
-impl PointMassBody {
-  pub fn new(mass: f64, position: [f64; 3], velocity: [f64; 3]) -> Self {
+impl<const D: usize> PointMassBody<D> {
+  pub fn new(mass: f64, position: Vector<f64, D>, velocity: Vector<f64, D>) -> Self {
     Self {
       mass,
       position,
@@ -25,12 +26,12 @@ impl PointMassBody {
     self.mass
   }
 
-  pub fn position(&self) -> [f64; 3] {
-    self.position
+  pub fn position(&self) -> &Vector<f64, D> {
+    &self.position
   }
 
-  pub fn velocity(&self) -> [f64; 3] {
-    self.velocity
+  pub fn velocity(&self) -> &Vector<f64, D> {
+    &self.velocity
   }
 }
 
@@ -73,61 +74,47 @@ impl NBodyGravity {
   }
 }
 
-impl SecondOrderSystem for NBodyGravity {
-  fn degrees_of_freedom(&self) -> usize {
-    3 * self.masses.len()
-  }
-
-  fn acceleration(&self, _t: f64, q: &[f64], _v: &[f64], a: &mut [f64]) {
+impl<const D: usize> SecondOrderSystem<D> for NBodyGravity {
+  fn acceleration(&self, _t: f64, q: &[Vector<f64, D>], _v: &[Vector<f64, D>], a: &mut [Vector<f64, D>]) {
     let n = self.masses.len();
-    assert_eq!(q.len(), 3 * n);
-    assert_eq!(a.len(), 3 * n);
-    a.fill(0.0);
+    assert_eq!(q.len(), n);
+    assert_eq!(a.len(), n);
+    a.fill(Vector::default());
 
     let eps2 = self.softening_length * self.softening_length;
     for i in 0..n {
-      let ix = 3 * i;
       for j in (i + 1)..n {
-        let jx = 3 * j;
-        let dx = q[jx] - q[ix];
-        let dy = q[jx + 1] - q[ix + 1];
-        let dz = q[jx + 2] - q[ix + 2];
-        let r2 = dx * dx + dy * dy + dz * dz + eps2;
-        let inv_r = 1.0 / r2.sqrt();
-        let inv_r3 = inv_r * inv_r * inv_r;
-        let scale_i = self.gravitational_constant * self.masses[j] * inv_r3;
-        let scale_j = self.gravitational_constant * self.masses[i] * inv_r3;
+        let d = q[j] - q[i];
+        let r2 = d.powi(2).sum() + eps2;
+        let inv_r = r2.powf(-1.5);
+        let scale_i = self.gravitational_constant * self.masses[j] * inv_r;
+        let scale_j = self.gravitational_constant * self.masses[i] * inv_r;
 
-        a[ix] += scale_i * dx;
-        a[ix + 1] += scale_i * dy;
-        a[ix + 2] += scale_i * dz;
-
-        a[jx] -= scale_j * dx;
-        a[jx + 1] -= scale_j * dy;
-        a[jx + 2] -= scale_j * dz;
+        a[i] += d * scale_i;
+        a[j] -= d * scale_j;
       }
     }
   }
 }
 
 #[derive(Clone, Debug)]
-pub struct NBodySimulation {
+pub struct NBodySimulation<const D: usize> {
   gravity: NBodyGravity,
-  positions: Vec<f64>,
-  velocities: Vec<f64>,
-  stepper: VelocityVerlet,
+  positions: Vec<Vector<f64, D>>,
+  velocities: Vec<Vector<f64, D>>,
+  stepper: VelocityVerlet<D>,
   time: f64,
 }
 
-impl NBodySimulation {
-  pub fn new(bodies: impl IntoIterator<Item = PointMassBody>) -> Self {
-    let bodies: Vec<PointMassBody> = bodies.into_iter().collect();
+impl<const D: usize> NBodySimulation<D> {
+  pub fn new(bodies: impl IntoIterator<Item = PointMassBody<D>>) -> Self {
+    let bodies: Vec<PointMassBody<D>> = bodies.into_iter().collect();
     let masses = bodies.iter().map(PointMassBody::mass).collect();
     let mut positions = Vec::with_capacity(3 * bodies.len());
     let mut velocities = Vec::with_capacity(3 * bodies.len());
     for body in bodies {
-      positions.extend(body.position);
-      velocities.extend(body.velocity);
+      positions.push(body.position);
+      velocities.push(body.velocity);
     }
 
     Self {
@@ -161,37 +148,19 @@ impl NBodySimulation {
     &self.gravity
   }
 
-  pub fn positions_flat(&self) -> &[f64] {
-    &self.positions
+  pub fn position(&self, index: usize) -> &Vector<f64, D> {
+    &self.positions[index]
   }
 
-  pub fn velocities_flat(&self) -> &[f64] {
-    &self.velocities
+  pub fn velocity(&self, index: usize) -> &Vector<f64, D> {
+    &self.velocities[index]
   }
 
-  pub fn position(&self, index: usize) -> [f64; 3] {
-    let offset = 3 * index;
-    [
-      self.positions[offset],
-      self.positions[offset + 1],
-      self.positions[offset + 2],
-    ]
-  }
-
-  pub fn velocity(&self, index: usize) -> [f64; 3] {
-    let offset = 3 * index;
-    [
-      self.velocities[offset],
-      self.velocities[offset + 1],
-      self.velocities[offset + 2],
-    ]
-  }
-
-  pub fn body(&self, index: usize) -> PointMassBody {
+  pub fn body(&self, index: usize) -> PointMassBody<D> {
     PointMassBody::new(
       self.gravity.masses[index],
-      self.position(index),
-      self.velocity(index),
+      *self.position(index),
+      *self.velocity(index),
     )
   }
 
@@ -216,56 +185,44 @@ impl NBodySimulation {
       )
   }
 
-  pub fn center_of_mass(&self) -> [f64; 3] {
+  pub fn center_of_mass(&self) -> Vector<f64, D> {
     let total_mass: f64 = self.gravity.masses.iter().sum();
-    let mut out = [0.0; 3];
+    let mut out = Vector::<f64, D>::default();
     if total_mass <= 0.0 {
       return out;
     }
 
     for (i, mass) in self.gravity.masses.iter().enumerate() {
-      let offset = 3 * i;
-      out[0] += mass * self.positions[offset];
-      out[1] += mass * self.positions[offset + 1];
-      out[2] += mass * self.positions[offset + 2];
+      out += self.positions[i] * mass;
     }
-    out[0] /= total_mass;
-    out[1] /= total_mass;
-    out[2] /= total_mass;
+    out /= total_mass;
     out
   }
 }
 
-fn kinetic_energy(masses: &[f64], velocities: &[f64]) -> f64 {
+fn kinetic_energy<const D: usize>(masses: &[f64], velocities: &[Vector<f64, D>]) -> f64 {
   masses
     .iter()
     .enumerate()
     .map(|(i, mass)| {
-      let offset = 3 * i;
-      let v2 = velocities[offset] * velocities[offset]
-        + velocities[offset + 1] * velocities[offset + 1]
-        + velocities[offset + 2] * velocities[offset + 2];
-      0.5 * mass * v2
+      let v2 = velocities[i].powi(2);
+      0.5 * mass * v2.sum()
     })
     .sum()
 }
 
-fn potential_energy(
+fn potential_energy<const D: usize>(
   masses: &[f64],
-  positions: &[f64],
+  positions: &[Vector<f64, D>],
   g: f64,
   softening_length: f64,
 ) -> f64 {
   let mut energy = 0.0;
   let eps2 = softening_length * softening_length;
   for i in 0..masses.len() {
-    let ix = 3 * i;
     for j in (i + 1)..masses.len() {
-      let jx = 3 * j;
-      let dx = positions[jx] - positions[ix];
-      let dy = positions[jx + 1] - positions[ix + 1];
-      let dz = positions[jx + 2] - positions[ix + 2];
-      let r = (dx * dx + dy * dy + dz * dz + eps2).sqrt();
+      let d = positions[j] - positions[i];
+      let r = (d.powi(2).sum() + eps2).sqrt();
       energy -= g * masses[i] * masses[j] / r;
     }
   }
@@ -283,8 +240,8 @@ mod tests {
     let separation: f64 = 2.0;
     let speed = (g * mass / (2.0 * separation)).sqrt();
     let mut simulation = NBodySimulation::new([
-      PointMassBody::new(mass, [-1.0, 0.0, 0.0], [0.0, -speed, 0.0]),
-      PointMassBody::new(mass, [1.0, 0.0, 0.0], [0.0, speed, 0.0]),
+      PointMassBody::new(mass, [-1.0, 0.0, 0.0].into(), [0.0, -speed, 0.0].into()),
+      PointMassBody::new(mass, [1.0, 0.0, 0.0].into(), [0.0, speed, 0.0].into()),
     ])
     .with_gravitational_constant(g);
 
@@ -309,8 +266,8 @@ mod tests {
     let radius = 1.495_978_707e11;
     let speed = (NEWTON_G * solar_mass / radius).sqrt();
     let mut simulation = NBodySimulation::new([
-      PointMassBody::new(solar_mass, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
-      PointMassBody::new(earth_mass, [radius, 0.0, 0.0], [0.0, speed, 0.0]),
+      PointMassBody::new(solar_mass, [0.0, 0.0, 0.0].into(), [0.0, 0.0, 0.0].into()),
+      PointMassBody::new(earth_mass, [radius, 0.0, 0.0].into(), [0.0, speed, 0.0].into()),
     ]);
 
     let day = 86_400.0;

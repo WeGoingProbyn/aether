@@ -1,10 +1,10 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use std::ops::{
+use std::{iter::Sum, ops::{
   Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Sub,
   SubAssign,
-};
+}};
 
 use crate::maths::matrix::Matrix;
 
@@ -45,6 +45,22 @@ macro_rules! impl_vector_float {
         let d = self.dot(normal);
         self - &(normal * &(2.0 as $t * d))
       }
+
+      pub fn powi(&self, power: i32) -> Vector<$t, C> {
+        let mut out = Vector::<$t, C>::default();
+        for (i, _) in self.inner.iter().enumerate() {
+          out[i] = self[i].powi(power)
+        }
+        out
+      }
+
+      pub fn powf(&self, power: $t) -> Vector<$t, C> {
+        let mut out = Vector::<$t, C>::default();
+        for (i, _) in self.inner.iter().enumerate() {
+          out[i] = self[i].powf(power)
+        }
+        out
+      }
     }
   };
 }
@@ -74,10 +90,10 @@ where
 impl<T, const C: usize> Vector<T, C>
 where
   for<'x> &'x T: Add<&'x T, Output = T>,
-  T: Default + Copy,
+  T: Default + Copy + Sum,
 {
   pub fn sum(&self) -> T {
-    self.iter().fold(T::default(), |acc, x| &acc + x)
+    self.into_iter().sum()   
   }
 }
 

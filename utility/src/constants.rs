@@ -7,7 +7,7 @@ pub const POWER_SIX: f64 = 1_000_000f64;
 pub const POWER_NINE: f64 = 1_000_000_000f64;
 
 // ====== Physical constants ========= //
-pub const G: f64 = 6.6743e-11;
+pub const NEWTON_G: f64 = 6.6743e-11;
 pub const AVOGADRO: f64 = 6.02214076e23;
 pub const BOLTZMANN: f64 = 1.380649e-23;
 pub const UNIVERSAL_GAS: f64 = 8.314462618;
@@ -115,7 +115,7 @@ pub const NITROGEN_MOLAR_MASS: f64 = 0.028;
 
 // ====== Computed ================== //
 pub const fn gravity(mass: f64, radius: f64) -> f64 {
-  G * mass / (radius * radius)
+  NEWTON_G * mass / (radius * radius)
 }
 
 pub const fn angular_velocity(day: f64) -> f64 {
@@ -127,7 +127,7 @@ pub fn solar_flux(luminosity: f64, distance: f64) -> f64 {
 }
 
 pub fn escape_velocity(mass: f64, radius: f64) -> f64 {
-  (2.0 * G * mass / radius).sqrt()
+  (2.0 * NEWTON_G * mass / radius).sqrt()
 }
 
 pub fn equilibrium_temperature(
@@ -178,7 +178,7 @@ pub fn effective_temperature(eq_temp: f64, internal_factor: f64) -> f64 {
 }
 
 pub fn orbital_velocity(star_mass: f64, distance: f64) -> f64 {
-  (G * star_mass / distance).sqrt()
+  (NEWTON_G * star_mass / distance).sqrt()
 }
 
 pub fn gamma(dof: f64) -> f64 {
