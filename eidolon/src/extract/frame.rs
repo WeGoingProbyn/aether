@@ -9,7 +9,7 @@ use crate::{
     coupler_debug::coupler_face_lines,
     mesh::{boundary_surface_triangles, cell_centroid_points},
   },
-  ir::{RenderFrame, RenderWorld},
+  ir::{RenderFrame, RenderWorld, Transform},
 };
 
 pub fn tessera_debug_frame(
@@ -44,6 +44,9 @@ pub fn tessera_debug_world(world: WorldId, tessera: &Tessera) -> RenderWorld {
 
   RenderWorld {
     id: world,
+    label: format!("world_{}", world.0),
+    transform: Transform::IDENTITY,
+    transform_epoch: 0,
     meshes,
     layers: Vec::new(),
     diagnostics: Vec::new(),

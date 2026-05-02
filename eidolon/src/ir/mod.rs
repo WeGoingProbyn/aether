@@ -6,6 +6,8 @@ pub mod id;
 pub mod layer;
 pub mod mesh;
 pub mod samples;
+pub mod transform;
+pub mod update;
 
 pub use colour::*;
 pub use debug::*;
@@ -15,3 +17,5 @@ pub use id::*;
 pub use layer::*;
 pub use mesh::*;
 pub use samples::*;
+pub use transform::*;
+pub use update::*;

@@ -10,7 +10,7 @@ use std::{
 
 use utility::domain::{CellId, FaceId, MeshKey};
 
-use crate::ir::{CouplerId, RenderMeshId, Rgba};
+use crate::ir::{CouplerId, RenderMeshId, Rgba, Transform};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderMesh {
@@ -18,6 +18,16 @@ pub struct RenderMesh {
   pub label: String,
   pub source: MeshSource,
   pub geometry: RenderGeometry,
+  /// Where this mesh sits in world space. See `Transform` docs.
+  pub transform: Transform,
+  /// Bumped whenever `geometry` changes. Backends compare against the
+  /// last-applied epoch to decide whether to re-upload vertex/index
+  /// buffers.
+  pub epoch: u64,
+  /// Bumped whenever `transform` changes. Independent from `epoch` so a
+  /// fast-moving body can stream transform updates without
+  /// re-uploading geometry.
+  pub transform_epoch: u64,
 }
 
 impl RenderMesh {
@@ -32,7 +42,15 @@ impl RenderMesh {
       label: label.into(),
       source,
       geometry,
+      transform: Transform::IDENTITY,
+      epoch: 0,
+      transform_epoch: 0,
     }
+  }
+
+  pub fn with_transform(mut self, transform: Transform) -> Self {
+    self.transform = transform;
+    self
   }
 }
 

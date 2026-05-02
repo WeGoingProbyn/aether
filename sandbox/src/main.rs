@@ -149,7 +149,7 @@ fn main() -> AetherResult<()> {
       representation: MeshRepresentation::BoundaryFaces,
     };
     let mut layer = scalar_component_layer(
-      LayerId("surface_temperature"),
+      LayerId::from_static("surface_temperature"),
       "surface_temperature",
       target,
       surface_fields.temperature,
@@ -169,7 +169,7 @@ fn main() -> AetherResult<()> {
       representation: MeshRepresentation::BoundaryFaces,
     };
     let mut layer = scalar_component_layer(
-      LayerId("atmosphere_temperature"),
+      LayerId::from_static("atmosphere_temperature"),
       "atmosphere_temperature",
       target,
       atmosphere_fields.temperature,
@@ -189,7 +189,7 @@ fn main() -> AetherResult<()> {
       representation: MeshRepresentation::BoundaryFaces,
     };
     let mut layer = scalar_component_layer(
-      LayerId("atmosphere_temperature_tendency"),
+      LayerId::from_static("atmosphere_temperature_tendency"),
       "atmosphere_temperature_tendency",
       target,
       atmosphere_fields.temperature_tendency,
@@ -209,7 +209,7 @@ fn main() -> AetherResult<()> {
       representation: MeshRepresentation::BoundaryFaces,
     };
     let mut layer = scalar_component_layer(
-      LayerId("atmosphere_pressure"),
+      LayerId::from_static("atmosphere_pressure"),
       "atmosphere_pressure",
       target,
       atmosphere_fields.pressure,
@@ -229,7 +229,7 @@ fn main() -> AetherResult<()> {
       representation: MeshRepresentation::BoundaryFaces,
     };
     let mut layer = scalar_component_layer(
-      LayerId("radiative_heating"),
+      LayerId::from_static("radiative_heating"),
       "radiative_heating",
       target,
       radiation_fields.heating_tendency,
@@ -249,7 +249,7 @@ fn main() -> AetherResult<()> {
       representation: MeshRepresentation::BoundaryFaces,
     };
     let mut layer = scalar_component_layer(
-      LayerId("net_surface_flux"),
+      LayerId::from_static("net_surface_flux"),
       "net_surface_flux",
       target,
       radiation_fields.net_surface_flux,
@@ -269,7 +269,7 @@ fn main() -> AetherResult<()> {
       representation: MeshRepresentation::BoundaryFaces,
     };
     let mut layer = scalar_component_layer(
-      LayerId("atmosphere_density"),
+      LayerId::from_static("atmosphere_density"),
       "atmosphere_density",
       target,
       atmosphere_fields.euler_state,

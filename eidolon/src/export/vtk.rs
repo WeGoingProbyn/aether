@@ -425,12 +425,8 @@ mod tests {
         face_ids: vec![None, None],
       }),
     );
-    let world = RenderWorld {
-      id: WorldId(0),
-      meshes: vec![mesh.clone()],
-      layers: Vec::new(),
-      diagnostics: Vec::new(),
-    };
+    let mut world = RenderWorld::new(WorldId(0));
+    world.meshes = vec![mesh.clone()];
 
     let dataset = render_mesh_dataset(&world, &mesh).unwrap();
 
