@@ -23,4 +23,6 @@ pub mod transfer;
 pub use error::LumenError;
 pub use model::{RadiationFields, RadiationModel, RadiationStageIds};
 pub use optical::{normalise, zenith_cosine};
-pub use transfer::{RadiationParameters, RadiativeTransferStep};
+pub use transfer::{
+  RadiationCoefficients, RadiationParameters, RadiativeTransferStep,
+};

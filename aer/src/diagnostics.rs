@@ -306,6 +306,7 @@ mod tests {
         angular_velocity: 0.0,
         axial_tilt: 0.0,
       }),
+      radiation: None,
     }
   }
 

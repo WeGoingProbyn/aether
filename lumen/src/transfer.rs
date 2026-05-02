@@ -19,6 +19,7 @@
 
 use nexus::{
   FieldKey, FieldStorage, MeshKey, ResourceKey, SoaField, Stage, StageContext,
+  WorldConstants,
 };
 use utility::{
   constants::STEFAN_BOLTZMANN,
@@ -28,17 +29,12 @@ use utility::{
 
 use crate::{error::LumenError, optical::zenith_cosine};
 
-/// Tunable parameters for `RadiativeTransferStep`. Defaults are
-/// Earth-ish but the model is too simplified for any default to be
-/// physically authoritative — set deliberately for the world you build.
+/// Model-only tuning knobs for `RadiativeTransferStep`. These are the
+/// parts of the radiation parameter block that cosmo / WorldConstants
+/// can't supply — they're a function of how aggressively this gray-band
+/// MVP approximates the real atmosphere.
 #[derive(Clone, Copy, Debug)]
-pub struct RadiationParameters {
-  /// Top-of-atmosphere solar irradiance (W/m²).
-  pub solar_constant: f64,
-  /// Surface short-wave albedo (0..1).
-  pub surface_albedo: f64,
-  /// Surface long-wave emissivity (0..1).
-  pub surface_emissivity: f64,
+pub struct RadiationCoefficients {
   /// Fraction of upwelling LW from the surface trapped by the atmosphere
   /// (0..1). 0 = transparent atmosphere, 1 = perfect greenhouse.
   pub greenhouse_factor: f64,
@@ -49,9 +45,56 @@ pub struct RadiationParameters {
   /// convert the absorbed shortwave flux density to a temperature
   /// tendency.
   pub atm_heat_capacity: f64,
+  /// Linear damping coefficient (1/s) — atmospheric heating tendency
+  /// includes `-coeff * (T_atm - T_ref)`.
+  pub atm_longwave_damping: f64,
+}
+
+impl Default for RadiationCoefficients {
+  fn default() -> Self {
+    Self {
+      greenhouse_factor: 0.40,
+      atmospheric_absorption: 0.20,
+      atm_heat_capacity: 1206.0,
+      atm_longwave_damping: 1.0e-5,
+    }
+  }
+}
+
+/// Full parameter block for `RadiativeTransferStep`. Splits cleanly
+/// into:
+///
+/// - **Physical params** (`solar_constant`, `surface_albedo`,
+///   `surface_emissivity`, `atm_reference_temperature`) — derived from
+///   `WorldConstants` (i.e. cosmo) via `from_world_constants`.
+/// - **Model coefficients** (greenhouse / absorption / heat capacity /
+///   longwave damping) — knobs of this gray-band MVP, see
+///   `RadiationCoefficients`.
+///
+/// `Default::default()` returns Earth-ish values for both halves;
+/// it's convenient for tests and bootstrapping but not authoritative
+/// — prefer `from_world_constants` once a `WorldConstants` is in hand.
+#[derive(Clone, Copy, Debug)]
+pub struct RadiationParameters {
+  /// Top-of-atmosphere solar irradiance (W/m²). From cosmo.
+  pub solar_constant: f64,
+  /// Surface short-wave albedo (0..1). From cosmo.
+  pub surface_albedo: f64,
+  /// Surface long-wave emissivity (0..1). From cosmo.
+  pub surface_emissivity: f64,
   /// Reference atmospheric temperature for the linear longwave damping
-  /// term (K).
+  /// term (K). From cosmo.
   pub atm_reference_temperature: f64,
+  /// Fraction of upwelling LW from the surface trapped by the atmosphere
+  /// (0..1). 0 = transparent atmosphere, 1 = perfect greenhouse.
+  pub greenhouse_factor: f64,
+  /// Fraction of incident shortwave absorbed by the atmospheric column
+  /// before reaching the surface (0..1).
+  pub atmospheric_absorption: f64,
+  /// Volumetric heat capacity of the atmosphere (J/(K·m³)). Used to
+  /// convert the absorbed shortwave flux density to a temperature
+  /// tendency.
+  pub atm_heat_capacity: f64,
   /// Linear damping coefficient (1/s) — atmospheric heating tendency
   /// includes `-coeff * (T_atm - T_ref)`.
   pub atm_longwave_damping: f64,
@@ -59,16 +102,50 @@ pub struct RadiationParameters {
 
 impl Default for RadiationParameters {
   fn default() -> Self {
+    let coefficients = RadiationCoefficients::default();
     Self {
       solar_constant: 1361.0,
       surface_albedo: 0.30,
       surface_emissivity: 0.95,
-      greenhouse_factor: 0.40,
-      atmospheric_absorption: 0.20,
-      atm_heat_capacity: 1206.0,
       atm_reference_temperature: 250.0,
-      atm_longwave_damping: 1.0e-5,
+      greenhouse_factor: coefficients.greenhouse_factor,
+      atmospheric_absorption: coefficients.atmospheric_absorption,
+      atm_heat_capacity: coefficients.atm_heat_capacity,
+      atm_longwave_damping: coefficients.atm_longwave_damping,
     }
+  }
+}
+
+impl RadiationParameters {
+  /// Build a parameter block from a cosmo-derived `WorldConstants` plus
+  /// the model coefficient knobs. Errors when the world has no
+  /// `RadiationConstants` (no resolvable primary star) or no
+  /// `AtmosphereConstants` (no atmosphere to give a reference
+  /// temperature).
+  pub fn from_world_constants(
+    constants: &WorldConstants,
+    coefficients: RadiationCoefficients,
+  ) -> AetherResult<Self> {
+    let radiation = constants.radiation.ok_or_else(|| {
+      AetherError::new(LumenError::MissingRadiationConstants)
+        .context("WorldConstants::radiation is None")
+    })?;
+    let atmosphere = constants.atmosphere.ok_or_else(|| {
+      AetherError::new(LumenError::MissingAtmosphereConstants)
+        .context("WorldConstants::atmosphere is None")
+    })?;
+    let params = Self {
+      solar_constant: radiation.solar_irradiance,
+      surface_albedo: radiation.surface_albedo,
+      surface_emissivity: radiation.surface_emissivity,
+      atm_reference_temperature: atmosphere.reference_temperature,
+      greenhouse_factor: coefficients.greenhouse_factor,
+      atmospheric_absorption: coefficients.atmospheric_absorption,
+      atm_heat_capacity: coefficients.atm_heat_capacity,
+      atm_longwave_damping: coefficients.atm_longwave_damping,
+    };
+    params.validate()?;
+    Ok(params)
   }
 }
 

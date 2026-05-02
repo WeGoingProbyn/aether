@@ -6,8 +6,11 @@ version = 4
 name = "aer"
 version = "0.1.0"
 dependencies = [
+ "aether",
  "continuum",
+ "cosmo",
  "nexus",
+ "pleroma",
  "tessera",
  "utility",
 ]
@@ -115,6 +118,7 @@ dependencies = [
  "aether",
  "cosmo",
  "eidolon",
+ "lumen",
  "nexus",
  "pleroma",
  "terra",

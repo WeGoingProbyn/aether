@@ -29,6 +29,7 @@ use crate::core::{World, world_constants_from_seed};
 pub struct WorldFactory {
   world_id: WorldId,
   seed: CelestialBody,
+  primary: Option<CelestialBody>,
   tessera: Tessera,
   pleroma: Pleroma,
   nexus: Nexus,
@@ -40,11 +41,21 @@ impl WorldFactory {
     Self {
       world_id,
       seed,
+      primary: None,
       tessera: Tessera::new(),
       pleroma: Pleroma::new(),
       nexus: Nexus::new(),
       cube_sphere_shells: HashMap::new(),
     }
+  }
+
+  pub fn with_primary(mut self, primary: CelestialBody) -> Self {
+    self.primary = Some(primary);
+    self
+  }
+
+  pub fn set_primary(&mut self, primary: CelestialBody) {
+    self.primary = Some(primary);
   }
 
   pub fn world_id(&self) -> WorldId {
@@ -55,8 +66,12 @@ impl WorldFactory {
     &self.seed
   }
 
+  pub fn primary(&self) -> Option<&CelestialBody> {
+    self.primary.as_ref()
+  }
+
   pub fn constants(&self) -> WorldConstants {
-    world_constants_from_seed(&self.seed)
+    world_constants_from_seed(&self.seed, self.primary.as_ref())
   }
 
   pub fn tessera(&self) -> &Tessera {
@@ -238,6 +253,7 @@ impl WorldFactory {
     Ok(World::new(
       self.world_id,
       self.seed,
+      self.primary,
       self.tessera,
       self.pleroma,
       compiled_nexus,

@@ -12,6 +12,8 @@ pub enum LumenError {
   FieldMeshMismatch,
   FieldLengthMismatch,
   InvalidParameters,
+  MissingRadiationConstants,
+  MissingAtmosphereConstants,
 }
 
 impl ErrorDomain for LumenError {
@@ -46,6 +48,16 @@ impl std::fmt::Display for LumenError {
       LumenError::InvalidParameters => {
         write!(f, "radiation model parameters are non-physical")
       }
+      LumenError::MissingRadiationConstants => write!(
+        f,
+        "WorldConstants::radiation is None — cosmo could not derive a \
+         solar irradiance for this world (no primary star?)"
+      ),
+      LumenError::MissingAtmosphereConstants => write!(
+        f,
+        "WorldConstants::atmosphere is None — radiation needs a \
+         reference temperature, which only atmospheric bodies provide"
+      ),
     }
   }
 }

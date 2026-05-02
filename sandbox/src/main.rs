@@ -14,6 +14,7 @@ use eidolon::{
   extract::{scalar_component_layer, tessera_debug_frame},
   ir::{LayerId, MeshRepresentation, Palette, RenderLayer, RenderMeshId},
 };
+use lumen::{RadiationCoefficients, RadiationModel};
 use nexus::{MeshKey, SoaField, WorldId};
 use terra::SurfaceThermalModel;
 use utility::info;
@@ -37,7 +38,9 @@ fn main() -> AetherResult<()> {
   let surface_depth = 10_000.0;
   let world_id = WorldId(0);
   let seed = cosmo_factory::earth();
-  let mut world_factory = WorldFactory::new(world_id, seed);
+  let primary = cosmo_factory::sun();
+  let mut world_factory =
+    WorldFactory::new(world_id, seed).with_primary(primary);
   let world_constants = world_factory.constants();
   let shell_layout = AtmosphereShellLayout::new(
     &world_constants,
@@ -87,8 +90,16 @@ fn main() -> AetherResult<()> {
   let surface_fields = surface_model.fields();
   let atmosphere_model = AtmosphereModel::new(MeshKey::ATMOSPHERE)
     .with_cfl(0.25)
-    .with_current_state_background_correction();
+    .with_current_state_background_correction()
+    .with_radiative_heating();
   let atmosphere_fields = atmosphere_model.fields();
+  let radiation_model = RadiationModel::from_world_constants(
+    MeshKey::ATMOSPHERE,
+    MeshKey::SURFACE,
+    &world_constants,
+    RadiationCoefficients::default(),
+  )?;
+  let radiation_fields = radiation_model.fields();
 
   surface_model
     .register_fields(world_factory.pleroma_mut(), surface_mesh.as_ref())?;
@@ -98,6 +109,15 @@ fn main() -> AetherResult<()> {
     &world_constants,
     shell_layout.reference_radius(),
   )?;
+  radiation_model.register_fields(
+    world_factory.pleroma_mut(),
+    atmosphere_mesh.as_ref(),
+    surface_mesh.as_ref(),
+  )?;
+  radiation_model.register_default_sun_position(
+    world_factory.pleroma_mut(),
+    [1.0, 0.0, 0.0],
+  );
 
   surface_model.add_stages(world_factory.nexus_mut())?;
   world_factory.add_scalar_interface_flux(
@@ -107,6 +127,7 @@ fn main() -> AetherResult<()> {
     atmosphere_fields.temperature_tendency,
     1.0e-15,
   )?;
+  radiation_model.add_stages(world_factory.nexus_mut())?;
   atmosphere_model.add_stages(world_factory.nexus_mut())?;
   let world = world_factory.build()?;
 
@@ -197,6 +218,46 @@ fn main() -> AetherResult<()> {
       target,
       atmosphere_fields.pressure,
       atmosphere_pressure,
+      0,
+    );
+    layer.palette = Palette::thermal();
+    frame.worlds[0].layers.push(RenderLayer::Scalar(layer));
+  }
+  if let Some(radiative_heating) = world
+    .pleroma()
+    .read::<SoaField<1>>(radiation_fields.heating_tendency)
+  {
+    let target = RenderMeshId {
+      world: world.id(),
+      mesh: MeshKey::ATMOSPHERE,
+      representation: MeshRepresentation::BoundaryFaces,
+    };
+    let mut layer = scalar_component_layer(
+      LayerId("radiative_heating"),
+      "radiative_heating",
+      target,
+      radiation_fields.heating_tendency,
+      radiative_heating,
+      0,
+    );
+    layer.palette = Palette::thermal();
+    frame.worlds[0].layers.push(RenderLayer::Scalar(layer));
+  }
+  if let Some(net_surface_flux) = world
+    .pleroma()
+    .read::<SoaField<1>>(radiation_fields.net_surface_flux)
+  {
+    let target = RenderMeshId {
+      world: world.id(),
+      mesh: MeshKey::SURFACE,
+      representation: MeshRepresentation::BoundaryFaces,
+    };
+    let mut layer = scalar_component_layer(
+      LayerId("net_surface_flux"),
+      "net_surface_flux",
+      target,
+      radiation_fields.net_surface_flux,
+      net_surface_flux,
       0,
     );
     layer.palette = Palette::thermal();

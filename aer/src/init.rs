@@ -212,6 +212,7 @@ mod tests {
         angular_velocity: 7.292e-5,
         axial_tilt: 0.409,
       }),
+      radiation: None,
     }
   }
 
@@ -257,6 +258,7 @@ mod tests {
         angular_velocity: 0.0,
         axial_tilt: 0.0,
       }),
+      radiation: None,
     };
     let spec = AtmosphereSpec::from_world_constants(&constants).unwrap();
     let mesh = Arc::new(CubeSphere::shell(CubeSphereShellSpec::uniform(

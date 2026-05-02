@@ -1,15 +1,30 @@
 use std::collections::HashMap;
 
 use cosmo::kind::{BodyKind, CelestialBody};
-use nexus::{AtmosphereConstants, CompiledNexus, WorldConstants, WorldId};
+use nexus::{
+  AtmosphereConstants, CompiledNexus, RadiationConstants, WorldConstants,
+  WorldId,
+};
 use pleroma::Pleroma;
 use tessera::world_mesh::Tessera;
-use utility::{domain::SystemId, error::AetherResult, thread::pool::Pool};
+use utility::{
+  constants::solar_flux, domain::SystemId, error::AetherResult,
+  thread::pool::Pool,
+};
+
+/// Default surface long-wave emissivity for rocky bodies. Cosmo doesn't
+/// carry an emissivity yet, so we use a single conservative value rather
+/// than per-body data.
+const DEFAULT_SURFACE_EMISSIVITY: f64 = 0.95;
+/// Fallback surface short-wave albedo when cosmo has no atmosphere /
+/// albedo for the body (e.g. airless rocky body). Earth-like neutral.
+const DEFAULT_SURFACE_ALBEDO: f64 = 0.30;
 
 /// Runtime state for one simulated body.
 pub struct World {
   id: WorldId,
   seed: CelestialBody,
+  primary: Option<CelestialBody>,
   constants: WorldConstants,
   tessera: Tessera,
   pleroma: Pleroma,
@@ -20,19 +35,25 @@ impl World {
   pub fn new(
     id: WorldId,
     seed: CelestialBody,
+    primary: Option<CelestialBody>,
     tessera: Tessera,
     pleroma: Pleroma,
     nexus: CompiledNexus,
   ) -> Self {
-    let constants = world_constants_from_seed(&seed);
+    let constants = world_constants_from_seed(&seed, primary.as_ref());
     Self {
       id,
       seed,
+      primary,
       constants,
       tessera,
       pleroma,
       nexus,
     }
+  }
+
+  pub fn primary(&self) -> Option<&CelestialBody> {
+    self.primary.as_ref()
   }
 
   pub fn id(&self) -> WorldId {
@@ -79,13 +100,42 @@ impl World {
   }
 }
 
-pub fn world_constants_from_seed(seed: &CelestialBody) -> WorldConstants {
+pub fn world_constants_from_seed(
+  seed: &CelestialBody,
+  primary: Option<&CelestialBody>,
+) -> WorldConstants {
+  let atmosphere = atmosphere_constants_from_seed(seed);
   WorldConstants {
     mass: seed.mass(),
     radius: seed.radius(),
     surface_gravity: seed.surface_gravity(),
-    atmosphere: atmosphere_constants_from_seed(seed),
+    radiation: radiation_constants_from_seed(seed, primary, atmosphere),
+    atmosphere,
   }
+}
+
+fn radiation_constants_from_seed(
+  seed: &CelestialBody,
+  primary: Option<&CelestialBody>,
+  atmosphere: Option<AtmosphereConstants>,
+) -> Option<RadiationConstants> {
+  let primary = primary?;
+  let luminosity = primary.luminosity()?;
+  let position = seed.position();
+  let distance =
+    (position[0].powi(2) + position[1].powi(2) + position[2].powi(2)).sqrt();
+  if !distance.is_finite() || distance <= 0.0 {
+    return None;
+  }
+  let solar_irradiance = solar_flux(luminosity, distance);
+  let surface_albedo = atmosphere
+    .and_then(|a| a.albedo)
+    .unwrap_or(DEFAULT_SURFACE_ALBEDO);
+  Some(RadiationConstants {
+    solar_irradiance,
+    surface_albedo,
+    surface_emissivity: DEFAULT_SURFACE_EMISSIVITY,
+  })
 }
 
 fn atmosphere_constants_from_seed(
@@ -234,5 +284,48 @@ impl Aether {
 
   pub fn worlds(&self) -> impl Iterator<Item = &World> {
     self.systems.values().flat_map(System::worlds)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use cosmo::factory;
+  use utility::constants::{EARTH_ORBIT, SOLAR_LUMIN};
+
+  use super::*;
+
+  #[test]
+  fn world_constants_without_primary_have_no_radiation_block() {
+    let constants = world_constants_from_seed(&factory::earth(), None);
+    assert!(constants.radiation.is_none());
+  }
+
+  #[test]
+  fn world_constants_derive_solar_irradiance_from_primary() {
+    let earth = factory::earth();
+    let sun = factory::sun();
+    let constants = world_constants_from_seed(&earth, Some(&sun));
+    let radiation = constants.radiation.expect("radiation derived");
+
+    // Cosmo computes the star's luminosity from Stefan-Boltzmann on
+    // (radius, surface temperature) rather than reading SOLAR_LUMIN
+    // directly, so the two values agree only to ~0.5%.
+    let expected_irradiance =
+      SOLAR_LUMIN / (4.0 * std::f64::consts::PI * EARTH_ORBIT.powi(2));
+    let relative_error = (radiation.solar_irradiance - expected_irradiance)
+      .abs()
+      / expected_irradiance;
+    assert!(relative_error < 0.01, "got {}", radiation.solar_irradiance);
+    assert_eq!(radiation.surface_albedo, 0.30);
+    assert_eq!(radiation.surface_emissivity, DEFAULT_SURFACE_EMISSIVITY);
+  }
+
+  #[test]
+  fn airless_body_falls_back_to_default_albedo() {
+    let mercury = factory::mercury();
+    let sun = factory::sun();
+    let constants = world_constants_from_seed(&mercury, Some(&sun));
+    let radiation = constants.radiation.expect("radiation derived");
+    assert_eq!(radiation.surface_albedo, DEFAULT_SURFACE_ALBEDO);
   }
 }

@@ -66,6 +66,10 @@ pub struct AtmosphereModel {
   fields: AtmosphereFields,
   cfl: f64,
   background_correction: BackgroundCorrectionMode,
+  /// Extra dT/dt fields aer's energy stage should sum into the Euler
+  /// energy update on top of `fields.temperature_tendency`. Lumen's
+  /// `RadiativeHeatingTendency` is the typical first entry.
+  extra_tendencies: Vec<FieldKey>,
 }
 
 impl AtmosphereModel {
@@ -75,6 +79,7 @@ impl AtmosphereModel {
       fields: AtmosphereFields::for_mesh(mesh),
       cfl: 0.25,
       background_correction: BackgroundCorrectionMode::None,
+      extra_tendencies: Vec::new(),
     }
   }
 
@@ -98,6 +103,25 @@ impl AtmosphereModel {
 
   pub fn with_current_state_background_correction(self) -> Self {
     self.with_background_correction(BackgroundCorrectionMode::CurrentState)
+  }
+
+  /// Add an extra dT/dt source to be summed into the Euler energy
+  /// update. The field must live on the same mesh as the atmosphere
+  /// model. Repeated calls accumulate sources.
+  pub fn with_extra_tendency(mut self, key: FieldKey) -> Self {
+    self.extra_tendencies.push(key);
+    self
+  }
+
+  /// Convenience for the common case: lumen writes
+  /// `FieldName::RadiativeHeatingTendency` to the same atmosphere mesh.
+  pub fn with_radiative_heating(self) -> Self {
+    let key = FieldKey::new(self.mesh, FieldName::RadiativeHeatingTendency);
+    self.with_extra_tendency(key)
+  }
+
+  pub fn extra_tendencies(&self) -> &[FieldKey] {
+    &self.extra_tendencies
   }
 
   pub fn mesh(&self) -> MeshKey {
@@ -160,11 +184,13 @@ impl AtmosphereModel {
   ) -> AetherResult<AtmosphereStageIds> {
     self.validate()?;
 
+    let mut tendencies = vec![self.fields.temperature_tendency];
+    tendencies.extend(self.extra_tendencies.iter().copied());
     let tendency_to_energy =
-      nexus.add(TemperatureTendencyToEulerEnergyStep::new(
+      nexus.add(TemperatureTendencyToEulerEnergyStep::with_tendencies(
         self.mesh,
         self.fields.euler_state,
-        self.fields.temperature_tendency,
+        tendencies,
       )?);
     let dynamics = nexus.add(
       EulerAtmosphereStep::forward_euler(
@@ -199,17 +225,23 @@ impl AtmosphereModel {
       );
     }
 
-    if self
+    let core_ok = self
       .fields
       .all()
       .iter()
-      .all(|field| field.mesh() == self.mesh)
-    {
+      .all(|field| field.mesh() == self.mesh);
+    let extras_ok = self
+      .extra_tendencies
+      .iter()
+      .all(|field| field.mesh() == self.mesh);
+    if core_ok && extras_ok {
       Ok(())
     } else {
       Err(
-        AetherError::new(AerError::FieldMeshMismatch)
-          .context(format!("mesh {:?}, fields {:?}", self.mesh, self.fields)),
+        AetherError::new(AerError::FieldMeshMismatch).context(format!(
+          "mesh {:?}, fields {:?}, extra_tendencies {:?}",
+          self.mesh, self.fields, self.extra_tendencies
+        )),
       )
     }
   }
@@ -252,6 +284,7 @@ mod tests {
         angular_velocity: 0.0,
         axial_tilt: 0.0,
       }),
+      radiation: None,
     }
   }
 

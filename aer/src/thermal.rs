@@ -9,17 +9,20 @@ use utility::{
 
 use crate::{error::AerError, init::AtmosphereSpec};
 
-/// Applies a scalar temperature tendency to the Euler energy component.
+/// Applies one or more scalar temperature tendencies (K/s) to the Euler
+/// energy component.
 ///
-/// Syzygy can continue to express thermal coupling as `dT/dt`, while Aer
-/// keeps `EulerState` as the single prognostic atmosphere state:
+/// Multiple physics modules (syzygy interface fluxes, lumen radiative
+/// heating, microphysics latent-heat release, etc.) all express their
+/// effect as `dT/dt` on the same atmosphere mesh. This stage sums those
+/// tendency fields per cell and applies the result to `EulerState`:
 ///
-/// `dE/dt = rho * c_v * dT/dt`, with `c_v = R / (gamma - 1)`.
+/// `dE/dt = rho * c_v * Σ_i dT_i/dt`, with `c_v = R / (gamma - 1)`.
 pub struct TemperatureTendencyToEulerEnergyStep {
   mesh: MeshKey,
   state: FieldKey,
-  tendency: FieldKey,
-  reads: [FieldKey; 1],
+  tendencies: Vec<FieldKey>,
+  reads: Vec<FieldKey>,
   writes: [FieldKey; 1],
 }
 
@@ -29,11 +32,22 @@ impl TemperatureTendencyToEulerEnergyStep {
     state: FieldKey,
     tendency: FieldKey,
   ) -> AetherResult<Self> {
-    if state.mesh() != mesh || tendency.mesh() != mesh {
+    Self::with_tendencies(mesh, state, vec![tendency])
+  }
+
+  pub fn with_tendencies(
+    mesh: MeshKey,
+    state: FieldKey,
+    tendencies: Vec<FieldKey>,
+  ) -> AetherResult<Self> {
+    if state.mesh() != mesh
+      || tendencies.iter().any(|t| t.mesh() != mesh)
+      || tendencies.is_empty()
+    {
       return Err(AetherError::new(AerError::FieldMeshMismatch).context(
         format!(
-          "mesh {:?}, state {:?}, tendency {:?}",
-          mesh, state, tendency
+          "mesh {:?}, state {:?}, tendencies {:?}",
+          mesh, state, tendencies
         ),
       ));
     }
@@ -41,8 +55,8 @@ impl TemperatureTendencyToEulerEnergyStep {
     Ok(Self {
       mesh,
       state,
-      tendency,
-      reads: [tendency],
+      reads: tendencies.clone(),
+      tendencies,
       writes: [state],
     })
   }
@@ -55,8 +69,8 @@ impl TemperatureTendencyToEulerEnergyStep {
     self.state
   }
 
-  pub fn tendency(&self) -> FieldKey {
-    self.tendency
+  pub fn tendencies(&self) -> &[FieldKey] {
+    &self.tendencies
   }
 }
 
@@ -93,23 +107,27 @@ impl Stage for TemperatureTendencyToEulerEnergyStep {
 
     let spec = AtmosphereSpec::from_world_constants(ctx.world.constants)?;
     let cv = spec.gas_constant() / (spec.gamma() - 1.0);
-    let tendencies = {
+    let mut tendency_sum = vec![0.0; mesh_cell_count];
+    for key in &self.tendencies {
       let tendency: &SoaField<1> =
-        ctx.world.fields.read(self.tendency).ok_or_else(|| {
+        ctx.world.fields.read(*key).ok_or_else(|| {
           AetherError::new(AerError::MissingReadField)
-            .context(format!("{:?}", self.tendency))
+            .context(format!("{:?}", key))
         })?;
       if tendency.len() != mesh_cell_count {
         return Err(AetherError::new(AerError::FieldLengthMismatch).context(
           format!(
-            "tendency len {}, mesh cell count {}",
+            "tendency {:?} len {}, mesh cell count {}",
+            key,
             tendency.len(),
             mesh_cell_count
           ),
         ));
       }
-      tendency.component(0).as_ref().to_vec()
-    };
+      for (i, value) in tendency.component(0).as_ref().iter().enumerate() {
+        tendency_sum[i] += *value;
+      }
+    }
 
     let state: &mut SoaField<5> =
       ctx.world.fields.write(self.state).ok_or_else(|| {
@@ -126,7 +144,7 @@ impl Stage for TemperatureTendencyToEulerEnergyStep {
       ));
     }
 
-    for (cell, tendency) in tendencies.into_iter().enumerate() {
+    for (cell, tendency) in tendency_sum.into_iter().enumerate() {
       let cell = CellId::from(cell);
       let mut s = state.state(cell);
       let rho = s[0];
@@ -192,6 +210,7 @@ mod tests {
         angular_velocity: 0.0,
         axial_tilt: 0.0,
       }),
+      radiation: None,
     }
   }
 

@@ -12,10 +12,10 @@
 
 use std::sync::Arc;
 
-use lumen::{RadiationModel, RadiationParameters};
+use lumen::{RadiationCoefficients, RadiationModel, RadiationParameters};
 use nexus::{
-  FieldStorage, MeshKey, Nexus, Pleroma, ResourceKey, SoaField, WorldConstants,
-  WorldId,
+  AtmosphereConstants, FieldStorage, MeshKey, Nexus, Pleroma,
+  RadiationConstants, ResourceKey, SoaField, WorldConstants, WorldId,
 };
 use tessera::{
   cube_sphere::{CubeSphere, CubeSphereShellSpec},
@@ -180,6 +180,76 @@ fn night_side_surface_radiates_negative_net_flux() {
       assert!(f < 0.0, "cell {i} on night side expected negative, got {f}");
     }
   }
+}
+
+#[test]
+fn radiation_model_from_world_constants_uses_cosmo_supplied_physics() {
+  // Pretend cosmo has handed us a world with a known solar irradiance
+  // and surface albedo. Lumen's parameter block should pick those up
+  // verbatim, while the model coefficients we pass explicitly stay
+  // verbatim too. This is the path WorldFactory will use.
+  let constants = WorldConstants {
+    mass: 0.0,
+    radius: 0.0,
+    surface_gravity: 0.0,
+    atmosphere: Some(AtmosphereConstants {
+      reference_temperature: 270.0,
+      reference_pressure: 100_000.0,
+      gamma: 1.4,
+      gas_constant: 287.0,
+      molar_mass: 0.029,
+      albedo: Some(0.30),
+      angular_velocity: 0.0,
+      axial_tilt: 0.0,
+    }),
+    radiation: Some(RadiationConstants {
+      solar_irradiance: 600.0,
+      surface_albedo: 0.25,
+      surface_emissivity: 0.92,
+    }),
+  };
+  let coefficients = RadiationCoefficients {
+    greenhouse_factor: 0.5,
+    atmospheric_absorption: 0.15,
+    atm_heat_capacity: 1300.0,
+    atm_longwave_damping: 2.0e-5,
+  };
+
+  let params =
+    RadiationParameters::from_world_constants(&constants, coefficients)
+      .unwrap();
+  assert_eq!(params.solar_constant, 600.0);
+  assert_eq!(params.surface_albedo, 0.25);
+  assert_eq!(params.surface_emissivity, 0.92);
+  assert_eq!(params.atm_reference_temperature, 270.0);
+  assert_eq!(params.greenhouse_factor, 0.5);
+  assert_eq!(params.atmospheric_absorption, 0.15);
+  assert_eq!(params.atm_heat_capacity, 1300.0);
+  assert_eq!(params.atm_longwave_damping, 2.0e-5);
+
+  let model = RadiationModel::from_world_constants(
+    MeshKey::ATMOSPHERE,
+    MeshKey::SURFACE,
+    &constants,
+    coefficients,
+  )
+  .unwrap();
+  assert_eq!(model.atm_mesh(), MeshKey::ATMOSPHERE);
+  assert_eq!(model.surface_mesh(), MeshKey::SURFACE);
+  assert_eq!(model.parameters().solar_constant, 600.0);
+}
+
+#[test]
+fn radiation_model_from_world_constants_errors_without_radiation_block() {
+  let constants_no_radiation = WorldConstants {
+    radiation: None,
+    ..WorldConstants::default()
+  };
+  let result = RadiationParameters::from_world_constants(
+    &constants_no_radiation,
+    RadiationCoefficients::default(),
+  );
+  assert!(result.is_err());
 }
 
 #[test]

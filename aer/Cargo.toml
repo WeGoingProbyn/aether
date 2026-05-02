@@ -9,3 +9,8 @@ continuum = { path = "../continuum" }
 nexus = { path = "../nexus" }
 tessera = { path = "../tessera" }
 utility = { path = "../utility" }
+
+[dev-dependencies]
+aether = { path = "../aether" }
+cosmo = { path = "../cosmo" }
+pleroma = { path = "../pleroma" }

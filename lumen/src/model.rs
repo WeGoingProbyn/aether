@@ -11,13 +11,16 @@
 
 use nexus::{
   FieldKey, FieldName, MeshKey, Nexus, Pleroma, ResourceKey, SoaField, StageId,
+  WorldConstants,
 };
 use tessera::mesh::Mesh;
 use utility::error::{AetherError, AetherResult};
 
 use crate::{
   error::LumenError,
-  transfer::{RadiationParameters, RadiativeTransferStep},
+  transfer::{
+    RadiationCoefficients, RadiationParameters, RadiativeTransferStep,
+  },
 };
 
 /// Field keys lumen writes to. Held on the model so callers can name them
@@ -72,6 +75,26 @@ impl RadiationModel {
       fields: RadiationFields::for_meshes(atm_mesh, surface_mesh),
       params: RadiationParameters::default(),
     }
+  }
+
+  /// Derive radiation parameters from cosmo-supplied `WorldConstants`
+  /// (solar irradiance, surface albedo / emissivity, atmospheric
+  /// reference temperature) and pair them with the model coefficient
+  /// knobs that don't have a cosmo source.
+  pub fn from_world_constants(
+    atm_mesh: MeshKey,
+    surface_mesh: MeshKey,
+    constants: &WorldConstants,
+    coefficients: RadiationCoefficients,
+  ) -> AetherResult<Self> {
+    let params =
+      RadiationParameters::from_world_constants(constants, coefficients)?;
+    Ok(Self {
+      atm_mesh,
+      surface_mesh,
+      fields: RadiationFields::for_meshes(atm_mesh, surface_mesh),
+      params,
+    })
   }
 
   pub fn with_fields(mut self, fields: RadiationFields) -> Self {
