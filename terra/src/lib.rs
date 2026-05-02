@@ -1,6 +1,12 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
+//! Surface thermal physics. Terra owns the *logic* of stepping a
+//! surface temperature field forward under a net radiative flux supplied
+//! by lumen on the same surface mesh. All field storage lives in
+//! pleroma — terra only registers the temperature field at world setup
+//! and names the flux field it consumes.
+
 use nexus::{
   FieldKey, FieldName, FieldStorage, MeshKey, Nexus, Pleroma, SoaField, Stage,
   StageContext, StageId,
@@ -14,22 +20,32 @@ use utility::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SurfaceFields {
   pub temperature: FieldKey,
+  pub net_flux: FieldKey,
 }
 
 impl SurfaceFields {
   pub const fn for_mesh(mesh: MeshKey) -> Self {
     Self {
       temperature: FieldKey::new(mesh, FieldName::Temperature),
+      net_flux: FieldKey::new(mesh, FieldName::NetSurfaceFlux),
     }
   }
 }
 
+/// Surface thermal slab driven by a net radiative flux (W/m²).
+///
+/// `dT/dt = NetSurfaceFlux / heat_capacity_per_area`
+///
+/// `heat_capacity_per_area` (J/(K·m²)) collapses slab density, specific
+/// heat and depth into one tunable knob. Earth's ocean mixed layer is
+/// O(1e8); a thin solid slab is O(1e5–1e6). Pick a value matching the
+/// time-scale you want to observe.
 #[derive(Clone, Debug)]
 pub struct SurfaceThermalModel {
   mesh: MeshKey,
   fields: SurfaceFields,
   initial_temperature: f64,
-  target_temperature: f64,
+  heat_capacity_per_area: f64,
 }
 
 impl SurfaceThermalModel {
@@ -38,7 +54,7 @@ impl SurfaceThermalModel {
       mesh,
       fields: SurfaceFields::for_mesh(mesh),
       initial_temperature: 288.0,
-      target_temperature: 288.0,
+      heat_capacity_per_area: 1.0e6,
     }
   }
 
@@ -52,8 +68,8 @@ impl SurfaceThermalModel {
     self
   }
 
-  pub fn with_target_temperature(mut self, temperature: f64) -> Self {
-    self.target_temperature = temperature;
+  pub fn with_heat_capacity_per_area(mut self, capacity: f64) -> Self {
+    self.heat_capacity_per_area = capacity;
     self
   }
 
@@ -65,6 +81,13 @@ impl SurfaceThermalModel {
     self.fields
   }
 
+  pub fn heat_capacity_per_area(&self) -> f64 {
+    self.heat_capacity_per_area
+  }
+
+  /// Register the surface temperature field. The net-flux field is
+  /// expected to be registered by lumen (the producer); terra only
+  /// reads it.
   pub fn register_fields<M>(
     &self,
     pleroma: &mut Pleroma,
@@ -82,37 +105,39 @@ impl SurfaceThermalModel {
 
   pub fn add_stages(&self, nexus: &mut Nexus) -> AetherResult<StageId> {
     self.validate()?;
-    Ok(nexus.add(SurfaceTemperatureRelaxationStep::new(
+    Ok(nexus.add(SurfaceEnergyBalanceStep::new(
       self.mesh,
       self.fields.temperature,
-      self.target_temperature,
+      self.fields.net_flux,
+      self.heat_capacity_per_area,
     )?))
   }
 
   fn validate(&self) -> AetherResult<()> {
-    if self.fields.temperature.mesh() != self.mesh {
+    if self.fields.temperature.mesh() != self.mesh
+      || self.fields.net_flux.mesh() != self.mesh
+    {
       return Err(
         AetherError::new(TerraError::FieldMeshMismatch)
           .context(format!("mesh {:?}, fields {:?}", self.mesh, self.fields)),
       );
     }
 
-    if self.initial_temperature.is_finite()
-      && self.target_temperature.is_finite()
-      && self.initial_temperature > 0.0
-      && self.target_temperature > 0.0
+    if !self.initial_temperature.is_finite() || self.initial_temperature <= 0.0
     {
-      Ok(())
-    } else {
-      Err(
-        AetherError::new(TerraError::InvalidSurfaceTemperature).context(
-          format!(
-            "initial {}, target {}",
-            self.initial_temperature, self.target_temperature
-          ),
-        ),
-      )
+      return Err(
+        AetherError::new(TerraError::InvalidSurfaceTemperature)
+          .context(format!("initial_temperature {}", self.initial_temperature)),
+      );
     }
+    if !self.heat_capacity_per_area.is_finite()
+      || self.heat_capacity_per_area <= 0.0
+    {
+      return Err(AetherError::new(TerraError::InvalidHeatCapacity).context(
+        format!("heat_capacity_per_area {}", self.heat_capacity_per_area),
+      ));
+    }
+    Ok(())
   }
 }
 
@@ -122,44 +147,48 @@ impl Default for SurfaceThermalModel {
   }
 }
 
-/// Placeholder surface temperature stage.
+/// Forward-Euler surface energy balance.
 ///
-/// This intentionally mirrors the old sandbox dummy heating behavior while
-/// keeping surface-owned state and stages inside Terra. It relaxes immediately
-/// to `target_temperature + dt`, giving the atmosphere coupling a non-zero
-/// validation signal without pretending this is a physical surface model.
-pub struct SurfaceTemperatureRelaxationStep {
+/// Reads `net_flux` (W/m²) and the current `temperature`, advances:
+///
+/// `T <- T + dt * net_flux / heat_capacity_per_area`
+pub struct SurfaceEnergyBalanceStep {
   mesh: MeshKey,
   temperature: FieldKey,
-  target_temperature: f64,
-  reads: [FieldKey; 1],
+  net_flux: FieldKey,
+  heat_capacity_per_area: f64,
+  reads: [FieldKey; 2],
   writes: [FieldKey; 1],
 }
 
-impl SurfaceTemperatureRelaxationStep {
+impl SurfaceEnergyBalanceStep {
   pub fn new(
     mesh: MeshKey,
     temperature: FieldKey,
-    target_temperature: f64,
+    net_flux: FieldKey,
+    heat_capacity_per_area: f64,
   ) -> AetherResult<Self> {
-    if temperature.mesh() != mesh {
-      return Err(
-        AetherError::new(TerraError::FieldMeshMismatch)
-          .context(format!("mesh {:?}, temperature {:?}", mesh, temperature)),
-      );
+    if temperature.mesh() != mesh || net_flux.mesh() != mesh {
+      return Err(AetherError::new(TerraError::FieldMeshMismatch).context(
+        format!(
+          "mesh {:?}, temperature {:?}, net_flux {:?}",
+          mesh, temperature, net_flux
+        ),
+      ));
     }
-    if !target_temperature.is_finite() || target_temperature <= 0.0 {
+    if !heat_capacity_per_area.is_finite() || heat_capacity_per_area <= 0.0 {
       return Err(
-        AetherError::new(TerraError::InvalidSurfaceTemperature)
-          .context(format!("target {}", target_temperature)),
+        AetherError::new(TerraError::InvalidHeatCapacity)
+          .context(format!("{}", heat_capacity_per_area)),
       );
     }
 
     Ok(Self {
       mesh,
       temperature,
-      target_temperature,
-      reads: [temperature],
+      net_flux,
+      heat_capacity_per_area,
+      reads: [net_flux, temperature],
       writes: [temperature],
     })
   }
@@ -171,11 +200,19 @@ impl SurfaceTemperatureRelaxationStep {
   pub fn temperature(&self) -> FieldKey {
     self.temperature
   }
+
+  pub fn net_flux(&self) -> FieldKey {
+    self.net_flux
+  }
+
+  pub fn heat_capacity_per_area(&self) -> f64 {
+    self.heat_capacity_per_area
+  }
 }
 
-impl Stage for SurfaceTemperatureRelaxationStep {
+impl Stage for SurfaceEnergyBalanceStep {
   fn name(&self) -> &'static str {
-    "terra_surface_temperature_relaxation"
+    "terra_surface_energy_balance"
   }
 
   fn reads(&self) -> &[FieldKey] {
@@ -197,24 +234,60 @@ impl Stage for SurfaceTemperatureRelaxationStep {
       })?
       .cell_count();
 
-    let field: &mut SoaField<1> =
+    let dt = ctx.world.dt;
+    if !dt.is_finite() || dt <= 0.0 {
+      return Err(
+        AetherError::new(TerraError::InvalidTimeStep)
+          .context(format!("dt {}", dt)),
+      );
+    }
+
+    let coefficient = dt / self.heat_capacity_per_area;
+
+    let flux_values: Vec<f64> = {
+      let flux: &SoaField<1> =
+        ctx.world.fields.read(self.net_flux).ok_or_else(|| {
+          AetherError::new(TerraError::MissingReadField)
+            .context(format!("{:?}", self.net_flux))
+        })?;
+      if flux.len() != mesh_cell_count {
+        return Err(AetherError::new(TerraError::FieldLengthMismatch).context(
+          format!(
+            "net_flux len {}, mesh cell count {}",
+            flux.len(),
+            mesh_cell_count
+          ),
+        ));
+      }
+      flux.component(0).as_ref().to_vec()
+    };
+
+    let temperature: &mut SoaField<1> =
       ctx.world.fields.write(self.temperature).ok_or_else(|| {
         AetherError::new(TerraError::MissingWriteField)
           .context(format!("{:?}", self.temperature))
       })?;
-    if field.len() != mesh_cell_count {
+    if temperature.len() != mesh_cell_count {
       return Err(AetherError::new(TerraError::FieldLengthMismatch).context(
         format!(
           "temperature len {}, mesh cell count {}",
-          field.len(),
+          temperature.len(),
           mesh_cell_count
         ),
       ));
     }
 
-    let temperature = self.target_temperature + ctx.world.dt;
-    for cell in 0..field.len() {
-      field.write(CellId::from(cell), &[temperature]);
+    for (cell, flux) in flux_values.into_iter().enumerate() {
+      let cell = CellId::from(cell);
+      let mut t = temperature.state(cell)[0];
+      t += coefficient * flux;
+      if !t.is_finite() {
+        return Err(
+          AetherError::new(TerraError::InvalidSurfaceTemperature)
+            .context(format!("cell {} temperature {}", cell.index(), t)),
+        );
+      }
+      temperature.write(cell, &[t]);
     }
 
     Ok(())
@@ -224,10 +297,13 @@ impl Stage for SurfaceTemperatureRelaxationStep {
 #[derive(Debug)]
 pub enum TerraError {
   MissingMesh,
+  MissingReadField,
   MissingWriteField,
   FieldMeshMismatch,
   FieldLengthMismatch,
   InvalidSurfaceTemperature,
+  InvalidHeatCapacity,
+  InvalidTimeStep,
 }
 
 impl ErrorDomain for TerraError {
@@ -242,6 +318,9 @@ impl std::fmt::Display for TerraError {
       TerraError::MissingMesh => {
         write!(f, "surface mesh is not registered in tessera")
       }
+      TerraError::MissingReadField => {
+        write!(f, "declared read field is missing or has the wrong type")
+      }
       TerraError::MissingWriteField => {
         write!(f, "declared write field is missing or has the wrong type")
       }
@@ -253,6 +332,12 @@ impl std::fmt::Display for TerraError {
       }
       TerraError::InvalidSurfaceTemperature => {
         write!(f, "surface temperature is non-physical")
+      }
+      TerraError::InvalidHeatCapacity => {
+        write!(f, "heat_capacity_per_area must be finite and positive")
+      }
+      TerraError::InvalidTimeStep => {
+        write!(f, "dt must be finite and positive")
       }
     }
   }
@@ -273,7 +358,7 @@ mod tests {
   use super::*;
 
   #[test]
-  fn surface_thermal_model_registers_field_and_updates_temperature() {
+  fn surface_thermal_model_advances_temperature_under_constant_flux() {
     let mesh = Arc::new(CubeSphere::shell(CubeSphereShellSpec::uniform(
       [2, 2, 1],
       0.9,
@@ -284,14 +369,14 @@ mod tests {
 
     let model = SurfaceThermalModel::default()
       .with_initial_temperature(280.0)
-      .with_target_temperature(288.0);
+      .with_heat_capacity_per_area(1.0e6);
     let fields = model.fields();
 
     let mut pleroma = Pleroma::new();
     model.register_fields(&mut pleroma, mesh.as_ref()).unwrap();
-    assert_eq!(
-      pleroma.cell_count(fields.temperature),
-      Some(mesh.cell_count())
+    pleroma.register_field(
+      fields.net_flux,
+      SoaField::<1>::from_fn(mesh.cell_count(), |_| [1000.0]),
     );
 
     let mut nexus = Nexus::new();
@@ -306,13 +391,20 @@ mod tests {
         &WorldConstants::default(),
         &mut pleroma,
         &Pool::default(),
-        0.5,
+        100.0,
       )
       .unwrap();
 
+    let expected = 280.0 + 100.0 * 1000.0 / 1.0e6;
     let temperature: &SoaField<1> = pleroma.read(fields.temperature).unwrap();
     for i in 0..temperature.len() {
-      assert_eq!(temperature.state(CellId::from(i))[0], 288.5);
+      assert!(
+        (temperature.state(CellId::from(i))[0] - expected).abs() < 1.0e-9,
+        "cell {} expected {} got {}",
+        i,
+        expected,
+        temperature.state(CellId::from(i))[0]
+      );
     }
   }
 }

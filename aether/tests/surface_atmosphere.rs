@@ -65,7 +65,7 @@ fn surface_atmosphere_world_ticks_with_coupled_models() -> AetherResult<()> {
     .reference_temperature;
   let surface_model = SurfaceThermalModel::new(MeshKey::SURFACE)
     .with_initial_temperature(reference_temperature)
-    .with_target_temperature(reference_temperature);
+    .with_heat_capacity_per_area(1.0e7);
   let surface_fields = surface_model.fields();
   let atmosphere_model = AtmosphereModel::new(MeshKey::ATMOSPHERE)
     .with_cfl(0.25)
@@ -74,6 +74,12 @@ fn surface_atmosphere_world_ticks_with_coupled_models() -> AetherResult<()> {
 
   surface_model
     .register_fields(factory.pleroma_mut(), surface_mesh.as_ref())?;
+  // Lumen would normally register NetSurfaceFlux. This test exercises
+  // the atm/surface seam without radiation, so we stub it as zeros.
+  factory.pleroma_mut().register_field(
+    surface_fields.net_flux,
+    SoaField::<1>::zeros(surface_mesh.cell_count()),
+  );
   atmosphere_model.register_fields(
     factory.pleroma_mut(),
     atmosphere_mesh.as_ref(),

@@ -82,11 +82,7 @@ fn main() -> AetherResult<()> {
         .atmosphere
         .map_or(288.0, |atmosphere| atmosphere.reference_temperature),
     )
-    .with_target_temperature(
-      world_constants
-        .atmosphere
-        .map_or(288.0, |atmosphere| atmosphere.reference_temperature),
-    );
+    .with_heat_capacity_per_area(1.0e7);
   let surface_fields = surface_model.fields();
   let atmosphere_model = AtmosphereModel::new(MeshKey::ATMOSPHERE)
     .with_cfl(0.25)

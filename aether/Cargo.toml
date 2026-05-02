@@ -15,3 +15,4 @@ syzygy = { path = "../syzygy" }
 [dev-dependencies]
 aer = { path = "../aer" }
 terra = { path = "../terra" }
+lumen = { path = "../lumen" }

@@ -21,6 +21,7 @@ version = "0.1.0"
 dependencies = [
  "aer",
  "cosmo",
+ "lumen",
  "nexus",
  "pleroma",
  "syzygy",
@@ -158,6 +159,7 @@ name = "terra"
 version = "0.1.0"
 dependencies = [
  "nexus",
+ "pleroma",
  "tessera",
  "utility",
 ]
