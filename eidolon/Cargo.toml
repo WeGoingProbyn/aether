@@ -4,8 +4,34 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 
+[features]
+default = []
+bevy = ["dep:bevy", "dep:bevy_panorbit_camera"]
+
 [dependencies]
 utility = { path = "../utility" }
 tessera = { path = "../tessera" }
 pleroma = { path = "../pleroma" }
 crossbeam-channel = "0.5"
+
+# Optional bevy backend. Pinned to bevy 0.18.x +
+# bevy_panorbit_camera 0.34.x — these advance on independent release
+# cadences, so the matrix is locked here. Default feature set is
+# trimmed to what the live demo actually needs (PBR + winit + the X11
+# loader on Linux).
+bevy = { version = "0.18.1", optional = true, default-features = false, features = [
+  "std",
+  "bevy_mesh",
+  "bevy_render",
+  "bevy_pbr",
+  "bevy_winit",
+  "bevy_core_pipeline",
+  "bevy_window",
+  "bevy_log",
+  "bevy_color",
+  "tonemapping_luts",
+  "ktx2",
+  "zstd_rust",
+  "x11",
+] }
+bevy_panorbit_camera = { version = "0.34.0", optional = true }

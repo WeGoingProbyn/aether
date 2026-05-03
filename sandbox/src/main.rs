@@ -1,294 +1,175 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashMap;
+//! Bevy demo for the eidolon Update protocol. Runs the full
+//! Earth+Sun+atmosphere stack on a background thread, streams
+//! batches into a bounded SPSC channel, and renders the result with
+//! a pan-orbit camera. Press `1`/`2`/`3` to swap which scalar
+//! colours the surface mesh.
 
-use aer::{AtmosphereModel, AtmosphereShellLayout};
-use aether::{
-  core::{Aether, System},
-  factory::WorldFactory,
-};
-use cosmo::factory as cosmo_factory;
+use std::time::{Duration, Instant};
+
+use bevy::prelude::*;
+use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
+
 use eidolon::{
-  export::write_render_frame_via_registry,
-  extract::{scalar_component_layer, tessera_debug_frame},
-  ir::{LayerId, MeshRepresentation, Palette, RenderLayer, RenderMeshId},
+  bevy::{AetherBevyPlugin, RenderRegistry},
+  extract::FrameProducer,
+  ir::{LayerHandle, LayerId, MeshRepresentation, RenderMeshId},
+  runtime::{render_channel, spawn_runner},
 };
-use lumen::{RadiationCoefficients, RadiationModel};
-use nexus::{MeshKey, SoaField, WorldId};
-use terra::SurfaceThermalModel;
-use utility::info;
-use utility::logger::{Level, LogWriter, Logger, StdSink};
+use sandbox::{SANDBOX_WORLD_ID, build_demo_aether, demo_extract_config};
+use utility::error::AetherResult;
+use utility::logger::{Level, Logger, StdSink};
 use utility::profiler::Profiler;
-use utility::thread::pool::Pool;
-use utility::{domain::SystemId, error::AetherResult};
+use utility::{domain::MeshKey, info};
+
+/// Simulation timestep, in simulation seconds.
+const TICK_DT: f64 = 0.05;
+
+/// Wall-clock pacing for the runner thread. 60 Hz matches typical
+/// monitor refresh and means the producer extracts at the same rate
+/// the renderer consumes — no point producing faster than the bevy
+/// main thread can drain.
+const TICK_PERIOD: Duration = Duration::from_micros(16_667);
 
 fn main() -> AetherResult<()> {
   Logger::init(
     vec![Box::new(StdSink::new(std::io::stdout()).capacity(1))],
     Level::Trace,
   );
-
   Profiler::init();
 
-  let angular_dims = [4, 4];
-  let surface_radial_layers = 2;
-  let atmosphere_radial_layers = 10;
-  let atmosphere_height = 20_000.0;
-  let surface_depth = 10_000.0;
-  let world_id = WorldId(0);
-  let seed = cosmo_factory::earth();
-  let primary = cosmo_factory::sun();
-  let mut world_factory =
-    WorldFactory::new(world_id, seed).with_primary(primary);
-  let world_constants = world_factory.constants();
-  let shell_layout = AtmosphereShellLayout::new(
-    &world_constants,
-    atmosphere_height,
-    surface_depth,
-  )?;
+  let (mut aether, _layout) = build_demo_aether()?;
+  let mut producer = FrameProducer::new(demo_extract_config());
 
-  world_factory = world_factory.cube_sphere_surface(
-    shell_layout.surface_shell_spec(angular_dims, surface_radial_layers),
-  );
-  world_factory = world_factory.cube_sphere_atmosphere(
-    shell_layout.atmosphere_shell_spec(angular_dims, atmosphere_radial_layers),
-  );
-  let radial_coupler_index = world_factory
-    .add_radial_stack_coupler(MeshKey::SURFACE, MeshKey::ATMOSPHERE)?;
-  let radial_pair_count = world_factory
-    .tessera()
-    .coupler_view(radial_coupler_index)
-    .map(|view| view.pair_count())
-    .unwrap_or(0);
-  info!(
-    "registered surface-atmosphere radial coupler with {} face pairs",
-    radial_pair_count
-  );
+  let (tx, rx) = render_channel(64);
 
-  let surface_mesh = world_factory
-    .tessera()
-    .mesh(MeshKey::SURFACE)
-    .expect("surface mesh was just registered")
-    .clone();
-  let atmosphere_mesh = world_factory
-    .tessera()
-    .mesh(MeshKey::ATMOSPHERE)
-    .expect("atmosphere mesh was just registered")
-    .clone();
-  let surface_model = SurfaceThermalModel::new(MeshKey::SURFACE)
-    .with_initial_temperature(
-      world_constants
-        .atmosphere
-        .map_or(288.0, |atmosphere| atmosphere.reference_temperature),
-    )
-    .with_heat_capacity_per_area(1.0e7);
-  let surface_fields = surface_model.fields();
-  let atmosphere_model = AtmosphereModel::new(MeshKey::ATMOSPHERE)
-    .with_cfl(0.25)
-    .with_current_state_background_correction()
-    .with_radiative_heating();
-  let atmosphere_fields = atmosphere_model.fields();
-  let radiation_model = RadiationModel::from_world_constants(
-    MeshKey::ATMOSPHERE,
-    MeshKey::SURFACE,
-    &world_constants,
-    RadiationCoefficients::default(),
-  )?;
-  let radiation_fields = radiation_model.fields();
-
-  surface_model
-    .register_fields(world_factory.pleroma_mut(), surface_mesh.as_ref())?;
-  atmosphere_model.register_fields(
-    world_factory.pleroma_mut(),
-    atmosphere_mesh.as_ref(),
-    &world_constants,
-    shell_layout.reference_radius(),
-  )?;
-  radiation_model.register_fields(
-    world_factory.pleroma_mut(),
-    atmosphere_mesh.as_ref(),
-    surface_mesh.as_ref(),
-  )?;
-  radiation_model.register_default_sun_position(
-    world_factory.pleroma_mut(),
-    [1.0, 0.0, 0.0],
-  );
-
-  surface_model.add_stages(world_factory.nexus_mut())?;
-  world_factory.add_scalar_interface_flux(
-    radial_coupler_index,
-    surface_fields.temperature,
-    atmosphere_fields.temperature,
-    atmosphere_fields.temperature_tendency,
-    1.0e-15,
-  )?;
-  radiation_model.add_stages(world_factory.nexus_mut())?;
-  atmosphere_model.add_stages(world_factory.nexus_mut())?;
-  let world = world_factory.build()?;
-
-  let system_id = SystemId(0);
-  let mut systems = HashMap::new();
-  systems.insert(system_id, System::single(system_id, world));
-
-  let mut aether = Aether::new(systems, Pool::default());
-  aether.step(0.05)?;
-  aether.step(0.05)?;
-
-  let world = aether
-    .world(world_id)
-    .expect("sandbox world should still be registered");
-  let mut frame = tessera_debug_frame(0, 0.1, world.id(), world.tessera());
-  if let Some(surface_temperature) = world
-    .pleroma()
-    .read::<SoaField<1>>(surface_fields.temperature)
-  {
-    let target = RenderMeshId {
-      world: world.id(),
-      mesh: MeshKey::SURFACE,
-      representation: MeshRepresentation::BoundaryFaces,
-    };
-    let mut layer = scalar_component_layer(
-      LayerId::from_static("surface_temperature"),
-      "surface_temperature",
-      target,
-      surface_fields.temperature,
-      surface_temperature,
-      0,
+  // Worker thread: tick the simulation, extract a batch, send it.
+  // Wall-clock paced to TICK_PERIOD; without this the loop spins at
+  // hundreds of kHz and starves the bevy main thread of CPU.
+  let mut sim_time: f64 = 0.0;
+  let mut frame: u64 = 0;
+  let mut next_tick = Instant::now();
+  let runner = spawn_runner(tx, move |_shutdown| {
+    aether.step(TICK_DT)?;
+    sim_time += TICK_DT;
+    frame = frame.wrapping_add(1);
+    let world = aether
+      .world(SANDBOX_WORLD_ID)
+      .expect("sandbox world should be registered");
+    let batch = producer.extract(
+      SANDBOX_WORLD_ID,
+      world.tessera(),
+      world.pleroma(),
+      None,
+      sim_time,
+      frame,
     );
-    layer.palette = Palette::thermal();
-    frame.worlds[0].layers.push(RenderLayer::Scalar(layer));
-  }
-  if let Some(atmosphere_temperature) = world
-    .pleroma()
-    .read::<SoaField<1>>(atmosphere_fields.temperature)
-  {
-    let target = RenderMeshId {
-      world: world.id(),
-      mesh: MeshKey::ATMOSPHERE,
-      representation: MeshRepresentation::BoundaryFaces,
-    };
-    let mut layer = scalar_component_layer(
-      LayerId::from_static("atmosphere_temperature"),
-      "atmosphere_temperature",
-      target,
-      atmosphere_fields.temperature,
-      atmosphere_temperature,
-      0,
-    );
-    layer.palette = Palette::thermal();
-    frame.worlds[0].layers.push(RenderLayer::Scalar(layer));
-  }
-  if let Some(atmosphere_temperature_tendency) = world
-    .pleroma()
-    .read::<SoaField<1>>(atmosphere_fields.temperature_tendency)
-  {
-    let target = RenderMeshId {
-      world: world.id(),
-      mesh: MeshKey::ATMOSPHERE,
-      representation: MeshRepresentation::BoundaryFaces,
-    };
-    let mut layer = scalar_component_layer(
-      LayerId::from_static("atmosphere_temperature_tendency"),
-      "atmosphere_temperature_tendency",
-      target,
-      atmosphere_fields.temperature_tendency,
-      atmosphere_temperature_tendency,
-      0,
-    );
-    layer.palette = Palette::thermal();
-    frame.worlds[0].layers.push(RenderLayer::Scalar(layer));
-  }
-  if let Some(atmosphere_pressure) = world
-    .pleroma()
-    .read::<SoaField<1>>(atmosphere_fields.pressure)
-  {
-    let target = RenderMeshId {
-      world: world.id(),
-      mesh: MeshKey::ATMOSPHERE,
-      representation: MeshRepresentation::BoundaryFaces,
-    };
-    let mut layer = scalar_component_layer(
-      LayerId::from_static("atmosphere_pressure"),
-      "atmosphere_pressure",
-      target,
-      atmosphere_fields.pressure,
-      atmosphere_pressure,
-      0,
-    );
-    layer.palette = Palette::thermal();
-    frame.worlds[0].layers.push(RenderLayer::Scalar(layer));
-  }
-  if let Some(radiative_heating) = world
-    .pleroma()
-    .read::<SoaField<1>>(radiation_fields.heating_tendency)
-  {
-    let target = RenderMeshId {
-      world: world.id(),
-      mesh: MeshKey::ATMOSPHERE,
-      representation: MeshRepresentation::BoundaryFaces,
-    };
-    let mut layer = scalar_component_layer(
-      LayerId::from_static("radiative_heating"),
-      "radiative_heating",
-      target,
-      radiation_fields.heating_tendency,
-      radiative_heating,
-      0,
-    );
-    layer.palette = Palette::thermal();
-    frame.worlds[0].layers.push(RenderLayer::Scalar(layer));
-  }
-  if let Some(net_surface_flux) = world
-    .pleroma()
-    .read::<SoaField<1>>(radiation_fields.net_surface_flux)
-  {
-    let target = RenderMeshId {
-      world: world.id(),
-      mesh: MeshKey::SURFACE,
-      representation: MeshRepresentation::BoundaryFaces,
-    };
-    let mut layer = scalar_component_layer(
-      LayerId::from_static("net_surface_flux"),
-      "net_surface_flux",
-      target,
-      radiation_fields.net_surface_flux,
-      net_surface_flux,
-      0,
-    );
-    layer.palette = Palette::thermal();
-    frame.worlds[0].layers.push(RenderLayer::Scalar(layer));
-  }
-  if let Some(atmosphere_euler_state) = world
-    .pleroma()
-    .read::<SoaField<5>>(atmosphere_fields.euler_state)
-  {
-    let target = RenderMeshId {
-      world: world.id(),
-      mesh: MeshKey::ATMOSPHERE,
-      representation: MeshRepresentation::BoundaryFaces,
-    };
-    let mut layer = scalar_component_layer(
-      LayerId::from_static("atmosphere_density"),
-      "atmosphere_density",
-      target,
-      atmosphere_fields.euler_state,
-      atmosphere_euler_state,
-      0,
-    );
-    layer.palette = Palette::thermal();
-    frame.worlds[0].layers.push(RenderLayer::Scalar(layer));
-  }
 
-  let written = write_render_frame_via_registry(&frame, "output/eidolon")?;
-  info!(
-    "eidolon wrote {} debug VTK files to output/eidolon",
-    written.len()
-  );
-  for path in written {
-    info!("eidolon debug VTK: {}", path.display());
-  }
+    next_tick += TICK_PERIOD;
+    let now = Instant::now();
+    if let Some(remaining) = next_tick.checked_duration_since(now) {
+      std::thread::sleep(remaining);
+    } else {
+      // We fell behind (heavy tick or paused thread). Resync the
+      // schedule to "now" so we don't burn CPU trying to catch up.
+      next_tick = now;
+    }
 
-  Profiler::print(&mut LogWriter::new(Level::Info));
+    Profiler::flush_local();
+    Ok(Some(batch))
+  });
+
+  info!("sandbox: starting bevy app — keys 1/2/3 swap surface scalar");
+  App::new()
+    .add_plugins(DefaultPlugins)
+    .add_plugins(PanOrbitCameraPlugin)
+    .add_plugins(AetherBevyPlugin::new(rx))
+    .add_systems(Startup, spawn_camera_and_light)
+    .add_systems(Update, layer_toggle_input)
+    .run();
+
+  // Bevy returns when the window is closed.
+  runner.shutdown_and_join()?;
+
+  Profiler::print(&mut std::io::stdout());
   Ok(())
+}
+
+fn spawn_camera_and_light(mut commands: Commands) {
+  // Earth radius is ~6.371e6 m; the world transform stays at the
+  // origin since the producer is configured with `world_scale = 1.0`.
+  // We frame the camera ~3 radii out so the planet fits comfortably.
+  let distance = 2.5e7_f32;
+  commands.spawn((
+    Camera3d::default(),
+    Transform::from_xyz(distance, distance * 0.4, distance)
+      .looking_at(Vec3::ZERO, Vec3::Y),
+    PanOrbitCamera {
+      focus: Vec3::ZERO,
+      radius: Some(distance * 1.7),
+      ..default()
+    },
+  ));
+
+  commands.spawn((
+    DirectionalLight {
+      illuminance: 12_000.0,
+      shadows_enabled: false,
+      ..default()
+    },
+    Transform::from_xyz(1.0, 0.4, 0.0).looking_at(Vec3::ZERO, Vec3::Y),
+  ));
+}
+
+/// On `1`/`2`/`3`, rebind the surface mesh to the temperature /
+/// atmosphere-temperature / pressure scalar. Quick UX for the demo.
+fn layer_toggle_input(
+  keys: Res<ButtonInput<KeyCode>>,
+  mut registry: ResMut<RenderRegistry>,
+) {
+  let surface_mesh = RenderMeshId {
+    world: SANDBOX_WORLD_ID,
+    mesh: MeshKey::SURFACE,
+    representation: MeshRepresentation::BoundaryFaces,
+  }
+  .handle();
+  let atmosphere_mesh = RenderMeshId {
+    world: SANDBOX_WORLD_ID,
+    mesh: MeshKey::ATMOSPHERE,
+    representation: MeshRepresentation::BoundaryFaces,
+  }
+  .handle();
+
+  let surface_temp = LayerHandle::for_target(
+    LayerId::from_static("surface_temperature"),
+    surface_mesh,
+  );
+  let atmosphere_temp = LayerHandle::for_target(
+    LayerId::from_static("atmosphere_temperature"),
+    atmosphere_mesh,
+  );
+  let atmosphere_pressure = LayerHandle::for_target(
+    LayerId::from_static("atmosphere_pressure"),
+    atmosphere_mesh,
+  );
+
+  if keys.just_pressed(KeyCode::Digit1) {
+    registry.bindings.insert(surface_mesh, surface_temp);
+    registry.dirty_meshes.insert(surface_mesh);
+    info!("surface ← surface_temperature");
+  }
+  if keys.just_pressed(KeyCode::Digit2) {
+    registry.bindings.insert(atmosphere_mesh, atmosphere_temp);
+    registry.dirty_meshes.insert(atmosphere_mesh);
+    info!("atmosphere ← atmosphere_temperature");
+  }
+  if keys.just_pressed(KeyCode::Digit3) {
+    registry
+      .bindings
+      .insert(atmosphere_mesh, atmosphere_pressure);
+    registry.dirty_meshes.insert(atmosphere_mesh);
+    info!("atmosphere ← atmosphere_pressure");
+  }
 }

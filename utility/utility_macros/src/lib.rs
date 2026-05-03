@@ -5,7 +5,7 @@ mod diagnostics;
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::parse_quote;
+use syn::{LitStr, parse_quote};
 
 #[proc_macro_derive(StateDiagnostics, attributes(diagnostics))]
 pub fn state_diagnostics(input: TokenStream) -> TokenStream {
@@ -13,28 +13,43 @@ pub fn state_diagnostics(input: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
-pub fn profile(_: TokenStream, item: TokenStream) -> TokenStream {
+pub fn profile(attr: TokenStream, item: TokenStream) -> TokenStream {
+  let explicit_name = match profile_attr_name(attr) {
+    Ok(name) => name,
+    Err(err) => return err,
+  };
+
   // Try parsing as a free function first
   if let Ok(mut func) = syn::parse::<syn::ItemFn>(item.clone()) {
-    let name = func.sig.ident.to_string();
-    let guard: syn::Stmt = parse_quote! {
-      let _guard = ::utility::profiler::SpanGuard::new(#name, module_path!());
-    };
-    func.block.stmts.insert(0, guard);
+    let name = explicit_name.unwrap_or_else(|| func.sig.ident.to_string());
+    func.block.stmts.insert(0, profile_guard(name));
     return quote!(#func).into();
   }
 
   // Try parsing as an impl method
   if let Ok(mut method) = syn::parse::<syn::ImplItemFn>(item.clone()) {
-    let name = method.sig.ident.to_string();
-    let guard: syn::Stmt = parse_quote! {
-      let _guard = ::utility::profiler::SpanGuard::new(#name, module_path!());
-    };
-    method.block.stmts.insert(0, guard);
+    let name = explicit_name.unwrap_or_else(|| method.sig.ident.to_string());
+    method.block.stmts.insert(0, profile_guard(name));
     return quote!(#method).into();
   }
 
   item
+}
+
+fn profile_attr_name(attr: TokenStream) -> Result<Option<String>, TokenStream> {
+  if attr.is_empty() {
+    return Ok(None);
+  }
+
+  syn::parse::<LitStr>(attr)
+    .map(|lit| Some(lit.value()))
+    .map_err(|err| err.to_compile_error().into())
+}
+
+fn profile_guard(name: String) -> syn::Stmt {
+  parse_quote! {
+    let _guard = ::utility::profiler::SpanGuard::new(#name, module_path!());
+  }
 }
 
 #[proc_macro_derive(Serialize)]

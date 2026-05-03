@@ -27,8 +27,10 @@ use tessera::world_mesh::Tessera;
 use utility::collections::graph::Graph;
 use utility::domain::WorldId;
 use utility::error::{AetherError, AetherResult, ErrorDomain};
+use utility::{end_profile, inline_profile, profile, profile_block};
 use utility::thread::pool::Pool;
 
+use crate::stage;
 use crate::{
   constants::WorldConstants,
   stage::{Stage, StageContext, WorldView},
@@ -205,6 +207,7 @@ impl CompiledNexus {
     &self.topo_order
   }
 
+  #[profile("nexus.schedule.tick")]
   pub fn tick(
     &mut self,
     world_id: WorldId,
@@ -214,64 +217,69 @@ impl CompiledNexus {
     pool: &Pool,
     dt: f64,
   ) -> AetherResult<()> {
-    for layer in &self.layers {
-      let access = pleroma.schedule_access();
-      let error_slot: Arc<Mutex<Option<AetherError>>> =
-        Arc::new(Mutex::new(None));
+    profile_block!("nexus.tick.layer_build_tasks", {
+      for layer in &self.layers {
+        let access = pleroma.schedule_access();
+        let error_slot: Arc<Mutex<Option<AetherError>>> =
+          Arc::new(Mutex::new(None));
 
-      let mut tasks: Vec<Box<dyn FnOnce() + Send + '_>> =
-        Vec::with_capacity(layer.len());
+        let mut tasks: Vec<Box<dyn FnOnce() + Send + '_>> =
+          Vec::with_capacity(layer.len());
 
-      for (idx, stage) in self.stages.iter_mut().enumerate() {
-        if !layer.iter().any(|stage_id| stage_id.0 == idx) {
-          continue;
-        }
-
-        let reads = stage.reads().to_vec();
-        let writes = stage.writes().to_vec();
-        let resource_reads = stage.resource_reads().to_vec();
-        let resource_writes = stage.resource_writes().to_vec();
-
-        // SAFETY: `build` placed these stages in the same layer only when
-        // none of them have any RAW/WAR/WAW conflict with each other (in
-        // either fields or resources). The declared sets are therefore
-        // pairwise disjoint across the views we hand out here, which is
-        // exactly the precondition `ScheduleAccess::view_for` requires.
-        let view = unsafe {
-          access.view_for(&reads, &writes, &resource_reads, &resource_writes)
-        };
-
-        let ctx = StageContext {
-          world: WorldView {
-            world_id,
-            tessera,
-            constants,
-            fields: view,
-            pool,
-            dt,
-          },
-        };
-        let err_slot = Arc::clone(&error_slot);
-
-        tasks.push(Box::new(move || {
-          if let Err(e) = stage.run(ctx) {
-            let mut guard = err_slot.lock().unwrap();
-            if guard.is_none() {
-              *guard = Some(e);
-            }
+        for (idx, stage) in self.stages.iter_mut().enumerate() {
+          if !layer.iter().any(|stage_id| stage_id.0 == idx) {
+            continue;
           }
-        }));
+
+          let reads = stage.reads().to_vec();
+          let writes = stage.writes().to_vec();
+          let resource_reads = stage.resource_reads().to_vec();
+          let resource_writes = stage.resource_writes().to_vec();
+
+          // SAFETY: `build` placed these stages in the same layer only when
+          // none of them have any RAW/WAR/WAW conflict with each other (in
+          // either fields or resources). The declared sets are therefore
+          // pairwise disjoint across the views we hand out here, which is
+          // exactly the precondition `ScheduleAccess::view_for` requires.
+          let view = unsafe {
+            access.view_for(&reads, &writes, &resource_reads, &resource_writes)
+          };
+
+          let ctx = StageContext {
+            world: WorldView {
+              world_id,
+              tessera,
+              constants,
+              fields: view,
+              pool,
+              dt,
+            },
+          };
+          let err_slot = Arc::clone(&error_slot);
+
+          tasks.push(Box::new(move || {
+            inline_profile!(stage.name());
+            if let Err(e) = stage.run(ctx) {
+              let mut guard = err_slot.lock().unwrap();
+              if guard.is_none() {
+                *guard = Some(e);
+              }
+            }
+            end_profile!(stage.name());
+          }));
+        }
+        profile_block!("nexus.tick.layer_dispatch", {
+          pool.dispatch(tasks);
+        });
+
+        //drop(access);
+
+        let err = error_slot.lock().unwrap().take();
+        if let Some(e) = err {
+          return Err(e);
+        }
       }
-
-      pool.dispatch(tasks);
-
-      //drop(access);
-
-      let err = error_slot.lock().unwrap().take();
-      if let Some(e) = err {
-        return Err(e);
-      }
-    }
+    });
     Ok(())
   }
 }

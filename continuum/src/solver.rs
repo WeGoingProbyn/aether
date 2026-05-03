@@ -1,7 +1,7 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use utility::{domain::CellId, profile};
+use utility::{debug, domain::CellId, profile};
 
 use pleroma::core::storage::FieldStorage;
 
@@ -169,6 +169,8 @@ where
         let dx = characteristic_length(mesh, cell);
         let dt_local = config.cfl * dx / speed;
         dt_min = dt_min.min(dt_local);
+
+        debug!("{dt_local}, {dx}, {speed}, {cell:?}");
       }
     }
 

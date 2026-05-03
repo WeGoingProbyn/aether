@@ -9,7 +9,7 @@ use std::{
 
 use crate::{
   error::Unpoison,
-  profiler::{Profiler, SpanGuard},
+  profiler::Profiler,
   thread::{pool::Context, task::Job},
 };
 
@@ -51,7 +51,7 @@ impl Queue {
 
       // Drain our own queue first: FILO
       if let Some(job) = self.pop_back() {
-        let _span = SpanGuard::new("worker::execute", "thread");
+        //let _span = SpanGuard::new("worker::execute", "thread");
         job();
         continue;
       }
@@ -64,7 +64,7 @@ impl Queue {
         }
 
         if let Some(job) = worker.pop_front() {
-          let _span = SpanGuard::new("worker::steal", "thread");
+          //let _span = SpanGuard::new("worker::steal", "thread");
           job();
           stolen = true;
           break;

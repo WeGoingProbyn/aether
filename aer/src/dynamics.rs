@@ -11,8 +11,7 @@ use continuum::{
 use nexus::{FieldKey, FieldStorage, MeshKey, SoaField, Stage, StageContext};
 use tessera::mesh::Mesh;
 use utility::{
-  domain::{BoundaryTag, CellId},
-  error::{AetherError, AetherResult},
+  debug, domain::{BoundaryTag, CellId}, end_profile, error::{AetherError, AetherResult}, inline_profile, profile
 };
 
 use crate::{
@@ -204,6 +203,7 @@ impl Stage for EulerAtmosphereStep {
     &self.writes
   }
 
+  #[profile("aer.EulerAtmosphereStep.run")]
   fn run(&mut self, mut ctx: StageContext<'_>) -> AetherResult<()> {
     let tessera = ctx.world.tessera;
     let constants = ctx.world.constants;
@@ -261,6 +261,7 @@ impl Stage for EulerAtmosphereStep {
     let mut substeps = 0usize;
     let tolerance = (dt.abs() * 1.0e-12).max(1.0e-15);
 
+    inline_profile!("aer.EulerAtmosphereStep.inner_loop");
     while remaining > tolerance {
       if substeps >= self.max_substeps {
         return Err(AetherError::new(AerError::InvalidTimeStep).context(
@@ -294,6 +295,9 @@ impl Stage for EulerAtmosphereStep {
       total_advanced += advanced;
       substeps += 1;
     }
+    end_profile!("aer.EulerAtmosphereStep.inner_loop");
+    debug!("atmosphere substeps: {}", substeps);
+
     self.last_dt = Some(total_advanced);
     self.last_substeps = substeps;
 

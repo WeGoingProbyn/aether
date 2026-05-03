@@ -43,41 +43,20 @@ pub struct Profiler {
   stats: Mutex<HashMap<&'static str, SpanStats>>,
 }
 
-pub struct SpanGuard;
+pub struct SpanGuard {
+  name: &'static str,
+}
 
 impl SpanGuard {
   pub fn new(name: &'static str, _category: &'static str) -> SpanGuard {
-    if Profiler::enabled() {
-      STATE.with(|s| {
-        let mut borrow = s.borrow_mut();
-        borrow.stack.push(OpenSpan {
-          name,
-          start: Instant::now(),
-        });
-      })
-    }
-
-    SpanGuard
+    Profiler::start_span(name);
+    SpanGuard { name }
   }
 }
 
 impl Drop for SpanGuard {
   fn drop(&mut self) {
-    if Profiler::enabled() {
-      let end = Instant::now();
-      STATE.with(|s| {
-        let mut borrow = s.borrow_mut();
-        if let Some(span) = borrow.stack.pop() {
-          let duration = end.duration_since(span.start).as_micros() as u64;
-          let entry = borrow.stats.entry(span.name).or_insert(SpanStats {
-            total_us: 0,
-            count: 0,
-          });
-          entry.total_us += duration;
-          entry.count += 1;
-        }
-      })
-    }
+    Profiler::end_span(self.name);
   }
 }
 
@@ -90,6 +69,46 @@ impl Profiler {
 
   pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
+  }
+
+  pub fn start_span(name: &'static str) {
+    if Profiler::enabled() {
+      STATE.with(|s| {
+        let mut borrow = s.borrow_mut();
+        borrow.stack.push(OpenSpan {
+          name,
+          start: Instant::now(),
+        });
+      })
+    }
+  }
+
+  pub fn end_span(name: &'static str) {
+    if Profiler::enabled() {
+      let end = Instant::now();
+      let mismatch = STATE.with(|s| {
+        let mut borrow = s.borrow_mut();
+        let Some(span) = borrow.stack.pop() else {
+          return Some((name, "<empty>"));
+        };
+        let mismatch = (span.name != name).then_some((name, span.name));
+        let duration = end.duration_since(span.start).as_micros() as u64;
+        let entry = borrow.stats.entry(span.name).or_insert(SpanStats {
+          total_us: 0,
+          count: 0,
+        });
+        entry.total_us += duration;
+        entry.count += 1;
+        mismatch
+      });
+
+      if let Some((expected, actual)) = mismatch {
+        debug!(
+          "profiler span mismatch: ended {}, but top span was {}",
+          expected, actual
+        );
+      }
+    }
   }
 
   pub fn print(writer: &mut impl std::io::Write) {

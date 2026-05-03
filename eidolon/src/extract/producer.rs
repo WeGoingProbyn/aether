@@ -19,6 +19,7 @@ use std::collections::{HashMap, HashSet};
 use pleroma::{Pleroma, core::storage::FieldStorage};
 use tessera::world_mesh::Tessera;
 use utility::domain::{FieldKey, MeshKey, ResourceKey, WorldId};
+use utility::profile;
 
 use crate::{
   extract::mesh::{boundary_surface_triangles, cell_centroid_points},
@@ -68,11 +69,16 @@ struct ProducerCache {
   registered_world: bool,
   world_transform_hash: Option<u64>,
   world_transform_epoch: u64,
-  registered_meshes: HashSet<MeshHandle>,
+  /// Meshes we've already emitted a `RegisterMesh` for. The tessera
+  /// mesh is immutable for the lifetime of the producer, so once a
+  /// mesh is here we never touch it again — no rebuild, no hash, no
+  /// `UpdateMeshGeometry`. Mesh transform is also identity by
+  /// construction; tracking it would just be wasted work.
   mesh_geometry_hashes: HashMap<MeshHandle, u64>,
   mesh_geometry_epochs: HashMap<MeshHandle, u64>,
   mesh_transform_hashes: HashMap<MeshHandle, u64>,
   mesh_transform_epochs: HashMap<MeshHandle, u64>,
+  registered_meshes: HashSet<MeshHandle>,
   registered_layers: HashSet<LayerHandle>,
   layer_sample_hashes: HashMap<LayerHandle, u64>,
   layer_sample_epochs: HashMap<LayerHandle, u64>,
@@ -103,6 +109,7 @@ impl FrameProducer {
   /// coordinates — typically read by the runner from
   /// `BodyState<3>::positions[body_index]`. Pass `None` if the world
   /// has no orbital body (the world stays at the origin).
+  #[profile]
   pub fn extract(
     &mut self,
     world_id: WorldId,

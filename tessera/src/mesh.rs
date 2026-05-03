@@ -4,6 +4,7 @@
 use utility::{
   domain::{BoundaryTag, CellId, FaceId, Point},
   maths::vector::Vector,
+  profile,
 };
 
 use crate::{
@@ -119,6 +120,7 @@ impl<const D: usize> StructuredBlock<D> {
   }
 
   // ---- Builders ----
+  #[profile]
   fn build_cell_geometry(
     axis_edges: &[Vec<f64>; D],
     dims: &[usize; D],
@@ -146,6 +148,7 @@ impl<const D: usize> StructuredBlock<D> {
     (centroids, volumes)
   }
 
+  #[profile]
   fn build_face_geometry(
     axis_edges: &[Vec<f64>; D],
     dims: &[usize; D],
@@ -190,6 +193,7 @@ impl<const D: usize> StructuredBlock<D> {
     (centroids, area_vectors, areas)
   }
 
+  #[profile]
   fn build_topology(dims: &[usize; D]) -> Topo {
     let total_faces = Self::total_faces(dims);
     let total_cells = Self::total_cells(dims);
@@ -256,6 +260,7 @@ impl<const D: usize> StructuredBlock<D> {
     (connections, interior, boundary_map, cell_faces)
   }
 
+  #[profile]
   fn compute_metrics<const P: usize>(
     cell_centroids: &[Point<D>],
     cell_volumes: &[f64],
@@ -302,6 +307,7 @@ impl<const D: usize> StructuredBlock<D> {
   /// `dims[d] + 1` cell-edge positions along axis `d`, in strictly increasing
   /// order. Allows non-uniform cell widths along any axis (e.g. atmospheric
   /// stretching toward the surface).
+  #[profile]
   pub fn from_axis_edges<const P: usize>(
     axis_edges: [Vec<f64>; D],
     coord_map: Box<dyn GeometryMap<D, P>>,

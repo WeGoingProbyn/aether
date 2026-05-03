@@ -8,7 +8,7 @@ use nexus::{
 use pleroma::Pleroma;
 use tessera::world_mesh::Tessera;
 use utility::{
-  constants::solar_flux, domain::SystemId, error::AetherResult,
+  constants::solar_flux, domain::SystemId, error::AetherResult, profile,
   thread::pool::Pool,
 };
 
@@ -29,6 +29,12 @@ pub struct World {
   tessera: Tessera,
   pleroma: Pleroma,
   nexus: CompiledNexus,
+  /// Index into `BodyState<3>::positions` (a `ResourceKey::Bodies`
+  /// resource on the system-level pleroma) identifying which orbital
+  /// body this world tracks. `None` means the world is fixed at the
+  /// origin. The eidolon producer uses this hint to read the world's
+  /// centre per-tick.
+  body_index: Option<usize>,
 }
 
 impl World {
@@ -40,6 +46,18 @@ impl World {
     pleroma: Pleroma,
     nexus: CompiledNexus,
   ) -> Self {
+    Self::with_body_index(id, seed, primary, tessera, pleroma, nexus, None)
+  }
+
+  pub fn with_body_index(
+    id: WorldId,
+    seed: CelestialBody,
+    primary: Option<CelestialBody>,
+    tessera: Tessera,
+    pleroma: Pleroma,
+    nexus: CompiledNexus,
+    body_index: Option<usize>,
+  ) -> Self {
     let constants = world_constants_from_seed(&seed, primary.as_ref());
     Self {
       id,
@@ -49,7 +67,16 @@ impl World {
       tessera,
       pleroma,
       nexus,
+      body_index,
     }
+  }
+
+  pub fn body_index(&self) -> Option<usize> {
+    self.body_index
+  }
+
+  pub fn set_body_index(&mut self, body_index: Option<usize>) {
+    self.body_index = body_index;
   }
 
   pub fn primary(&self) -> Option<&CelestialBody> {
@@ -88,6 +115,7 @@ impl World {
     (&self.tessera, &mut self.pleroma)
   }
 
+  #[profile("aether.world.tick")]
   pub fn tick(&mut self, pool: &Pool, dt: f64) -> AetherResult<()> {
     self.nexus.tick(
       self.id,
@@ -218,6 +246,7 @@ impl System {
     self.worlds.values_mut()
   }
 
+  //#[profile("aether.system.tick")]
   pub fn tick(&mut self, pool: &Pool, dt: f64) -> AetherResult<()> {
     // Future system-level nexus/resources run here before world-local physics.
     for world in self.worlds.values_mut() {
@@ -243,6 +272,7 @@ impl Aether {
     Self::new(systems, pool)
   }
 
+  //#[profile("aether.step")]
   pub fn step(&mut self, dt: f64) -> AetherResult<()> {
     for system in self.systems.values_mut() {
       system.tick(&self.pool, dt)?;

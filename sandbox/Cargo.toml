@@ -12,6 +12,11 @@ aether = { path = "../aether" }
 aer = { path = "../aer" }
 cosmo = { path = "../cosmo" }
 nexus = { path = "../nexus" }
-eidolon = { path = "../eidolon" }
+eidolon = { path = "../eidolon", features = ["bevy"] }
 terra = { path = "../terra" }
 lumen = { path = "../lumen" }
+bevy = "0.18.1"
+bevy_panorbit_camera = "0.34.0"
+
+[dev-dependencies]
+tempfile = "3"

@@ -34,6 +34,7 @@ pub struct WorldFactory {
   pleroma: Pleroma,
   nexus: Nexus,
   cube_sphere_shells: HashMap<MeshKey, CubeSphereShellSpec>,
+  body_index: Option<usize>,
 }
 
 impl WorldFactory {
@@ -46,7 +47,21 @@ impl WorldFactory {
       pleroma: Pleroma::new(),
       nexus: Nexus::new(),
       cube_sphere_shells: HashMap::new(),
+      body_index: None,
     }
+  }
+
+  /// Hint that this world's centre is tracked by index `index` in the
+  /// system-level `BodyState<3>::positions`. The eidolon producer uses
+  /// this to emit `UpdateWorldTransform` from gravitas-driven body
+  /// motion without eidolon depending on the gravitas crate.
+  pub fn with_body_index(mut self, index: usize) -> Self {
+    self.body_index = Some(index);
+    self
+  }
+
+  pub fn set_body_index(&mut self, index: Option<usize>) {
+    self.body_index = index;
   }
 
   pub fn with_primary(mut self, primary: CelestialBody) -> Self {
@@ -250,13 +265,14 @@ impl WorldFactory {
 
   pub fn build(self) -> AetherResult<World> {
     let compiled_nexus = self.nexus.build(&self.pleroma)?;
-    Ok(World::new(
+    Ok(World::with_body_index(
       self.world_id,
       self.seed,
       self.primary,
       self.tessera,
       self.pleroma,
       compiled_nexus,
+      self.body_index,
     ))
   }
 

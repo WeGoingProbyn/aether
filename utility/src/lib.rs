@@ -19,6 +19,32 @@ pub use utility_macros::profile;
 
 extern crate self as utility;
 
+/// Start an inline profiler span. Must be paired with `end_profile!`
+/// in strict LIFO order.
+#[macro_export]
+macro_rules! inline_profile {
+  ($name:expr) => {
+    $crate::profiler::Profiler::start_span($name);
+  };
+}
+
+/// End an inline profiler span started with `inline_profile!`.
+#[macro_export]
+macro_rules! end_profile {
+  ($name:expr) => {
+    $crate::profiler::Profiler::end_span($name);
+  };
+}
+
+/// Profile a lexical block and return the block's value.
+#[macro_export]
+macro_rules! profile_block {
+  ($name:expr, $body:block) => {{
+    let _guard = $crate::profiler::SpanGuard::new($name, module_path!());
+    $body
+  }};
+}
+
 pub mod consts {
   pub use crate::constants::{
     EARTH_ALBEDO, EARTH_AXIAL_TILT, EARTH_DAY, EARTH_MASS, EARTH_ORBIT,

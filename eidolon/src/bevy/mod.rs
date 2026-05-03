@@ -1,8 +1,21 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-//! Future Bevy adapter for applying Eidolon frames to Bevy ECS/resources.
+//! Bevy backend for the eidolon Update protocol. Gated behind the
+//! `bevy` cargo feature so users that only want the IR (or VTK
+//! export) don't pay for the bevy version matrix.
 
-pub mod convert;
-pub mod resources;
-pub mod system;
+#![cfg(feature = "bevy")]
+
+pub mod apply;
+pub mod camera;
+pub mod paint;
+pub mod palette;
+pub mod plugin;
+pub mod registry;
+pub mod sun;
+pub mod transform;
+
+pub use camera::spawn_orbit_camera;
+pub use plugin::{AetherBevyPlugin, UpdateReceiverResource};
+pub use registry::{LayerEntry, MeshEntry, RenderRegistry, WorldEntry};

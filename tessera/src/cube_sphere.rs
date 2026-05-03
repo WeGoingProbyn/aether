@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use utility::{
   domain::{BoundaryTag, CellId, FaceId, Point},
   maths::{matrix::Matrix, vector::Vector},
+  profile,
+  profiler::SpanGuard,
 };
 
 use crate::{
@@ -114,6 +116,7 @@ pub fn edge_face_centroid_comp(
 /// have the same number of cells along them — gnomonic edges coincide
 /// point-by-point in world space at equal resolution, so the match is exact
 /// up to floating-point noise.
+#[profile]
 pub fn match_edge_cells(
   panel_a: &GnomonicPanel,
   edge_a: Edge,
@@ -191,17 +194,19 @@ pub fn panel_axes(panel: PanelId) -> Matrix<f64, 3, 3> {
 }
 
 impl GeometryMap<2, 3> for GnomonicPanel {
+  #[profile]
   fn to_physical(&self, comp: &Point<2>) -> Point<3> {
     let tan_zeta: f64 = comp[0].tan();
     let tan_eta: f64 = comp[1].tan();
     let g: f64 = 1f64 + tan_zeta.powi(2) + tan_eta.powi(2);
     let numerator: Vector<f64, 3> = [tan_zeta, tan_eta, 1f64].into();
     let v_local: Vector<f64, 3> = numerator / g.sqrt();
-    (&v_local * &self.rotation) * self.radius
+    (v_local * self.rotation) * self.radius
   }
 
+  #[profile]
   fn to_computational(&self, physical: &Point<3>) -> Option<Point<2>> {
-    let local: Vector<f64, 3> = physical * &self.rotation.transpose();
+    let local: Vector<f64, 3> = physical * self.rotation.transpose();
     if local[2] <= 0f64 {
       return None;
     }
@@ -250,6 +255,7 @@ impl GnomonicShellPanel {
 }
 
 impl GeometryMap<3, 3> for GnomonicShellPanel {
+  #[profile]
   fn to_physical(&self, comp: &Point<3>) -> Point<3> {
     let tan_xi = comp[0].tan();
     let tan_eta = comp[1].tan();
@@ -260,6 +266,7 @@ impl GeometryMap<3, 3> for GnomonicShellPanel {
     (&v_unit * &self.rotation) * r
   }
 
+  #[profile]
   fn to_computational(&self, physical: &Point<3>) -> Option<Point<3>> {
     let local: Vector<f64, 3> = physical * &self.rotation.transpose();
     if local[2] <= 0.0 {
@@ -536,6 +543,7 @@ impl CubeSphere {
     Self::shell(CubeSphereShellSpec::new(angular_dims, radial_edges))
   }
 
+  #[profile]
   pub fn shell(spec: CubeSphereShellSpec) -> Self {
     let angular_dims = spec.angular_dims;
     let radial_edges = spec.radial_edges;
@@ -566,14 +574,17 @@ impl CubeSphere {
       .map(|i| -bound + 2.0 * bound * i as f64 / angular_dims[1] as f64)
       .collect();
 
-    let panels: [StructuredBlock<3>; 6] = PANEL_ORDER.map(|p| {
-      let map: Box<dyn GeometryMap<3, 3>> =
-        Box::new(GnomonicShellPanel::new(p));
-      StructuredBlock::from_axis_edges(
-        [xi_edges.clone(), eta_edges.clone(), radial_edges.clone()],
-        map,
-      )
-    });
+    let panels: [StructuredBlock<3>; 6] = {
+      let _g = SpanGuard::new("CubeSphere::shell::panel_blocks", "tessera");
+      PANEL_ORDER.map(|p| {
+        let map: Box<dyn GeometryMap<3, 3>> =
+          Box::new(GnomonicShellPanel::new(p));
+        StructuredBlock::from_axis_edges(
+          [xi_edges.clone(), eta_edges.clone(), radial_edges.clone()],
+          map,
+        )
+      })
+    };
 
     let cells_per_panel: usize = dims.iter().product();
     let total_cells = 6 * cells_per_panel;
@@ -605,6 +616,8 @@ impl CubeSphere {
       world_unit_normal(panel_id, centroid, axis) * comp_area
     };
 
+    let _per_panel_span =
+      SpanGuard::new("CubeSphere::shell::per_panel_faces", "tessera");
     // 1. Per-panel: keep interior faces and radial boundaries; skip angular
     //    boundaries (those become inter-panel faces in step 2).
     for (p, panel) in panels.iter().enumerate() {
@@ -651,6 +664,9 @@ impl CubeSphere {
       }
     }
 
+    drop(_per_panel_span);
+    let _stitch_span =
+      SpanGuard::new("CubeSphere::shell::inter_panel_stitch", "tessera");
     // 2. Stitch inter-panel faces. One face per (cube edge × radial layer ×
     //    angular cell). Geometry comes from panel A; owner/neighbour follow
     //    the direction of panel A's outward normal at that edge.
