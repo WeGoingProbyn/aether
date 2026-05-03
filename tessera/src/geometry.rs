@@ -10,7 +10,7 @@ pub use utility::domain::{CellId, FaceId, Point};
 pub trait CellGeometry<const D: usize>: Send + Sync {
   fn cell_centroid(&self, cell: CellId) -> &Point<D>;
   fn cell_world_centroid(&self, cell: CellId) -> Point<D> {
-    self.cell_centroid(cell).clone()
+    *self.cell_centroid(cell)
   }
   fn cell_volume(&self, cell: CellId) -> f64;
   fn cell_metrics(&self, cell: CellId) -> &CellMetrics<D>;
@@ -20,7 +20,7 @@ pub trait CellGeometry<const D: usize>: Send + Sync {
 pub trait FaceGeometry<const D: usize>: Send + Sync {
   fn face_centroid(&self, face: FaceId) -> &Point<D>;
   fn face_world_centroid(&self, face: FaceId) -> Point<D> {
-    self.face_centroid(face).clone()
+    *self.face_centroid(face)
   }
   fn face_world_vertices(&self, _face: FaceId) -> Option<Vec<Point<D>>> {
     None
@@ -36,6 +36,12 @@ pub trait GeometryMap<const D: usize, const P: usize> {
   fn to_computational(&self, physical: &Point<P>) -> Option<Point<D>>;
   fn jacobian(&self, comp: &Point<D>) -> Matrix<f64, D, P>;
   fn sqrt_det_metric(&self, comp: &Point<D>) -> f64;
+
+  // Default to 1 for face areas, in curvilinear spaces this needs to overriden!
+  fn face_sqrt_det_metric(&self, comp: &Point<D>, axis: usize) -> f64 {
+    let _ = axis;
+    self.sqrt_det_metric(comp)
+  }
 }
 
 pub struct CellMetrics<const D: usize> {

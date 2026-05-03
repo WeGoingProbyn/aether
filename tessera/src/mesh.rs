@@ -14,6 +14,32 @@ use crate::{
   topology::{FaceConnection, Topology},
 };
 
+enum Axis {
+  X = 0,
+  Y = 1,
+  Z = 2,
+}
+
+fn axis_of<const D: usize>(v: &Vector<f64, D>) -> Axis {
+  let eps = 1.0e-12;
+  let ax = v[0].abs();
+  let ay = v[1].abs();
+  let az = v[2].abs();
+
+  let (axis, major, minor_a, minor_b) = if ax >= ay && ax >= az {
+    (Axis::X, ax, ay, az)
+  } else if ay >= az {
+    (Axis::Y, ay, ax, az)
+  } else {
+    (Axis::Z, az, ax, ay)
+  };
+
+  debug_assert!(major > 1.0 - eps, "vector is not unit axis-aligned: {:?}", v);
+  debug_assert!(minor_a < eps && minor_b < eps, "vector is not axis-aligned: {:?}", v);
+
+  axis
+}
+
 pub trait Mesh<const D: usize>:
   CellGeometry<D> + FaceGeometry<D> + Topology
 {
@@ -287,8 +313,8 @@ impl<const D: usize> StructuredBlock<D> {
       .zip(face_area_vectors.iter())
       .zip(face_areas.iter())
       .map(|((centroid, area_vec), &area)| {
-        let sqrt_g = coord_map.sqrt_det_metric(centroid);
-        let normal = area_vec / &area;
+        let sqrt_g = coord_map.face_sqrt_det_metric(centroid, axis_of(area_vec) as usize);
+        let normal = area_vec / area;
         FaceMetrics {
           normal,
           comp_area: area,
@@ -408,7 +434,7 @@ impl<const D: usize> FaceGeometry<D> for StructuredBlock<D> {
   }
 
   fn face_area_vector(&self, face: FaceId) -> Vector<f64, D> {
-    self.face_area_vectors[face.index()].clone()
+    self.face_area_vectors[face.index()]
   }
 
   fn face_area(&self, face: FaceId) -> f64 {

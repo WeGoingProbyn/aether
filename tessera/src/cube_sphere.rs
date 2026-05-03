@@ -4,10 +4,7 @@
 use std::collections::HashMap;
 
 use utility::{
-  domain::{BoundaryTag, CellId, FaceId, Point},
-  maths::{matrix::Matrix, vector::Vector},
-  profile,
-  profiler::SpanGuard,
+  domain::{BoundaryTag, CellId, FaceId, Point}, end_profile, inline_profile, maths::{matrix::Matrix, vector::Vector}, profile, profiler::SpanGuard
 };
 
 use crate::{
@@ -194,7 +191,6 @@ pub fn panel_axes(panel: PanelId) -> Matrix<f64, 3, 3> {
 }
 
 impl GeometryMap<2, 3> for GnomonicPanel {
-  #[profile]
   fn to_physical(&self, comp: &Point<2>) -> Point<3> {
     let tan_zeta: f64 = comp[0].tan();
     let tan_eta: f64 = comp[1].tan();
@@ -204,7 +200,6 @@ impl GeometryMap<2, 3> for GnomonicPanel {
     (v_local * self.rotation) * self.radius
   }
 
-  #[profile]
   fn to_computational(&self, physical: &Point<3>) -> Option<Point<2>> {
     let local: Vector<f64, 3> = physical * self.rotation.transpose();
     if local[2] <= 0f64 {
@@ -255,7 +250,6 @@ impl GnomonicShellPanel {
 }
 
 impl GeometryMap<3, 3> for GnomonicShellPanel {
-  #[profile]
   fn to_physical(&self, comp: &Point<3>) -> Point<3> {
     let tan_xi = comp[0].tan();
     let tan_eta = comp[1].tan();
@@ -263,12 +257,11 @@ impl GeometryMap<3, 3> for GnomonicShellPanel {
     let g = 1.0 + tan_xi.powi(2) + tan_eta.powi(2);
     let v_local: Vector<f64, 3> = [tan_xi, tan_eta, 1.0].into();
     let v_unit = v_local / g.sqrt();
-    (&v_unit * &self.rotation) * r
+    (v_unit * self.rotation) * r
   }
 
-  #[profile]
   fn to_computational(&self, physical: &Point<3>) -> Option<Point<3>> {
-    let local: Vector<f64, 3> = physical * &self.rotation.transpose();
+    let local: Vector<f64, 3> = physical * self.rotation.transpose();
     if local[2] <= 0.0 {
       return None;
     }
@@ -318,9 +311,9 @@ impl GeometryMap<3, 3> for GnomonicShellPanel {
     let v_unit: Vector<f64, 3> =
       [s / g.sqrt(), t / g.sqrt(), 1.0 / g.sqrt()].into();
 
-    let dw_dxi = (&dv_dxi * &self.rotation) * r;
-    let dw_deta = (&dv_deta * &self.rotation) * r;
-    let dw_dr = &v_unit * &self.rotation;
+    let dw_dxi = (dv_dxi * self.rotation) * r;
+    let dw_deta = (dv_deta * self.rotation) * r;
+    let dw_dr = v_unit * self.rotation;
 
     // Pack columns into a Matrix<f64, 3, 3> (row-major: inner[r][c]).
     [
@@ -343,6 +336,27 @@ impl GeometryMap<3, 3> for GnomonicShellPanel {
     let r = comp[2];
     let g = 1.0 + comp[0].tan().powi(2) + comp[1].tan().powi(2);
     (r.powi(2) * sec2_xi * sec2_eta) / (g * g.sqrt())
+  }
+
+  fn face_sqrt_det_metric(&self, comp: &Point<3>, axis: usize) -> f64 {
+    let xi = comp[0];
+    let eta = comp[1];
+    let r = comp[2];
+
+    let tan_xi = xi.tan();
+    let tan_eta = eta.tan();
+    let sec_xi = 1.0 / xi.cos();
+    let sec_eta = 1.0 / eta.cos();
+    let sec2_xi = sec_xi * sec_xi;
+    let sec2_eta = sec_eta * sec_eta;
+    let q = 1.0 + tan_xi * tan_xi + tan_eta * tan_eta;
+
+    match axis {
+      0 => r * sec_xi * sec2_eta / q,
+      1 => r * sec2_xi * sec_eta / q,
+      2 => r * r * sec2_xi * sec2_eta / (q * q.sqrt()),
+      _ => unreachable!(),
+    }
   }
 }
 
@@ -616,8 +630,7 @@ impl CubeSphere {
       world_unit_normal(panel_id, centroid, axis) * comp_area
     };
 
-    let _per_panel_span =
-      SpanGuard::new("CubeSphere::shell::per_panel_faces", "tessera");
+    inline_profile!("CubeSphere::shell::per_panel_faces");
     // 1. Per-panel: keep interior faces and radial boundaries; skip angular
     //    boundaries (those become inter-panel faces in step 2).
     for (p, panel) in panels.iter().enumerate() {
@@ -663,10 +676,8 @@ impl CubeSphere {
         }
       }
     }
+    end_profile!("CubeSphere::shell::per_panel_faces");
 
-    drop(_per_panel_span);
-    let _stitch_span =
-      SpanGuard::new("CubeSphere::shell::inter_panel_stitch", "tessera");
     // 2. Stitch inter-panel faces. One face per (cube edge × radial layer ×
     //    angular cell). Geometry comes from panel A; owner/neighbour follow
     //    the direction of panel A's outward normal at that edge.
@@ -674,6 +685,7 @@ impl CubeSphere {
     let ny = dims[1];
     let nz = dims[2];
 
+    inline_profile!("CubeSphere::shell::inter_panel_stitch");
     for &(panel_a_id, edge_a, panel_b_id, edge_b) in CUBE_EDGES.iter() {
       let pa = panel_index(panel_a_id);
       let pb = panel_index(panel_b_id);
@@ -729,6 +741,7 @@ impl CubeSphere {
         }
       }
     }
+    end_profile!("CubeSphere::shell::inter_panel_stitch");
 
     let boundary_face_lists: Vec<(BoundaryTag, Vec<(FaceId, CellId)>)> =
       boundary_map.into_iter().collect();
@@ -898,7 +911,7 @@ impl FaceGeometry<3> for CubeSphere {
     panel.face_centroid(local)
   }
   fn face_area_vector(&self, face: FaceId) -> Vector<f64, 3> {
-    self.face_area_vectors_world[face.index()].clone()
+    self.face_area_vectors_world[face.index()]
   }
   fn face_area(&self, face: FaceId) -> f64 {
     let (panel, local) = self.face_to_panel(face);
