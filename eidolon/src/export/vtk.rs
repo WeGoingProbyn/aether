@@ -17,14 +17,33 @@ use utility::{
   },
 };
 
-use crate::ir::{
-  LineMesh, PointCloud, RenderFrame, RenderGeometry, RenderLayer, RenderMesh,
-  RenderWorld, ScalarSamples, TriangleMesh,
+use crate::{
+  extract::frame_to_initial_batch,
+  ir::{
+    LineMesh, PointCloud, RenderFrame, RenderGeometry, RenderLayer, RenderMesh,
+    RenderWorld, ScalarSamples, TriangleMesh,
+  },
+  registry::BackendRegistry,
 };
 
 const VTK_VERTEX: u8 = 1;
 const VTK_LINE: u8 = 3;
 const VTK_TRIANGLE: u8 = 5;
+
+/// Pipe a snapshot frame through `BackendRegistry` (via the dumb
+/// snapshot adapter from Phase 2C) and write the resulting registry
+/// snapshot as VTK. This is the production VTK path now: the registry
+/// is the single source of truth that both bevy and VTK consume, so a
+/// breakage on the wire format gets caught here too.
+pub fn write_render_frame_via_registry(
+  frame: &RenderFrame,
+  dir: impl AsRef<Path>,
+) -> AetherResult<Vec<PathBuf>> {
+  let batch = frame_to_initial_batch(frame);
+  let mut registry = BackendRegistry::new();
+  let _ = registry.apply(&batch);
+  write_render_frame_vtu(&registry.snapshot(), dir)
+}
 
 pub fn write_render_frame_vtu(
   frame: &RenderFrame,

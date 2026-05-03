@@ -8,8 +8,14 @@ pub mod diagnostics;
 pub mod frame;
 pub mod layer;
 pub mod mesh;
+pub mod producer;
+pub mod snapshot_adapter;
 
 pub use coupler_debug::*;
 pub use frame::*;
 pub use layer::*;
 pub use mesh::*;
+pub use producer::{
+  ExtractConfig, FrameProducer, MeshConfig, ScalarLayerConfig,
+};
+pub use snapshot_adapter::{frame_to_initial_batch, frame_to_replace_batch};

@@ -20,6 +20,18 @@ use utility::domain::{FieldKey, MeshKey, MeshType, WorldId};
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct WorldHandle(pub u64);
 
+impl WorldHandle {
+  /// Deterministic handle for a given `WorldId`. Two `RenderWorld`s
+  /// with the same id hash to the same handle.
+  pub const fn from_world_id(id: WorldId) -> Self {
+    let mut h = FNV_OFFSET;
+    h ^= b'W' as u64;
+    h = h.wrapping_mul(FNV_PRIME);
+    h = fnv_mix_u64(h, id.0 as u64);
+    Self(h)
+  }
+}
+
 /// Per-process stable handle for a `RenderMesh`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct MeshHandle(pub u64);
@@ -29,9 +41,31 @@ pub struct MeshHandle(pub u64);
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct LayerHandle(pub u64);
 
+impl LayerHandle {
+  /// Deterministic handle for a `(LayerId, target mesh)` pair. Two
+  /// worlds can both have a `surface_temperature` layer without
+  /// colliding because their target `MeshHandle`s differ.
+  pub const fn for_target(id: LayerId, target: MeshHandle) -> Self {
+    let mut h = FNV_OFFSET;
+    h ^= b'L' as u64;
+    h = h.wrapping_mul(FNV_PRIME);
+    h = fnv_mix_u64(h, id.0);
+    h = fnv_mix_u64(h, target.0);
+    Self(h)
+  }
+}
+
 /// Per-process stable handle for a `Palette`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct PaletteHandle(pub u64);
+
+impl PaletteHandle {
+  /// Hash a palette by its name. Assumes palette names are unique
+  /// within a process.
+  pub const fn from_static_name(name: &'static str) -> Self {
+    Self(fnv1a_64(name.as_bytes()))
+  }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct RenderMeshId {

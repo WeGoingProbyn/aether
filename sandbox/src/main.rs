@@ -10,7 +10,7 @@ use aether::{
 };
 use cosmo::factory as cosmo_factory;
 use eidolon::{
-  export::write_render_frame_vtu,
+  export::write_render_frame_via_registry,
   extract::{scalar_component_layer, tessera_debug_frame},
   ir::{LayerId, MeshRepresentation, Palette, RenderLayer, RenderMeshId},
 };
@@ -280,7 +280,7 @@ fn main() -> AetherResult<()> {
     frame.worlds[0].layers.push(RenderLayer::Scalar(layer));
   }
 
-  let written = write_render_frame_vtu(&frame, "output/eidolon")?;
+  let written = write_render_frame_via_registry(&frame, "output/eidolon")?;
   info!(
     "eidolon wrote {} debug VTK files to output/eidolon",
     written.len()
