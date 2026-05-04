@@ -102,11 +102,7 @@ geometry. They operate on borrowed state provided by the scheduler.
 
 ## Development
 
-Useful workspace commands:
-
 ```sh
-cargo fmt --all
-cargo test --workspace
 cargo run -p sandbox
 ```
 
