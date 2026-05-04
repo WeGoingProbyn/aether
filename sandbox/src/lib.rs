@@ -37,9 +37,9 @@ pub const SANDBOX_WORLD_ID: WorldId = WorldId(0);
 /// shells — the bevy demo uses `reference_radius()` for the camera.
 #[profile]
 pub fn build_demo_aether() -> AetherResult<(Aether, AtmosphereShellLayout)> {
-  let angular_dims = [32, 32];
-  let surface_radial_layers = 1;
-  let atmosphere_radial_layers = 2;
+  let angular_dims = [128, 128];
+  let surface_radial_layers = 5;
+  let atmosphere_radial_layers = 30;
   let atmosphere_height = 20_000.0;
   let surface_depth = 10_000.0;
   let seed = cosmo_factory::earth();

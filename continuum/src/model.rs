@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use utility::domain::{CellId, Point};
-use utility::{StateDiagnostics, maths::vector::Vector, profile};
+use utility::{maths::vector::Vector, profile, StateDiagnostics};
 
 use tessera::geometry::CellMetrics;
 
@@ -37,7 +37,6 @@ pub trait NumericalFlux<const D: usize, const N: usize>: Send + Sync {
 pub struct RusanovFlux;
 
 impl<const D: usize, const N: usize> NumericalFlux<D, N> for RusanovFlux {
-  #[profile]
   fn compute(
     &self,
     law: &dyn ConservationLaw<D, N>,
@@ -149,7 +148,6 @@ impl ConservationLaw<2, 4> for Euler2D {
     [0.0; 4] // no source terms for basic Euler
   }
 
-  #[profile]
   fn fix_state(&self, state: &mut [f64; 4]) {
     let floor = 1e-8;
     if state[0] < floor {
@@ -324,7 +322,6 @@ impl ConservationLaw<3, 5> for Euler3D {
     ]
   }
 
-  #[profile]
   fn fix_state(&self, state: &mut [f64; 5]) {
     let floor = 1e-8;
     if state[0] < floor {

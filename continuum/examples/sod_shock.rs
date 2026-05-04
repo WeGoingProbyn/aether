@@ -1,10 +1,7 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
-
 use continuum::boundary::{BoundaryRegistry, ReflectiveWall, Transmissive};
-use continuum::cpu::CpuFvmRunner;
 use continuum::model::{Euler2D, RusanovFlux};
 use continuum::output::write_partitioned_vtu;
 use continuum::solver::{FvmSolver, SolverConfig, TimeIntegration};
@@ -18,7 +15,6 @@ use utility::error::AetherResult;
 use utility::info;
 use utility::logger::{Level, LogWriter, Logger, StdSink};
 use utility::profiler::Profiler;
-use utility::thread::pool::Pool;
 
 fn main() -> AetherResult<()> {
   Logger::init(
@@ -28,11 +24,8 @@ fn main() -> AetherResult<()> {
 
   Profiler::init();
 
-  let pool = Pool::default();
-  let cpu = CpuFvmRunner::new(&pool);
-
   let dims = [1000, 1];
-  let mesh = Arc::new(StructuredBlock::uniform(
+  let mesh = std::sync::Arc::new(StructuredBlock::uniform(
     [0.0, 0.0].into(),
     [1.0, 0.01],
     dims,
@@ -40,8 +33,7 @@ fn main() -> AetherResult<()> {
   ));
 
   let gamma = 1.4;
-  let num_partitions = 2;
-  let decomp = decompose_structured(Arc::clone(&mesh), dims, num_partitions, 1);
+  let decomp = decompose_structured(std::sync::Arc::clone(&mesh), dims, 1, 1);
 
   // Create per-partition fields
   let mut states: Vec<SoaField<4>> = decomp
@@ -101,7 +93,12 @@ fn main() -> AetherResult<()> {
   info!("wrote vtk snapshot: {}", initial_manifest.to_string_lossy());
 
   while time < 0.2 {
-    let dt = cpu.step(&mut solver, &decomp, &mut states, &mut residuals, &bcs);
+    let dt = solver.step(
+      &mut states[0],
+      &mut residuals[0],
+      &decomp.partitions[0],
+      &bcs,
+    );
     time += dt;
     step += 1;
     info!("step={}, t={:.6}, dt={:.6}", step, time, dt);
@@ -133,7 +130,7 @@ fn main() -> AetherResult<()> {
   //   }
   // }
 
-  pool.flush_profiler();
+  Profiler::flush_local();
   Profiler::print(&mut LogWriter::new(Level::Info));
   Ok(())
 }

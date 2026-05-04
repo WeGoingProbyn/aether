@@ -115,7 +115,6 @@ impl World {
     (&self.tessera, &mut self.pleroma)
   }
 
-  #[profile("aether.world.tick")]
   pub fn tick(&mut self, pool: &Pool, dt: f64) -> AetherResult<()> {
     self.nexus.tick(
       self.id,
@@ -246,7 +245,6 @@ impl System {
     self.worlds.values_mut()
   }
 
-  //#[profile("aether.system.tick")]
   pub fn tick(&mut self, pool: &Pool, dt: f64) -> AetherResult<()> {
     // Future system-level nexus/resources run here before world-local physics.
     for world in self.worlds.values_mut() {
@@ -272,7 +270,7 @@ impl Aether {
     Self::new(systems, pool)
   }
 
-  //#[profile("aether.step")]
+  #[profile("aether.step")]
   pub fn step(&mut self, dt: f64) -> AetherResult<()> {
     for system in self.systems.values_mut() {
       system.tick(&self.pool, dt)?;

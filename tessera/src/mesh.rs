@@ -14,28 +14,17 @@ use crate::{
   topology::{FaceConnection, Topology},
 };
 
-enum Axis {
-  X = 0,
-  Y = 1,
-  Z = 2,
-}
+fn axis_of<const D: usize>(v: &Vector<f64, D>) -> usize {
+  let mut axis = 0;
+  let mut major = v[0].abs();
 
-fn axis_of<const D: usize>(v: &Vector<f64, D>) -> Axis {
-  let eps = 1.0e-12;
-  let ax = v[0].abs();
-  let ay = v[1].abs();
-  let az = v[2].abs();
-
-  let (axis, major, minor_a, minor_b) = if ax >= ay && ax >= az {
-    (Axis::X, ax, ay, az)
-  } else if ay >= az {
-    (Axis::Y, ay, ax, az)
-  } else {
-    (Axis::Z, az, ax, ay)
-  };
-
-  debug_assert!(major > 1.0 - eps, "vector is not unit axis-aligned: {:?}", v);
-  debug_assert!(minor_a < eps && minor_b < eps, "vector is not axis-aligned: {:?}", v);
+  for i in 1..D {
+    let component = v[i].abs();
+    if component > major {
+      axis = i;
+      major = component;
+    }
+  }
 
   axis
 }
@@ -313,7 +302,8 @@ impl<const D: usize> StructuredBlock<D> {
       .zip(face_area_vectors.iter())
       .zip(face_areas.iter())
       .map(|((centroid, area_vec), &area)| {
-        let sqrt_g = coord_map.face_sqrt_det_metric(centroid, axis_of(area_vec) as usize);
+        let sqrt_g =
+          coord_map.face_sqrt_det_metric(centroid, axis_of(area_vec));
         let normal = area_vec / area;
         FaceMetrics {
           normal,

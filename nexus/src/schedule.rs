@@ -27,7 +27,7 @@ use tessera::world_mesh::Tessera;
 use utility::collections::graph::Graph;
 use utility::domain::WorldId;
 use utility::error::{AetherError, AetherResult, ErrorDomain};
-use utility::{end_profile, inline_profile, profile, profile_block};
+use utility::{end_profile, inline_profile, profile};
 use utility::thread::pool::Pool;
 
 use crate::{
@@ -206,7 +206,6 @@ impl CompiledNexus {
     &self.topo_order
   }
 
-  #[profile("nexus.schedule.tick")]
   pub fn tick(
     &mut self,
     world_id: WorldId,
@@ -267,16 +266,15 @@ impl CompiledNexus {
           end_profile!(stage.name());
         }));
       }
-      pool.dispatch(tasks);
+      end_profile!("nexus.tick.layer_build_tasks");
 
-      //drop(access);
+      pool.dispatch(tasks);
 
       let err = error_slot.lock().unwrap().take();
       if let Some(e) = err {
         return Err(e);
       }
 
-      end_profile!("nexus.tick.layer_build_tasks");
     }
     Ok(())
   }

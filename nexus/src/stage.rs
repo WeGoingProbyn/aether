@@ -42,7 +42,7 @@ pub struct WorldView<'a> {
   pub constants: &'a WorldConstants,
   /// Typed read/write into pleroma, scoped to the keys the stage declared.
   pub fields: WorldAccess<'a>,
-  /// For inner CPU execution policy (e.g. `continuum::cpu::CpuFvmRunner`).
+  /// Shared worker pool for stages that need scheduling context.
   pub pool: &'a Pool,
   /// Time step picked by the integration driver.
   pub dt: f64,
