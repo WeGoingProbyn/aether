@@ -38,7 +38,7 @@ pub const SANDBOX_WORLD_ID: WorldId = WorldId(0);
 #[profile]
 pub fn build_demo_aether() -> AetherResult<(Aether, AtmosphereShellLayout)> {
   let angular_dims = [128, 128];
-  let surface_radial_layers = 5;
+  let surface_radial_layers = 10;
   let atmosphere_radial_layers = 30;
   let atmosphere_height = 20_000.0;
   let surface_depth = 10_000.0;
@@ -54,12 +54,17 @@ pub fn build_demo_aether() -> AetherResult<(Aether, AtmosphereShellLayout)> {
     surface_depth,
   )?;
 
-  world_factory = world_factory.cube_sphere_surface(
-    shell_layout.surface_shell_spec(angular_dims, surface_radial_layers),
-  );
-  world_factory = world_factory.cube_sphere_atmosphere(
-    shell_layout.atmosphere_shell_spec(angular_dims, atmosphere_radial_layers),
-  );
+  world_factory = world_factory
+    .cube_sphere_surface(
+      shell_layout.surface_shell_spec(angular_dims, surface_radial_layers),
+    )
+    .with_partition_count(6);
+  world_factory = world_factory
+    .cube_sphere_atmosphere(
+      shell_layout
+        .atmosphere_shell_spec(angular_dims, atmosphere_radial_layers),
+    )
+    .with_partition_count(6);
   let radial_coupler_index = world_factory
     .add_radial_stack_coupler(MeshKey::SURFACE, MeshKey::ATMOSPHERE)?;
 

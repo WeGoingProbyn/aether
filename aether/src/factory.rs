@@ -14,8 +14,9 @@ use tessera::{
   coupling::MeshCoupler,
   cube_sphere::{CubeSphere, CubeSphereShellSpec},
   mesh::Mesh,
+  partition::decompose_cube_sphere_panels,
   radial_stack::RadialStackCoupler,
-  world_mesh::Tessera,
+  world_mesh::{DecompositionKey, Tessera},
 };
 use utility::error::{AetherError, AetherResult, ErrorDomain};
 
@@ -35,6 +36,7 @@ pub struct WorldFactory {
   nexus: Nexus,
   cube_sphere_shells: HashMap<MeshKey, CubeSphereShellSpec>,
   body_index: Option<usize>,
+  partition_count: usize,
 }
 
 impl WorldFactory {
@@ -48,6 +50,7 @@ impl WorldFactory {
       nexus: Nexus::new(),
       cube_sphere_shells: HashMap::new(),
       body_index: None,
+      partition_count: 1,
     }
   }
 
@@ -57,6 +60,11 @@ impl WorldFactory {
   /// motion without eidolon depending on the gravitas crate.
   pub fn with_body_index(mut self, index: usize) -> Self {
     self.body_index = Some(index);
+    self
+  }
+
+  pub fn with_partition_count(mut self, partition_count: usize) -> Self {
+    self.partition_count = partition_count.max(1);
     self
   }
 
@@ -129,9 +137,14 @@ impl WorldFactory {
     spec: CubeSphereShellSpec,
   ) -> Option<Arc<dyn Mesh<3>>> {
     self.cube_sphere_shells.insert(key, spec.clone());
-    self
-      .tessera
-      .register_mesh(key, Arc::new(CubeSphere::shell(spec)))
+    let mesh = Arc::new(CubeSphere::shell(spec));
+    let previous = self.tessera.register_mesh(key, mesh.clone());
+    self.tessera.register_decomposition(
+      key,
+      DecompositionKey::DEFAULT,
+      decompose_cube_sphere_panels(mesh),
+    );
+    previous
   }
 
   pub fn with_cube_sphere_shell(
@@ -265,7 +278,7 @@ impl WorldFactory {
 
   pub fn build(self) -> AetherResult<World> {
     let compiled_nexus = self.nexus.build(&self.pleroma)?;
-    Ok(World::with_body_index(
+    let mut world = World::with_body_index(
       self.world_id,
       self.seed,
       self.primary,
@@ -273,7 +286,9 @@ impl WorldFactory {
       self.pleroma,
       compiled_nexus,
       self.body_index,
-    ))
+    );
+    world.set_partition_count(self.partition_count);
+    Ok(world)
   }
 
   fn cube_sphere_shell_spec(
@@ -332,7 +347,27 @@ mod tests {
     assert_eq!(world.id(), WorldId(7));
     assert!(world.tessera().contains_mesh(MeshKey::SURFACE));
     assert!(world.tessera().contains_mesh(MeshKey::ATMOSPHERE));
+    assert!(
+      world
+        .tessera()
+        .contains_decomposition(MeshKey::SURFACE, DecompositionKey::DEFAULT)
+    );
+    assert!(
+      world
+        .tessera()
+        .contains_decomposition(MeshKey::ATMOSPHERE, DecompositionKey::DEFAULT)
+    );
     assert_eq!(world.tessera().couplers().len(), 0);
+  }
+
+  #[test]
+  fn factory_sets_static_partition_count() {
+    let world = WorldFactory::new(WorldId(7), factory::earth())
+      .with_partition_count(6)
+      .build()
+      .unwrap();
+
+    assert_eq!(world.partition_count(), 6);
   }
 
   #[test]

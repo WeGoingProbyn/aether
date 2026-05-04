@@ -6,13 +6,13 @@
 
 use nexus::{
   CellView, FieldKey, FieldName, FieldStorage, MeshKey, Nexus, SoaField, Stage,
-  StageContext, WorldConstants, WorldId,
+  StageContext, StagePlan, WorldConstants, WorldId,
 };
 use pleroma::Pleroma;
 use tessera::world_mesh::Tessera;
 use utility::domain::CellId;
 use utility::error::{AetherError, AetherResult, ErrorDomain};
-use utility::thread::pool::Pool;
+use utility::thread::pool::{Pool, ScopedScheduler, ScopedTaskGraph};
 
 const N: usize = 1;
 const PRESSURE: FieldKey = FieldKey::new(MeshKey::SURFACE, FieldName::Pressure);
@@ -73,6 +73,50 @@ impl Stage for Doubler {
       ctx.world.fields.write(self.destination).unwrap();
     dst.write(CellId::from(0), &[src_value[0] * 2.0]);
     Ok(())
+  }
+}
+
+struct ProgramSetter {
+  writes: [FieldKey; 1],
+}
+
+impl Stage for ProgramSetter {
+  fn name(&self) -> &'static str {
+    "program_setter"
+  }
+
+  fn reads(&self) -> &[FieldKey] {
+    &[]
+  }
+
+  fn writes(&self) -> &[FieldKey] {
+    &self.writes
+  }
+
+  fn run(&mut self, _ctx: StageContext<'_>) -> AetherResult<()> {
+    unreachable!("program stage should execute through plan")
+  }
+
+  fn plan<'a>(
+    &'a mut self,
+    mut ctx: StageContext<'a>,
+  ) -> AetherResult<StagePlan<'a>> {
+    Ok(StagePlan::program(
+      move |scheduler: &mut ScopedScheduler| {
+        let mut wave_sum = 0usize;
+        let mut wave = ScopedTaskGraph::new();
+        wave.add(|| {
+          wave_sum += 2;
+          Ok(())
+        });
+        scheduler.run(wave)?;
+
+        let field: &mut SoaField<N> =
+          ctx.world.fields.write(self.writes[0]).unwrap();
+        field.write(CellId::from(0), &[wave_sum as f64]);
+        Ok(())
+      },
+    ))
   }
 }
 
@@ -170,6 +214,33 @@ fn raw_chain_propagates_value_through_layers() {
   assert_eq!(p.state(CellId::from(0)).as_state(), &[5.0]);
   assert_eq!(t.state(CellId::from(0)).as_state(), &[10.0]);
   assert_eq!(h.state(CellId::from(0)).as_state(), &[20.0]);
+}
+
+#[test]
+fn program_stage_runs_on_scheduler_and_can_execute_child_wave() {
+  let mut world = make_world();
+  let tessera = Tessera::default();
+  let pool = Pool::new(2).unwrap();
+
+  let mut s = Nexus::new();
+  s.add(ProgramSetter {
+    writes: [TEMPERATURE],
+  });
+
+  let mut compiled = s.build(&world).unwrap();
+  compiled
+    .tick(
+      WorldId(0),
+      &tessera,
+      &WorldConstants::default(),
+      &mut world,
+      &pool,
+      0.0,
+    )
+    .unwrap();
+
+  let t: &SoaField<N> = world.read(TEMPERATURE).unwrap();
+  assert_eq!(t.state(CellId::from(0)).as_state(), &[2.0]);
 }
 
 #[derive(Debug)]

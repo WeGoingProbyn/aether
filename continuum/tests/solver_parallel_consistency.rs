@@ -94,3 +94,63 @@ fn with_backend_matches_default_cpu_backend_and_updates_solver_state() {
     }
   }
 }
+
+#[test]
+fn step_with_dt_matches_step_when_given_computed_dt() {
+  let gamma = 1.4;
+  let dims = [8, 1];
+  let mesh = StructuredBlock::uniform(
+    [0.0, 0.0].into(),
+    [1.0, 0.01],
+    dims,
+    Box::new(IdentityMap::<2>),
+  );
+
+  let mut step_state = SoaField::from_fn(mesh.cell_count(), |cell| {
+    let x = mesh.cell_centroid(cell)[0];
+    initial_state(x, gamma)
+  });
+  let mut fixed_dt_state = SoaField::from_fn(mesh.cell_count(), |cell| {
+    let x = mesh.cell_centroid(cell)[0];
+    initial_state(x, gamma)
+  });
+  let mut step_residual = SoaField::zeros(mesh.cell_count());
+  let mut fixed_dt_residual = SoaField::zeros(mesh.cell_count());
+
+  let bcs = transmissive_bcs();
+  let config = SolverConfig::new(0.5, 1e-4, TimeIntegration::Rk2);
+  let mut step_solver =
+    FvmSolver::new(config.clone(), Euler2D::new(gamma), RusanovFlux);
+  let mut fixed_dt_solver =
+    FvmSolver::new(config, Euler2D::new(gamma), RusanovFlux);
+
+  let dt = fixed_dt_solver.compute_dt(&fixed_dt_state, &mesh);
+  let step_dt =
+    step_solver.step(&mut step_state, &mut step_residual, &mesh, &bcs);
+  let fixed_dt = fixed_dt_solver.step_with_dt(
+    dt,
+    &mut fixed_dt_state,
+    &mut fixed_dt_residual,
+    &mesh,
+    &bcs,
+  );
+
+  assert!((fixed_dt - step_dt).abs() < 1e-14);
+  assert_eq!(fixed_dt_solver.current_step(), step_solver.current_step());
+  assert!((fixed_dt_solver.time() - step_solver.time()).abs() < 1e-14);
+
+  for i in 0..mesh.cell_count() {
+    let step_cell = step_state.state(CellId::from(i));
+    let fixed_dt_cell = fixed_dt_state.state(CellId::from(i));
+    for (k, step_component) in step_cell.as_state().iter().enumerate() {
+      assert!(
+        (step_component - fixed_dt_cell.as_state()[k]).abs() < 1e-14,
+        "cell {} component {} differs: step={} fixed_dt={}",
+        i,
+        k,
+        step_cell.as_state()[k],
+        fixed_dt_cell.as_state()[k],
+      );
+    }
+  }
+}

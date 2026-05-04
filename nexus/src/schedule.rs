@@ -15,11 +15,10 @@
 //! (whether from the data flow or from contradictory `before` hints) are
 //! surfaced as errors during `build`.
 //!
-//! `CompiledNexus::tick` walks the resulting layers; within a layer all
-//! stages have pairwise-disjoint conflicts, so they fan out across the
-//! thread pool via the `pleroma::ScheduleAccess` split-borrow.
-
-use std::sync::{Arc, Mutex};
+//! `CompiledNexus::tick` builds scheduler-owned tasks from the resulting
+//! layers. Within a layer all stages have pairwise-disjoint conflicts, and
+//! layer barriers preserve the same ordering semantics as the original
+//! per-layer dispatch path.
 
 use pleroma::Pleroma;
 use pleroma::prelude::{FieldKey, ResourceKey};
@@ -27,12 +26,14 @@ use tessera::world_mesh::Tessera;
 use utility::collections::graph::Graph;
 use utility::domain::WorldId;
 use utility::error::{AetherError, AetherResult, ErrorDomain};
-use utility::{end_profile, inline_profile, profile};
-use utility::thread::pool::Pool;
+use utility::thread::pool::{Pool, ScopedTaskGraph};
+use utility::{end_profile, inline_profile};
 
 use crate::{
   constants::WorldConstants,
-  stage::{Stage, StageContext, WorldView},
+  stage::{
+    Stage, StageContext, StagePlan, StagePlanTask, StageProgram, WorldView,
+  },
 };
 
 /// Stable identifier for a stage inside one `Nexus`. Returned by
@@ -188,6 +189,17 @@ pub struct CompiledNexus {
   topo_order: Vec<usize>,
 }
 
+pub struct StageTask<'a> {
+  pub name: &'static str,
+  pub task: ScheduledStageTask<'a>,
+  pub predecessors: Vec<usize>,
+}
+
+pub enum ScheduledStageTask<'a> {
+  Worker(Box<dyn FnOnce() -> AetherResult<()> + Send + 'a>),
+  Program(Box<dyn StageProgram<'a> + Send + 'a>),
+}
+
 impl CompiledNexus {
   pub fn stage_count(&self) -> usize {
     self.stages.len()
@@ -215,30 +227,93 @@ impl CompiledNexus {
     pool: &Pool,
     dt: f64,
   ) -> AetherResult<()> {
-    for layer in &self.layers {
-      inline_profile!("nexus.tick.layer_build_tasks");
-      let access = pleroma.schedule_access();
-      let error_slot: Arc<Mutex<Option<AetherError>>> =
-        Arc::new(Mutex::new(None));
+    self.tick_with_partition_count(
+      world_id, tessera, constants, pleroma, pool, dt, 1,
+    )
+  }
 
-      let mut tasks: Vec<Box<dyn FnOnce() + Send + '_>> =
-        Vec::with_capacity(layer.len());
+  pub fn tick_with_partition_count(
+    &mut self,
+    world_id: WorldId,
+    tessera: &Tessera,
+    constants: &WorldConstants,
+    pleroma: &mut Pleroma,
+    pool: &Pool,
+    dt: f64,
+    partition_count: usize,
+  ) -> AetherResult<()> {
+    let tasks = self.build_tick_tasks(
+      world_id,
+      tessera,
+      constants,
+      pleroma,
+      pool,
+      dt,
+      partition_count,
+    )?;
+    let mut graph = ScopedTaskGraph::new();
+    let mut node_ids = Vec::with_capacity(tasks.len());
 
-      for (idx, stage) in self.stages.iter_mut().enumerate() {
-        if !layer.iter().any(|stage_id| stage_id.0 == idx) {
-          continue;
+    for task in tasks {
+      let StageTask {
+        name,
+        task,
+        predecessors,
+      } = task;
+      let node = match task {
+        ScheduledStageTask::Worker(task) => graph.add(task),
+        ScheduledStageTask::Program(program) => {
+          graph.add_scheduler(move |scheduler| {
+            inline_profile!(name);
+            let result = program.execute(scheduler);
+            end_profile!(name);
+            result
+          })
         }
+      };
+      for predecessor in predecessors {
+        graph.dependency(node, node_ids[predecessor])?;
+      }
+      node_ids.push(node);
+    }
 
+    pool.execute_scoped(graph)
+  }
+
+  pub fn build_tick_tasks<'a>(
+    &'a mut self,
+    world_id: WorldId,
+    tessera: &'a Tessera,
+    constants: &'a WorldConstants,
+    pleroma: &'a mut Pleroma,
+    pool: &'a Pool,
+    dt: f64,
+    partition_count: usize,
+  ) -> AetherResult<Vec<StageTask<'a>>> {
+    inline_profile!("nexus.tick.layer_build_tasks");
+
+    let access = pleroma.schedule_access();
+    let layers = self.layers.clone();
+    let mut tasks = Vec::with_capacity(self.stages.len());
+    let stages = self.stages.as_mut_ptr();
+    let mut previous_layer_terminals: Vec<usize> = Vec::new();
+
+    for layer in layers {
+      let mut current_layer_terminals = Vec::new();
+
+      for stage_id in layer {
+        let stage = unsafe { &mut *stages.add(stage_id.0) };
         let reads = stage.reads().to_vec();
         let writes = stage.writes().to_vec();
         let resource_reads = stage.resource_reads().to_vec();
         let resource_writes = stage.resource_writes().to_vec();
 
-        // SAFETY: `build` placed these stages in the same layer only when
-        // none of them have any RAW/WAR/WAW conflict with each other (in
-        // either fields or resources). The declared sets are therefore
-        // pairwise disjoint across the views we hand out here, which is
-        // exactly the precondition `ScheduleAccess::view_for` requires.
+        // SAFETY: the scoped task graph gives the same execution guarantee
+        // the previous layer-by-layer dispatcher did: stages in the same layer
+        // are conflict-free, and later layers cannot start until all terminal
+        // tasks in the previous layer have completed. `WorldAccess` values are
+        // created up front, but typed field/resource references are only
+        // materialized inside the scheduled task closures.
         let view = unsafe {
           access.view_for(&reads, &writes, &resource_reads, &resource_writes)
         };
@@ -251,32 +326,81 @@ impl CompiledNexus {
             fields: view,
             pool,
             dt,
+            partition_count,
           },
         };
-        let err_slot = Arc::clone(&error_slot);
 
-        tasks.push(Box::new(move || {
-          inline_profile!(stage.name());
-          if let Err(e) = stage.run(ctx) {
-            let mut guard = err_slot.lock().unwrap();
-            if guard.is_none() {
-              *guard = Some(e);
+        let stage_name = stage.name();
+        match stage.plan(ctx)? {
+          StagePlan::Static(planned_tasks) => {
+            let base = tasks.len();
+            let local_count = planned_tasks.len();
+            let mut has_local_dependents = vec![false; local_count];
+            for planned in &planned_tasks {
+              for &predecessor in &planned.predecessors {
+                if predecessor >= local_count {
+                  return Err(
+                    AetherError::new(NexusError::InvalidStagePlan).context(
+                      format!(
+                        "stage {} references local predecessor {} with only {} tasks",
+                        planned.name, predecessor, local_count
+                      ),
+                    ),
+                  );
+                }
+                has_local_dependents[predecessor] = true;
+              }
+            }
+
+            for (local_index, planned) in planned_tasks.into_iter().enumerate()
+            {
+              let StagePlanTask {
+                name,
+                task,
+                predecessors,
+              } = planned;
+              let mut resolved_predecessors = predecessors
+                .into_iter()
+                .map(|idx| base + idx)
+                .collect::<Vec<_>>();
+              if resolved_predecessors.is_empty() {
+                resolved_predecessors
+                  .extend(previous_layer_terminals.iter().copied());
+              }
+
+              tasks.push(StageTask {
+                name,
+                task: ScheduledStageTask::Worker(Box::new(move || {
+                  inline_profile!(name);
+                  let result = task();
+                  end_profile!(name);
+                  result
+                })),
+                predecessors: resolved_predecessors,
+              });
+
+              if !has_local_dependents[local_index] {
+                current_layer_terminals.push(base + local_index);
+              }
             }
           }
-          end_profile!(stage.name());
-        }));
+          StagePlan::Program(program) => {
+            let index = tasks.len();
+            tasks.push(StageTask {
+              name: stage_name,
+              task: ScheduledStageTask::Program(program),
+              predecessors: previous_layer_terminals.clone(),
+            });
+            current_layer_terminals.push(index);
+          }
+        }
       }
-      end_profile!("nexus.tick.layer_build_tasks");
 
-      pool.dispatch(tasks);
-
-      let err = error_slot.lock().unwrap().take();
-      if let Some(e) = err {
-        return Err(e);
-      }
-
+      previous_layer_terminals = current_layer_terminals;
     }
-    Ok(())
+
+    end_profile!("nexus.tick.layer_build_tasks");
+    Ok(tasks)
   }
 }
 
@@ -284,6 +408,7 @@ impl CompiledNexus {
 pub enum NexusError {
   UnknownStage,
   Cycle,
+  InvalidStagePlan,
 }
 
 impl ErrorDomain for NexusError {
@@ -299,6 +424,9 @@ impl std::fmt::Display for NexusError {
         write!(f, "ordering hint references a stage that wasn't added")
       }
       NexusError::Cycle => write!(f, "nexus has a cycle"),
+      NexusError::InvalidStagePlan => {
+        write!(f, "stage returned an invalid execution plan")
+      }
     }
   }
 }

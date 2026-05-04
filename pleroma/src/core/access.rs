@@ -124,9 +124,12 @@ impl<'a> ScheduleAccess<'a> {
   ///
   /// # Safety
   /// The caller (nexus) must guarantee that across every `view_for` call
-  /// that produces a `WorldAccess` alive at the same time, the unions of
+  /// whose resulting `WorldAccess` may execute concurrently, the unions of
   /// all `reads` are disjoint from the unions of all `writes`, and no two
   /// `writes` overlap — applied independently to fields and resources.
+  /// Graph schedulers may create views for later dependent tasks up front,
+  /// but must ensure conflicting views cannot materialize typed references at
+  /// the same time.
   pub unsafe fn view_for(
     &self,
     reads: &[FieldKey],

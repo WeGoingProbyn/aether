@@ -57,35 +57,23 @@ impl<const N: usize> CpuScratch<N> {
   }
 }
 
-impl<const D: usize, const N: usize, L, F> FvmBackend<D, N, L, F>
-  for CpuBackend<N>
-where
-  L: ConservationLaw<D, N>,
-  F: NumericalFlux<D, N>,
-{
-  fn step<S, M>(
+impl<const N: usize> CpuBackend<N> {
+  fn advance_cached<const D: usize, L, F, S, M>(
     &mut self,
     config: &SolverConfig,
     law: &L,
     flux: &F,
+    dt: f64,
     state: &mut S,
     residual: &mut S,
     mesh: &M,
     bcs: &BoundaryRegistry<D, N>,
-  ) -> f64
-  where
+  ) where
+    L: ConservationLaw<D, N>,
+    F: NumericalFlux<D, N>,
     S: FieldStorage<N>,
     M: Mesh<D> + ?Sized,
   {
-    self.scratch.ensure_len(mesh.cell_count());
-    kernel::gather_state_cache(state, mesh, &mut self.scratch.state_cache);
-    let dt = kernel::compute_dt_from_cache(
-      config,
-      law,
-      &self.scratch.state_cache,
-      mesh,
-    );
-
     match config.integrator() {
       TimeIntegration::ForwardEuler => {
         kernel::compute_residual_from_cache_with_accum(
@@ -132,6 +120,59 @@ where
     }
 
     kernel::fix_state(law, state, mesh, &mut self.scratch.cell_state);
+  }
+}
+
+impl<const D: usize, const N: usize, L, F> FvmBackend<D, N, L, F>
+  for CpuBackend<N>
+where
+  L: ConservationLaw<D, N>,
+  F: NumericalFlux<D, N>,
+{
+  fn step<S, M>(
+    &mut self,
+    config: &SolverConfig,
+    law: &L,
+    flux: &F,
+    state: &mut S,
+    residual: &mut S,
+    mesh: &M,
+    bcs: &BoundaryRegistry<D, N>,
+  ) -> f64
+  where
+    S: FieldStorage<N>,
+    M: Mesh<D> + ?Sized,
+  {
+    self.scratch.ensure_len(mesh.cell_count());
+    kernel::gather_state_cache(state, mesh, &mut self.scratch.state_cache);
+    let dt = kernel::compute_dt_from_cache(
+      config,
+      law,
+      &self.scratch.state_cache,
+      mesh,
+    );
+
+    self.advance_cached(config, law, flux, dt, state, residual, mesh, bcs);
     dt
+  }
+
+  fn step_with_dt<S, M>(
+    &mut self,
+    config: &SolverConfig,
+    law: &L,
+    flux: &F,
+    dt: f64,
+    state: &mut S,
+    residual: &mut S,
+    mesh: &M,
+    bcs: &BoundaryRegistry<D, N>,
+  ) where
+    S: FieldStorage<N>,
+    M: Mesh<D> + ?Sized,
+  {
+    self.scratch.ensure_len(mesh.cell_count());
+    kernel::gather_state_cache(state, mesh, &mut self.scratch.state_cache);
+
+    self.advance_cached(config, law, flux, dt, state, residual, mesh, bcs);
   }
 }

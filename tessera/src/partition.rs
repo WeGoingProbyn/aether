@@ -1,7 +1,10 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+  collections::{HashMap, HashSet},
+  sync::Arc,
+};
 
 use utility::{
   domain::{BoundaryTag, CellId, FaceId, Point},
@@ -9,6 +12,7 @@ use utility::{
 };
 
 use crate::{
+  cube_sphere::CubeSphere,
   geometry::{CellGeometry, CellMetrics, FaceGeometry, FaceMetrics},
   mesh::{Mesh, StructuredBlock},
   topology::{FaceConnection, Topology},
@@ -177,6 +181,201 @@ where
   /// the field storage.
   pub fn ghost_descriptors_per_partition(&self) -> Vec<&[GhostDescriptor]> {
     self.partitions.iter().map(|p| p.ghost_cells()).collect()
+  }
+}
+
+/// Decompose a mesh from explicit owned-cell sets, adding a one-face ghost
+/// layer around partition boundaries.
+///
+/// Owned cells are kept in caller-provided order and ghost cells are appended
+/// after them. Ghost descriptors point back to the partition/local owned cell
+/// that supplies each ghost value.
+pub fn decompose_by_owned_cells<const D: usize, M>(
+  mesh: Arc<M>,
+  owned_cells: Vec<Vec<CellId>>,
+) -> Decomposition<D, M>
+where
+  M: Mesh<D>,
+{
+  assert!(
+    !owned_cells.is_empty(),
+    "decomposition must contain at least one partition"
+  );
+
+  let mut owner: HashMap<CellId, (usize, CellId)> = HashMap::new();
+  for (partition, cells) in owned_cells.iter().enumerate() {
+    for (local, &cell) in cells.iter().enumerate() {
+      assert!(
+        owner
+          .insert(cell, (partition, CellId::from(local)))
+          .is_none(),
+        "cell {} appears in more than one partition",
+        cell.index(),
+      );
+    }
+  }
+
+  assert_eq!(
+    owner.len(),
+    mesh.cell_count(),
+    "owned cell sets must cover the whole mesh exactly once",
+  );
+
+  let mut ghost_cells: Vec<Vec<CellId>> = vec![Vec::new(); owned_cells.len()];
+  let mut ghost_seen: Vec<HashSet<CellId>> =
+    vec![HashSet::new(); owned_cells.len()];
+
+  for &(_, owner_cell, neighbour_cell) in mesh.interior_faces() {
+    let Some(&(owner_partition, _)) = owner.get(&owner_cell) else {
+      panic!("interior face owner cell is not owned by any partition");
+    };
+    let Some(&(neighbour_partition, _)) = owner.get(&neighbour_cell) else {
+      panic!("interior face neighbour cell is not owned by any partition");
+    };
+
+    if owner_partition == neighbour_partition {
+      continue;
+    }
+
+    if ghost_seen[owner_partition].insert(neighbour_cell) {
+      ghost_cells[owner_partition].push(neighbour_cell);
+    }
+    if ghost_seen[neighbour_partition].insert(owner_cell) {
+      ghost_cells[neighbour_partition].push(owner_cell);
+    }
+  }
+
+  let partitions = owned_cells
+    .into_iter()
+    .enumerate()
+    .map(|(partition, owned)| {
+      let ghosts = ghost_cells[partition]
+        .iter()
+        .map(|&global| {
+          let &(source_partition, source_local_cell) =
+            owner.get(&global).unwrap();
+          (global, source_partition, source_local_cell)
+        })
+        .collect();
+      build_partition_mesh_from_cells(Arc::clone(&mesh), owned, ghosts)
+    })
+    .collect();
+
+  Decomposition { partitions }
+}
+
+/// Six-way cubed-sphere decomposition with one owned partition per panel.
+pub fn decompose_cube_sphere_panels(
+  mesh: Arc<CubeSphere>,
+) -> Decomposition<3, CubeSphere> {
+  let cells_per_panel = mesh.dims().iter().product::<usize>();
+  let owned_cells = (0..6)
+    .map(|panel| {
+      (0..cells_per_panel)
+        .map(|local| CellId::from(panel * cells_per_panel + local))
+        .collect::<Vec<_>>()
+    })
+    .collect();
+
+  decompose_by_owned_cells(mesh, owned_cells)
+}
+
+fn build_partition_mesh_from_cells<const D: usize, M>(
+  mesh: Arc<M>,
+  owned_cells: Vec<CellId>,
+  ghost_cells: Vec<(CellId, usize, CellId)>,
+) -> PartitionMesh<D, M>
+where
+  M: Mesh<D>,
+{
+  let num_owned = owned_cells.len();
+  let mut local_to_global_cell = owned_cells;
+  let mut ghost_descriptors = Vec::with_capacity(ghost_cells.len());
+
+  for (global, source_partition, source_local_cell) in ghost_cells {
+    let local_cell = CellId::from(local_to_global_cell.len());
+    local_to_global_cell.push(global);
+    ghost_descriptors.push(GhostDescriptor {
+      local_cell,
+      source_partition,
+      source_local_cell,
+    });
+  }
+
+  let global_to_local_cell: HashMap<CellId, usize> = local_to_global_cell
+    .iter()
+    .enumerate()
+    .map(|(local, &global)| (global, local))
+    .collect();
+
+  let mut local_to_global_face = Vec::new();
+  let mut face_connections = Vec::new();
+  let mut cell_face_adj: Vec<Vec<FaceId>> =
+    vec![Vec::new(); local_to_global_cell.len()];
+  let mut interior_and_halo = Vec::new();
+  let mut boundary_map: HashMap<BoundaryTag, Vec<(FaceId, CellId)>> =
+    HashMap::new();
+
+  for &(global_face, owner_global, neighbour_global) in mesh.interior_faces() {
+    let owner_local = global_to_local_cell.get(&owner_global).copied();
+    let neighbour_local = global_to_local_cell.get(&neighbour_global).copied();
+
+    if let (Some(owner_local), Some(neighbour_local)) =
+      (owner_local, neighbour_local)
+    {
+      let local_face = FaceId::from(local_to_global_face.len());
+      let owner = CellId::from(owner_local);
+      let neighbour = CellId::from(neighbour_local);
+
+      local_to_global_face.push(global_face);
+      face_connections.push(FaceConnection::Interior { owner, neighbour });
+      interior_and_halo.push((local_face, owner, neighbour));
+      cell_face_adj[owner_local].push(local_face);
+      cell_face_adj[neighbour_local].push(local_face);
+    }
+  }
+
+  for tag in mesh.boundary_tags() {
+    for &(global_face, owner_global) in mesh.boundary_faces(tag) {
+      let Some(&owner_local) = global_to_local_cell.get(&owner_global) else {
+        continue;
+      };
+
+      if owner_local >= num_owned {
+        continue;
+      }
+
+      let out_sign = match mesh.face_connection(global_face) {
+        FaceConnection::Boundary { out_sign, .. } => *out_sign,
+        _ => unreachable!(),
+      };
+      let local_face = FaceId::from(local_to_global_face.len());
+      let owner = CellId::from(owner_local);
+
+      local_to_global_face.push(global_face);
+      face_connections.push(FaceConnection::Boundary {
+        owner,
+        tag,
+        out_sign,
+      });
+      boundary_map
+        .entry(tag)
+        .or_default()
+        .push((local_face, owner));
+      cell_face_adj[owner_local].push(local_face);
+    }
+  }
+
+  PartitionMesh {
+    mesh,
+    local_to_global_cell,
+    num_owned,
+    local_to_global_face,
+    ghost_cells: ghost_descriptors,
+    face_connections,
+    cell_face_adj,
+    interior_and_halo_faces: interior_and_halo,
+    boundary_face_lists: boundary_map.into_iter().collect(),
   }
 }
 

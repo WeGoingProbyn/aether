@@ -1,6 +1,7 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
+use tessera::{mesh::Mesh, partition::PartitionMesh};
 use utility::{domain::CellId, profile};
 
 pub trait FieldStorage<const N: usize>: Send + Sync {
@@ -140,6 +141,168 @@ impl<const N: usize> SoaField<N> {
   }
 }
 
+#[derive(Clone)]
+pub struct LocalPartitionField<const N: usize> {
+  values: Vec<[f64; N]>,
+  owned_count: usize,
+}
+
+impl<const N: usize> FieldStorage<N> for LocalPartitionField<N> {
+  type CellView<'a>
+    = &'a [f64; N]
+  where
+    Self: 'a;
+  type ComponentView<'a>
+    = Vec<f64>
+  where
+    Self: 'a;
+
+  fn state(&self, cell: CellId) -> Self::CellView<'_> {
+    &self.values[cell.index()]
+  }
+
+  fn state_into(&self, cell: CellId, out: &mut [f64; N]) {
+    *out = self.values[cell.index()];
+  }
+
+  fn component(&self, index: usize) -> Self::ComponentView<'_> {
+    self.values.iter().map(|s| s[index]).collect()
+  }
+
+  fn component_into(&self, index: usize, out: &mut [f64]) {
+    debug_assert_eq!(out.len(), self.values.len());
+    for (row, sample) in self.values.iter().enumerate() {
+      out[row] = sample[index];
+    }
+  }
+
+  fn write(&mut self, cell: CellId, val: &[f64; N]) {
+    self.values[cell.index()] = *val;
+  }
+
+  fn len(&self) -> usize {
+    self.values.len()
+  }
+
+  fn is_empty(&self) -> bool {
+    self.values.is_empty()
+  }
+
+  #[profile]
+  fn axpy(&mut self, alpha: f64, other: &Self) {
+    debug_assert_eq!(self.values.len(), other.values.len());
+    for (a, b) in self.values.iter_mut().zip(&other.values) {
+      for i in 0..N {
+        a[i] += alpha * b[i];
+      }
+    }
+  }
+
+  #[profile]
+  fn weighted_sum(&mut self, a: f64, x: &Self, b: f64, y: &Self) {
+    debug_assert_eq!(self.values.len(), x.values.len());
+    debug_assert_eq!(self.values.len(), y.values.len());
+    for j in 0..self.values.len() {
+      for i in 0..N {
+        self.values[j][i] = a * x.values[j][i] + b * y.values[j][i];
+      }
+    }
+  }
+
+  #[profile]
+  fn clone_state(&self) -> Self {
+    self.clone()
+  }
+}
+
+impl<const N: usize> LocalPartitionField<N> {
+  pub fn new(values: Vec<[f64; N]>, owned_count: usize) -> Self {
+    assert!(
+      owned_count <= values.len(),
+      "owned_count must not exceed local value count",
+    );
+    LocalPartitionField {
+      values,
+      owned_count,
+    }
+  }
+
+  pub fn zeros(owned_count: usize, ghost_count: usize) -> Self {
+    LocalPartitionField {
+      values: vec![[0.0; N]; owned_count + ghost_count],
+      owned_count,
+    }
+  }
+
+  pub fn owned_count(&self) -> usize {
+    self.owned_count
+  }
+
+  pub fn ghost_count(&self) -> usize {
+    self.values.len() - self.owned_count
+  }
+
+  pub fn values(&self) -> &[[f64; N]] {
+    &self.values
+  }
+
+  pub fn values_mut(&mut self) -> &mut [[f64; N]] {
+    &mut self.values
+  }
+
+  pub fn owned_values(&self) -> &[[f64; N]] {
+    &self.values[..self.owned_count]
+  }
+
+  pub fn owned_values_mut(&mut self) -> &mut [[f64; N]] {
+    &mut self.values[..self.owned_count]
+  }
+}
+
+#[profile]
+pub fn gather_partition_field<const D: usize, const N: usize, M>(
+  field: &SoaField<N>,
+  partition: &PartitionMesh<D, M>,
+) -> LocalPartitionField<N>
+where
+  M: Mesh<D>,
+{
+  let mut values = Vec::with_capacity(partition.local_cell_count());
+  for &global_cell in partition.local_to_global_cells() {
+    let mut state = [0.0; N];
+    field.state_into(global_cell, &mut state);
+    values.push(state);
+  }
+
+  LocalPartitionField::new(values, partition.num_owned())
+}
+
+#[profile]
+pub fn scatter_partition_owned<const D: usize, const N: usize, M>(
+  local: &LocalPartitionField<N>,
+  global: &mut SoaField<N>,
+  partition: &PartitionMesh<D, M>,
+) where
+  M: Mesh<D>,
+{
+  assert_eq!(
+    local.len(),
+    partition.local_cell_count(),
+    "local field length must match partition cell count",
+  );
+  assert_eq!(
+    local.owned_count(),
+    partition.num_owned(),
+    "local field owned count must match partition owned count",
+  );
+
+  for local_index in 0..partition.num_owned() {
+    let local_cell = CellId::from(local_index);
+    let global_cell = partition.local_to_global(local_cell);
+    global.write(global_cell, local.state(local_cell).as_state());
+  }
+}
+
 pub struct AosField<const N: usize> {
   state: Vec<[f64; N]>,
 }
@@ -222,5 +385,108 @@ impl<const N: usize> AosField<N> {
     AosField {
       state: (0..count).map(|j| f(CellId::from(j))).collect(),
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use std::sync::Arc;
+
+  use tessera::{
+    geometry::IdentityMap, mesh::StructuredBlock,
+    partition::decompose_structured,
+  };
+
+  use super::*;
+
+  fn test_decomposition()
+  -> tessera::partition::Decomposition<3, StructuredBlock<3>> {
+    let dims = [4, 2, 1];
+    let mesh = Arc::new(StructuredBlock::uniform(
+      [0.0; 3].into(),
+      [1.0; 3],
+      dims,
+      Box::new(IdentityMap::<3>),
+    ));
+    decompose_structured(mesh, dims, 2, 1)
+  }
+
+  #[test]
+  fn gather_partition_field_includes_owned_and_ghost_cells() {
+    let decomposition = test_decomposition();
+    let partition = &decomposition.partitions[0];
+    let global = SoaField::<2>::from_fn(8, |cell| {
+      let index = cell.index() as f64;
+      [index, index + 100.0]
+    });
+
+    let local = gather_partition_field(&global, partition);
+
+    assert_eq!(local.owned_count(), partition.num_owned());
+    assert_eq!(local.ghost_count(), partition.ghost_cells().len());
+    assert_eq!(local.len(), partition.local_cell_count());
+    assert!(local.ghost_count() > 0);
+
+    for (local_index, &global_cell) in
+      partition.local_to_global_cells().iter().enumerate()
+    {
+      let expected = [
+        global_cell.index() as f64,
+        global_cell.index() as f64 + 100.0,
+      ];
+      assert_eq!(local.state(CellId::from(local_index)).as_state(), &expected);
+    }
+  }
+
+  #[test]
+  fn scatter_partition_owned_ignores_local_ghost_values() {
+    let decomposition = test_decomposition();
+    let partition = &decomposition.partitions[0];
+    let mut global = SoaField::<1>::from_fn(8, |cell| [cell.index() as f64]);
+    let mut local = gather_partition_field(&global, partition);
+
+    let owned_globals =
+      partition.local_to_global_cells()[..partition.num_owned()].to_vec();
+    let ghost_globals =
+      partition.local_to_global_cells()[partition.num_owned()..].to_vec();
+
+    for local_index in 0..local.len() {
+      let value = if local_index < local.owned_count() {
+        [1000.0 + local_index as f64]
+      } else {
+        [9000.0 + local_index as f64]
+      };
+      local.write(CellId::from(local_index), &value);
+    }
+
+    scatter_partition_owned(&local, &mut global, partition);
+
+    for (local_index, global_cell) in owned_globals.into_iter().enumerate() {
+      assert_eq!(
+        global.state(global_cell).as_state(),
+        &[1000.0 + local_index as f64],
+      );
+    }
+
+    for global_cell in ghost_globals {
+      assert_eq!(
+        global.state(global_cell).as_state(),
+        &[global_cell.index() as f64],
+      );
+    }
+  }
+
+  #[test]
+  fn local_partition_field_clone_and_algebra_cover_all_local_slots() {
+    let mut lhs = LocalPartitionField::<1>::new(vec![[1.0], [2.0], [3.0]], 2);
+    let rhs = LocalPartitionField::<1>::new(vec![[10.0], [20.0], [30.0]], 2);
+
+    lhs.axpy(0.5, &rhs);
+    assert_eq!(lhs.values(), &[[6.0], [12.0], [18.0]]);
+
+    let cloned = lhs.clone_state();
+    lhs.weighted_sum(0.25, &cloned, 0.75, &rhs);
+
+    assert_eq!(lhs.values(), &[[9.0], [18.0], [27.0]]);
   }
 }

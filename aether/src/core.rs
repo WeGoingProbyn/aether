@@ -2,14 +2,17 @@ use std::collections::HashMap;
 
 use cosmo::kind::{BodyKind, CelestialBody};
 use nexus::{
-  AtmosphereConstants, CompiledNexus, RadiationConstants, WorldConstants,
-  WorldId,
+  AtmosphereConstants, CompiledNexus, RadiationConstants, ScheduledStageTask,
+  StageTask, WorldConstants, WorldId,
 };
 use pleroma::Pleroma;
 use tessera::world_mesh::Tessera;
 use utility::{
-  constants::solar_flux, domain::SystemId, error::AetherResult, profile,
-  thread::pool::Pool,
+  constants::solar_flux,
+  domain::SystemId,
+  error::AetherResult,
+  profile,
+  thread::pool::{Pool, ScopedTaskGraph},
 };
 
 /// Default surface long-wave emissivity for rocky bodies. Cosmo doesn't
@@ -29,6 +32,7 @@ pub struct World {
   tessera: Tessera,
   pleroma: Pleroma,
   nexus: CompiledNexus,
+  partition_count: usize,
   /// Index into `BodyState<3>::positions` (a `ResourceKey::Bodies`
   /// resource on the system-level pleroma) identifying which orbital
   /// body this world tracks. `None` means the world is fixed at the
@@ -67,6 +71,7 @@ impl World {
       tessera,
       pleroma,
       nexus,
+      partition_count: 1,
       body_index,
     }
   }
@@ -77,6 +82,14 @@ impl World {
 
   pub fn set_body_index(&mut self, body_index: Option<usize>) {
     self.body_index = body_index;
+  }
+
+  pub fn partition_count(&self) -> usize {
+    self.partition_count
+  }
+
+  pub fn set_partition_count(&mut self, partition_count: usize) {
+    self.partition_count = partition_count.max(1);
   }
 
   pub fn primary(&self) -> Option<&CelestialBody> {
@@ -116,13 +129,30 @@ impl World {
   }
 
   pub fn tick(&mut self, pool: &Pool, dt: f64) -> AetherResult<()> {
-    self.nexus.tick(
+    self.nexus.tick_with_partition_count(
       self.id,
       &self.tessera,
       &self.constants,
       &mut self.pleroma,
       pool,
       dt,
+      self.partition_count,
+    )
+  }
+
+  pub fn build_tick_tasks<'a>(
+    &'a mut self,
+    pool: &'a Pool,
+    dt: f64,
+  ) -> AetherResult<Vec<StageTask<'a>>> {
+    self.nexus.build_tick_tasks(
+      self.id,
+      &self.tessera,
+      &self.constants,
+      &mut self.pleroma,
+      pool,
+      dt,
+      self.partition_count,
     )
   }
 }
@@ -272,10 +302,40 @@ impl Aether {
 
   #[profile("aether.step")]
   pub fn step(&mut self, dt: f64) -> AetherResult<()> {
-    for system in self.systems.values_mut() {
-      system.tick(&self.pool, dt)?;
+    let systems = &mut self.systems;
+    let pool = &self.pool;
+    let mut graph = ScopedTaskGraph::new();
+
+    for system in systems.values_mut() {
+      for world in system.worlds_mut() {
+        let tasks = world.build_tick_tasks(pool, dt)?;
+        let mut node_ids = Vec::with_capacity(tasks.len());
+        for task in tasks {
+          let StageTask {
+            name,
+            task,
+            predecessors,
+          } = task;
+          let node = match task {
+            ScheduledStageTask::Worker(task) => graph.add(task),
+            ScheduledStageTask::Program(program) => {
+              graph.add_scheduler(move |scheduler| {
+                utility::inline_profile!(name);
+                let result = program.execute(scheduler);
+                utility::end_profile!(name);
+                result
+              })
+            }
+          };
+          for predecessor in predecessors {
+            graph.dependency(node, node_ids[predecessor])?;
+          }
+          node_ids.push(node);
+        }
+      }
     }
-    Ok(())
+
+    pool.execute_scoped(graph)
   }
 
   pub fn system(&self, id: SystemId) -> Option<&System> {
@@ -318,9 +378,123 @@ impl Aether {
 #[cfg(test)]
 mod tests {
   use cosmo::factory;
+  use nexus::{
+    CellView, FieldKey, FieldName, FieldStorage, MeshKey, Nexus, SoaField,
+    Stage, StageContext,
+  };
+  use tessera::world_mesh::Tessera;
   use utility::constants::{EARTH_ORBIT, SOLAR_LUMIN};
+  use utility::domain::CellId;
 
   use super::*;
+
+  const TEST_FIELD: FieldKey =
+    FieldKey::new(MeshKey::SURFACE, FieldName::Temperature);
+
+  struct WriteWorldId {
+    writes: [FieldKey; 1],
+  }
+
+  impl WriteWorldId {
+    fn new() -> Self {
+      Self {
+        writes: [TEST_FIELD],
+      }
+    }
+  }
+
+  impl Stage for WriteWorldId {
+    fn name(&self) -> &'static str {
+      "write_world_id"
+    }
+
+    fn reads(&self) -> &[FieldKey] {
+      &[]
+    }
+
+    fn writes(&self) -> &[FieldKey] {
+      &self.writes
+    }
+
+    fn run(&mut self, mut ctx: StageContext<'_>) -> AetherResult<()> {
+      let field: &mut SoaField<1> = ctx.world.fields.write(TEST_FIELD).unwrap();
+      field.write(
+        CellId::from(0),
+        &[ctx.world.world_id.0 as f64 + ctx.world.dt],
+      );
+      Ok(())
+    }
+  }
+
+  struct WritePartitionCount {
+    writes: [FieldKey; 1],
+  }
+
+  impl WritePartitionCount {
+    fn new() -> Self {
+      Self {
+        writes: [TEST_FIELD],
+      }
+    }
+  }
+
+  impl Stage for WritePartitionCount {
+    fn name(&self) -> &'static str {
+      "write_partition_count"
+    }
+
+    fn reads(&self) -> &[FieldKey] {
+      &[]
+    }
+
+    fn writes(&self) -> &[FieldKey] {
+      &self.writes
+    }
+
+    fn run(&mut self, mut ctx: StageContext<'_>) -> AetherResult<()> {
+      let field: &mut SoaField<1> = ctx.world.fields.write(TEST_FIELD).unwrap();
+      field.write(CellId::from(0), &[ctx.world.partition_count as f64]);
+      Ok(())
+    }
+  }
+
+  fn scheduled_test_world(id: WorldId) -> World {
+    let mut pleroma = Pleroma::new();
+    pleroma.register_field(TEST_FIELD, SoaField::<1>::zeros(1));
+
+    let mut nexus = Nexus::new();
+    nexus.add(WriteWorldId::new());
+    let compiled = nexus.build(&pleroma).unwrap();
+
+    World::new(
+      id,
+      factory::earth(),
+      None,
+      Tessera::default(),
+      pleroma,
+      compiled,
+    )
+  }
+
+  fn partition_count_test_world(id: WorldId, partition_count: usize) -> World {
+    let mut pleroma = Pleroma::new();
+    pleroma.register_field(TEST_FIELD, SoaField::<1>::zeros(1));
+
+    let mut nexus = Nexus::new();
+    nexus.add(WritePartitionCount::new());
+    let compiled = nexus.build(&pleroma).unwrap();
+
+    let mut world = World::new(
+      id,
+      factory::earth(),
+      None,
+      Tessera::default(),
+      pleroma,
+      compiled,
+    );
+    world.set_partition_count(partition_count);
+    world
+  }
 
   #[test]
   fn world_constants_without_primary_have_no_radiation_block() {
@@ -355,5 +529,39 @@ mod tests {
     let constants = world_constants_from_seed(&mercury, Some(&sun));
     let radiation = constants.radiation.expect("radiation derived");
     assert_eq!(radiation.surface_albedo, DEFAULT_SURFACE_ALBEDO);
+  }
+
+  #[test]
+  fn aether_step_ticks_multiple_worlds_from_one_scheduler_graph() {
+    let worlds = (0..4)
+      .map(|id| {
+        let world_id = WorldId(id);
+        (world_id, scheduled_test_world(world_id))
+      })
+      .collect();
+    let mut aether = Aether::from_worlds(worlds, Pool::new(2).unwrap());
+
+    aether.step(3.0).unwrap();
+
+    for id in 0..4 {
+      let world_id = WorldId(id);
+      let world = aether.world(world_id).unwrap();
+      let field: &SoaField<1> = world.pleroma().read(TEST_FIELD).unwrap();
+      assert_eq!(field.state(CellId::from(0)).as_state(), &[id as f64 + 3.0]);
+    }
+  }
+
+  #[test]
+  fn aether_step_passes_world_partition_count_to_stages() {
+    let world_id = WorldId(0);
+    let mut worlds = HashMap::new();
+    worlds.insert(world_id, partition_count_test_world(world_id, 6));
+    let mut aether = Aether::from_worlds(worlds, Pool::new(2).unwrap());
+
+    aether.step(1.0).unwrap();
+
+    let world = aether.world(world_id).unwrap();
+    let field: &SoaField<1> = world.pleroma().read(TEST_FIELD).unwrap();
+    assert_eq!(field.state(CellId::from(0)).as_state(), &[6.0]);
   }
 }

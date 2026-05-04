@@ -53,6 +53,7 @@ impl Queue {
       if let Some(job) = self.pop_back() {
         //let _span = SpanGuard::new("worker::execute", "thread");
         job();
+        Profiler::flush_local();
         continue;
       }
 
@@ -66,6 +67,7 @@ impl Queue {
         if let Some(job) = worker.pop_front() {
           //let _span = SpanGuard::new("worker::steal", "thread");
           job();
+          Profiler::flush_local();
           stolen = true;
           break;
         }

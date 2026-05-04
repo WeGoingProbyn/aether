@@ -73,6 +73,20 @@ where
   where
     S: FieldStorage<N>,
     M: Mesh<D> + ?Sized;
+
+  fn step_with_dt<S, M>(
+    &mut self,
+    config: &SolverConfig,
+    law: &L,
+    flux: &F,
+    dt: f64,
+    state: &mut S,
+    residual: &mut S,
+    mesh: &M,
+    bcs: &BoundaryRegistry<D, N>,
+  ) where
+    S: FieldStorage<N>,
+    M: Mesh<D> + ?Sized;
 }
 
 #[derive(Clone)]
@@ -207,6 +221,34 @@ where
       &self.config,
       &self.law,
       &self.flux,
+      state,
+      residual,
+      mesh,
+      bcs,
+    );
+    self.time += dt;
+    self.step += 1;
+    dt
+  }
+
+  #[profile]
+  pub fn step_with_dt<S, M>(
+    &mut self,
+    dt: f64,
+    state: &mut S,
+    residual: &mut S,
+    mesh: &M,
+    bcs: &BoundaryRegistry<D, N>,
+  ) -> f64
+  where
+    S: FieldStorage<N>,
+    M: Mesh<D> + ?Sized,
+  {
+    self.backend.step_with_dt(
+      &self.config,
+      &self.law,
+      &self.flux,
+      dt,
       state,
       residual,
       mesh,
