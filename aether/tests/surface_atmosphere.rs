@@ -122,7 +122,7 @@ fn surface_atmosphere_world_ticks_with_coupled_models() -> AetherResult<()> {
       .all(|value| value.is_finite() && *value > 0.0)
   );
 
-  let atmosphere_state: &SoaField<5> = world
+  let atmosphere_state: &SoaField<6> = world
     .pleroma()
     .read(atmosphere_fields.euler_state)
     .expect("atmosphere euler state should be registered");

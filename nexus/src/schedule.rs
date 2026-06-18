@@ -20,6 +20,8 @@
 //! layer barriers preserve the same ordering semantics as the original
 //! per-layer dispatch path.
 
+use std::collections::HashMap;
+
 use pleroma::Pleroma;
 use pleroma::prelude::{FieldKey, ResourceKey};
 use tessera::world_mesh::Tessera;
@@ -32,7 +34,8 @@ use utility::{end_profile, inline_profile};
 use crate::{
   constants::WorldConstants,
   stage::{
-    Stage, StageContext, StagePlan, StagePlanTask, StageProgram, WorldView,
+    Stage, StageContext, StagePlan, StagePlanTask, StageProgram, SubsystemId,
+    WorldView,
   },
 };
 
@@ -53,6 +56,10 @@ impl StageId {
 pub struct Nexus {
   stages: Vec<Box<dyn Stage>>,
   ordering_hints: Vec<(StageId, StageId)>,
+  /// Target dt per subsystem. A subsystem absent from this map advances
+  /// once per outer world step (its cadence is the outer dt). Only
+  /// consulted by the multirate driver; single-rate execution ignores it.
+  cadences: HashMap<SubsystemId, f64>,
 }
 
 impl Nexus {
@@ -64,6 +71,25 @@ impl Nexus {
     let id = StageId(self.stages.len());
     self.stages.push(Box::new(stage));
     id
+  }
+
+  /// Register the target time step (in simulation seconds) for a
+  /// subsystem. Stages reporting this `SubsystemId` from
+  /// [`Stage::subsystem`] are subcycled by the multirate driver so that
+  /// `ceil(outer_dt / target_dt)` inner steps cover one outer world step.
+  /// Subsystems without a registered cadence advance once per outer tick.
+  pub fn set_subsystem_cadence(&mut self, subsystem: SubsystemId, dt: f64) {
+    self.cadences.insert(subsystem, dt);
+  }
+
+  /// Builder form of [`Nexus::set_subsystem_cadence`].
+  pub fn with_subsystem_cadence(
+    mut self,
+    subsystem: SubsystemId,
+    dt: f64,
+  ) -> Self {
+    self.set_subsystem_cadence(subsystem, dt);
+    self
   }
 
   /// Force `b` to run after `a` even when their declared reads/writes
@@ -115,10 +141,17 @@ impl Nexus {
 
     let layers = build_layers(&graph, n)?;
 
+    // Record each stage's subsystem so the multirate driver can group
+    // stages by cadence without re-querying the boxed trait objects.
+    let subsystem_ids: Vec<SubsystemId> =
+      self.stages.iter().map(|stage| stage.subsystem()).collect();
+
     Ok(CompiledNexus {
       stages: self.stages,
       layers,
       topo_order,
+      subsystem_ids,
+      cadences: self.cadences,
     })
   }
 }
@@ -187,6 +220,11 @@ pub struct CompiledNexus {
   stages: Vec<Box<dyn Stage>>,
   layers: Vec<Vec<StageId>>,
   topo_order: Vec<usize>,
+  /// Subsystem each stage belongs to, indexed by `StageId`. Captured at
+  /// build time so the multirate driver can group stages by cadence.
+  subsystem_ids: Vec<SubsystemId>,
+  /// Target dt per subsystem (see [`Nexus::set_subsystem_cadence`]).
+  cadences: HashMap<SubsystemId, f64>,
 }
 
 pub struct StageTask<'a> {
@@ -218,6 +256,37 @@ impl CompiledNexus {
     &self.topo_order
   }
 
+  /// Subsystem a stage was assigned at build time.
+  pub fn subsystem_of(&self, stage: StageId) -> SubsystemId {
+    self.subsystem_ids[stage.0]
+  }
+
+  /// Per-stage subsystem assignment, indexed by `StageId`.
+  pub fn subsystem_ids(&self) -> &[SubsystemId] {
+    &self.subsystem_ids
+  }
+
+  /// Distinct subsystems present in this nexus, in ascending id order.
+  pub fn subsystems(&self) -> Vec<SubsystemId> {
+    let mut ids: Vec<SubsystemId> = self.subsystem_ids.clone();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+  }
+
+  /// Registered target dt for a subsystem, if any. `None` means the
+  /// subsystem advances once per outer world step at the outer dt.
+  pub fn cadence(&self, subsystem: SubsystemId) -> Option<f64> {
+    self.cadences.get(&subsystem).copied()
+  }
+
+  /// `true` when more than one subsystem is present or any cadence is
+  /// registered — i.e. the multirate driver has something to do. When
+  /// `false`, single-rate execution is exactly equivalent.
+  pub fn is_multirate(&self) -> bool {
+    !self.cadences.is_empty() || self.subsystems().len() > 1
+  }
+
   pub fn tick(
     &mut self,
     world_id: WorldId,
@@ -242,6 +311,21 @@ impl CompiledNexus {
     dt: f64,
     partition_count: usize,
   ) -> AetherResult<()> {
+    // Multirate worlds advance each subsystem on its own cadence; the
+    // single-rate path is the original fused single-pass DAG and is exactly
+    // equivalent when only the default subsystem (no cadence) is present.
+    if self.is_multirate() {
+      return self.multirate_tick(
+        world_id,
+        tessera,
+        constants,
+        pleroma,
+        pool,
+        dt,
+        partition_count,
+      );
+    }
+
     let tasks = self.build_tick_tasks(
       world_id,
       tessera,
@@ -251,33 +335,57 @@ impl CompiledNexus {
       dt,
       partition_count,
     )?;
-    let mut graph = ScopedTaskGraph::new();
-    let mut node_ids = Vec::with_capacity(tasks.len());
+    run_task_graph(pool, tasks)
+  }
 
-    for task in tasks {
-      let StageTask {
-        name,
-        task,
-        predecessors,
-      } = task;
-      let node = match task {
-        ScheduledStageTask::Worker(task) => graph.add(task),
-        ScheduledStageTask::Program(program) => {
-          graph.add_scheduler(move |scheduler| {
-            inline_profile!(name);
-            let result = program.execute(scheduler);
-            end_profile!(name);
-            result
-          })
-        }
-      };
-      for predecessor in predecessors {
-        graph.dependency(node, node_ids[predecessor])?;
+  /// Number of inner steps a subsystem takes to cover one outer step of
+  /// `outer_dt`: `ceil(outer_dt / cadence)`, clamped to at least one.
+  /// Subsystems without a registered cadence (or whose cadence is ≥
+  /// `outer_dt`) step exactly once.
+  fn substep_count(&self, subsystem: SubsystemId, outer_dt: f64) -> usize {
+    match self.cadence(subsystem) {
+      Some(c) if c.is_finite() && c > 0.0 && c < outer_dt => {
+        (outer_dt / c).ceil() as usize
       }
-      node_ids.push(node);
+      _ => 1,
     }
+    .max(1)
+  }
 
-    pool.execute_scoped(graph)
+  /// Multirate driver: operator-split by subsystem. Subsystems run in
+  /// ascending `SubsystemId` order (a deterministic Gauss–Seidel split —
+  /// each subsystem sees the state left by those before it this outer
+  /// step), and each is subcycled `substep_count` times at its own inner
+  /// dt. Intra-subsystem ordering is the original data-flow DAG, restricted
+  /// to that subsystem's stages.
+  fn multirate_tick(
+    &mut self,
+    world_id: WorldId,
+    tessera: &Tessera,
+    constants: &WorldConstants,
+    pleroma: &mut Pleroma,
+    pool: &Pool,
+    outer_dt: f64,
+    partition_count: usize,
+  ) -> AetherResult<()> {
+    for subsystem in self.subsystems() {
+      let n = self.substep_count(subsystem, outer_dt);
+      let inner_dt = outer_dt / n as f64;
+      for _ in 0..n {
+        let tasks = self.build_tick_tasks_filtered(
+          world_id,
+          tessera,
+          constants,
+          pleroma,
+          pool,
+          inner_dt,
+          partition_count,
+          Some(subsystem),
+        )?;
+        run_task_graph(pool, tasks)?;
+      }
+    }
+    Ok(())
   }
 
   pub fn build_tick_tasks<'a>(
@@ -290,10 +398,41 @@ impl CompiledNexus {
     dt: f64,
     partition_count: usize,
   ) -> AetherResult<Vec<StageTask<'a>>> {
+    self.build_tick_tasks_filtered(
+      world_id,
+      tessera,
+      constants,
+      pleroma,
+      pool,
+      dt,
+      partition_count,
+      None,
+    )
+  }
+
+  /// Build scheduler tasks for the stages in `layers`, optionally
+  /// restricting to a single `subsystem`. When a subsystem filter is given,
+  /// stages on other subsystems are skipped; the previous-layer barrier is
+  /// carried across fully-skipped layers so that intra-subsystem
+  /// dependencies separated by another subsystem's stages still serialise
+  /// correctly.
+  #[allow(clippy::too_many_arguments)]
+  pub fn build_tick_tasks_filtered<'a>(
+    &'a mut self,
+    world_id: WorldId,
+    tessera: &'a Tessera,
+    constants: &'a WorldConstants,
+    pleroma: &'a mut Pleroma,
+    pool: &'a Pool,
+    dt: f64,
+    partition_count: usize,
+    subsystem: Option<SubsystemId>,
+  ) -> AetherResult<Vec<StageTask<'a>>> {
     inline_profile!("nexus.tick.layer_build_tasks");
 
     let access = pleroma.schedule_access();
     let layers = self.layers.clone();
+    let subsystem_ids = self.subsystem_ids.clone();
     let mut tasks = Vec::with_capacity(self.stages.len());
     let stages = self.stages.as_mut_ptr();
     let mut previous_layer_terminals: Vec<usize> = Vec::new();
@@ -302,6 +441,11 @@ impl CompiledNexus {
       let mut current_layer_terminals = Vec::new();
 
       for stage_id in layer {
+        if let Some(filter) = subsystem {
+          if subsystem_ids[stage_id.0] != filter {
+            continue;
+          }
+        }
         let stage = unsafe { &mut *stages.add(stage_id.0) };
         let reads = stage.reads().to_vec();
         let writes = stage.writes().to_vec();
@@ -396,12 +540,50 @@ impl CompiledNexus {
         }
       }
 
-      previous_layer_terminals = current_layer_terminals;
+      // Carry the barrier across layers that contributed no tasks (every
+      // stage filtered out), so a later included layer still waits on the
+      // last included layer. In the unfiltered path every layer yields at
+      // least one task, so this is always a plain overwrite.
+      if !current_layer_terminals.is_empty() {
+        previous_layer_terminals = current_layer_terminals;
+      }
     }
 
     end_profile!("nexus.tick.layer_build_tasks");
     Ok(tasks)
   }
+}
+
+/// Assemble the scheduler graph from prebuilt `tasks` and run it to
+/// completion on `pool`. Shared by the single-rate and multirate paths.
+fn run_task_graph(pool: &Pool, tasks: Vec<StageTask<'_>>) -> AetherResult<()> {
+  let mut graph = ScopedTaskGraph::new();
+  let mut node_ids = Vec::with_capacity(tasks.len());
+
+  for task in tasks {
+    let StageTask {
+      name,
+      task,
+      predecessors,
+    } = task;
+    let node = match task {
+      ScheduledStageTask::Worker(task) => graph.add(task),
+      ScheduledStageTask::Program(program) => {
+        graph.add_scheduler(move |scheduler| {
+          inline_profile!(name);
+          let result = program.execute(scheduler);
+          end_profile!(name);
+          result
+        })
+      }
+    };
+    for predecessor in predecessors {
+      graph.dependency(node, node_ids[predecessor])?;
+    }
+    node_ids.push(node);
+  }
+
+  pool.execute_scoped(graph)
 }
 
 #[derive(Debug)]

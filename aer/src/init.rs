@@ -1,7 +1,7 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use continuum::model::Euler3D;
+use continuum::model::MoistEuler3D;
 use nexus::{SoaField, WorldConstants};
 use tessera::mesh::Mesh;
 use utility::domain::CellId;
@@ -88,20 +88,22 @@ impl AtmosphereSpec {
     self.reference_pressure / (self.gas_constant * self.reference_temperature)
   }
 
-  /// Conserved Euler state `[rho, rho_u, rho_v, rho_w, energy]` at rest.
-  pub fn euler_rest_state(&self) -> [f64; 5] {
+  /// Conserved moist Euler state `[rho, rho_u, rho_v, rho_w, energy, rho_q]`
+  /// at rest. The atmosphere is initialised dry (`rho_q = 0`); moisture
+  /// enters via evaporation at the air–sea interface.
+  pub fn euler_rest_state(&self) -> [f64; 6] {
     let rho = self.reference_density();
     let internal_energy = self.reference_pressure / (self.gamma - 1.0);
-    [rho, 0.0, 0.0, 0.0, internal_energy]
+    [rho, 0.0, 0.0, 0.0, internal_energy, 0.0]
   }
 
   pub fn temperature_field(&self, cell_count: usize) -> SoaField<1> {
     SoaField::<1>::from_fn(cell_count, |_| [self.reference_temperature])
   }
 
-  pub fn euler_state_field(&self, cell_count: usize) -> SoaField<5> {
+  pub fn euler_state_field(&self, cell_count: usize) -> SoaField<6> {
     let state = self.euler_rest_state();
-    SoaField::<5>::from_fn(cell_count, |_| state)
+    SoaField::<6>::from_fn(cell_count, |_| state)
   }
 
   /// Isothermal hydrostatic Euler state at rest over `mesh`.
@@ -113,7 +115,7 @@ impl AtmosphereSpec {
     &self,
     mesh: &M,
     reference_radius: f64,
-  ) -> AetherResult<SoaField<5>>
+  ) -> AetherResult<SoaField<6>>
   where
     M: Mesh<3> + ?Sized,
   {
@@ -136,7 +138,7 @@ impl AtmosphereSpec {
       );
     }
 
-    Ok(SoaField::<5>::from_fn(mesh.cell_count(), |cell| {
+    Ok(SoaField::<6>::from_fn(mesh.cell_count(), |cell| {
       let r = cell_radius(mesh, cell);
       let pressure = if scale_height.is_infinite() {
         self.reference_pressure
@@ -145,16 +147,19 @@ impl AtmosphereSpec {
       };
       let rho = pressure / (self.gas_constant * self.reference_temperature);
       let energy = pressure / (self.gamma - 1.0);
-      [rho, 0.0, 0.0, 0.0, energy]
+      [rho, 0.0, 0.0, 0.0, energy, 0.0]
     }))
   }
 
-  pub fn euler3d(&self) -> Euler3D {
-    Euler3D::new(self.gamma)
+  pub fn moist_euler3d(&self) -> MoistEuler3D {
+    MoistEuler3D::new(self.gamma)
   }
 
-  pub fn euler3d_with_radial_gravity(&self, gravity: Vec<[f64; 3]>) -> Euler3D {
-    Euler3D::with_per_cell_gravity(self.gamma, gravity)
+  pub fn moist_euler3d_with_radial_gravity(
+    &self,
+    gravity: Vec<[f64; 3]>,
+  ) -> MoistEuler3D {
+    MoistEuler3D::with_per_cell_gravity(self.gamma, gravity)
   }
 
   fn validate(&self) -> AetherResult<()> {

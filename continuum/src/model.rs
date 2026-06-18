@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use utility::domain::{CellId, Point};
-use utility::{maths::vector::Vector, profile, StateDiagnostics};
+use utility::{StateDiagnostics, maths::vector::Vector, profile};
 
 use tessera::geometry::CellMetrics;
 
@@ -358,6 +358,184 @@ impl LawFieldSchema<3, 5> for Euler3D {
     out[1] = state[2] / rho;
     out[2] = state[3] / rho;
     out[3] = self.pressure(state);
+  }
+}
+
+/// Compressible Euler in 3D carrying one advected moisture tracer.
+/// State = `[ρ, ρu, ρv, ρw, E, ρq]`, where `q` is the specific humidity
+/// (water-vapour mass fraction).
+///
+/// In this first-proof formulation moisture is a *passive but
+/// mass-conserved* scalar: the dynamics (pressure, density, wave speeds)
+/// are identical to dry [`Euler3D`], and `ρq` is transported by the same
+/// velocity field. Phase changes — evaporation adding `ρq`, condensation
+/// releasing latent heat into `E` and precipitating it out — are applied
+/// by separate physics stages (air–sea flux, microphysics), not by this
+/// law's flux. The law simply guarantees water is advected conservatively.
+///
+/// Implemented by composition over [`Euler3D`] so the gravity / energy /
+/// positivity logic is shared rather than duplicated.
+pub struct MoistEuler3D {
+  dry: Euler3D,
+  /// Planetary rotation vector Ω (rad/s) in the world frame. Drives the
+  /// Coriolis momentum source `−2·Ω×(ρu)` that organises rotating flow
+  /// into geostrophic balance (cyclones, jets). Zero = non-rotating.
+  omega: [f64; 3],
+}
+
+impl MoistEuler3D {
+  /// Construct without gravity (free flow).
+  pub fn new(gamma: f64) -> Self {
+    Self {
+      dry: Euler3D::new(gamma),
+      omega: [0.0; 3],
+    }
+  }
+
+  /// Construct with a constant gravity vector (force per unit mass).
+  pub fn with_gravity(gamma: f64, gravity: [f64; 3]) -> Self {
+    Self {
+      dry: Euler3D::with_gravity(gamma, gravity),
+      omega: [0.0; 3],
+    }
+  }
+
+  /// Construct with a precomputed per-cell gravity field — right for radial
+  /// gravity on a sphere shell. See [`Euler3D::with_per_cell_gravity`].
+  pub fn with_per_cell_gravity(gamma: f64, gravity: Vec<[f64; 3]>) -> Self {
+    Self {
+      dry: Euler3D::with_per_cell_gravity(gamma, gravity),
+      omega: [0.0; 3],
+    }
+  }
+
+  /// Set the planetary rotation vector Ω (rad/s, world frame) used for the
+  /// Coriolis source. Defaults to no rotation.
+  pub fn with_rotation(mut self, omega: [f64; 3]) -> Self {
+    self.omega = omega;
+    self
+  }
+
+  /// Planetary rotation vector Ω (rad/s) in the world frame.
+  pub fn rotation(&self) -> [f64; 3] {
+    self.omega
+  }
+
+  /// Borrow the underlying dry Euler law (pressure / velocity helpers).
+  pub fn dry(&self) -> &Euler3D {
+    &self.dry
+  }
+
+  /// The dry 5-component sub-state `[ρ, ρu, ρv, ρw, E]`.
+  pub fn dry_state(state: &[f64; 6]) -> [f64; 5] {
+    [state[0], state[1], state[2], state[3], state[4]]
+  }
+
+  pub fn velocity(&self, state: &[f64; 6]) -> [f64; 3] {
+    self.dry.velocity(&Self::dry_state(state))
+  }
+
+  pub fn pressure(&self, state: &[f64; 6]) -> f64 {
+    self.dry.pressure(&Self::dry_state(state))
+  }
+
+  pub fn gamma(&self) -> f64 {
+    self.dry.gamma()
+  }
+
+  /// Specific humidity `q = ρq / ρ` (water-vapour mass fraction).
+  pub fn specific_humidity(&self, state: &[f64; 6]) -> f64 {
+    state[5] / state[0]
+  }
+}
+
+impl ConservationLaw<3, 6> for MoistEuler3D {
+  fn flux(&self, state: &[f64; 6]) -> [[f64; 6]; 3] {
+    let dry = Self::dry_state(state);
+    let dry_flux = self.dry.flux(&dry);
+    let rho = state[0];
+    let rho_q = state[5];
+    // Advective flux of ρq in each direction is ρq · u_d = ρq · (ρu_d / ρ).
+    let mut out = [[0.0; 6]; 3];
+    for d in 0..3 {
+      for i in 0..5 {
+        out[d][i] = dry_flux[d][i];
+      }
+      let u_d = state[1 + d] / rho;
+      out[d][5] = rho_q * u_d;
+    }
+    out
+  }
+
+  fn max_wave_speed(&self, state: &[f64; 6]) -> f64 {
+    // Tracer advection speed |u| never exceeds the acoustic bound used by
+    // the dry law, so the dry estimate also bounds the moist system.
+    self.dry.max_wave_speed(&Self::dry_state(state))
+  }
+
+  fn source(
+    &self,
+    state: &[f64; 6],
+    cell: CellId,
+    centroid: &Point<3>,
+    metrics: &CellMetrics<3>,
+  ) -> [f64; 6] {
+    let dry = self
+      .dry
+      .source(&Self::dry_state(state), cell, centroid, metrics);
+    // Coriolis: −2·Ω×(ρu) on momentum. It does no work (⊥ velocity), so
+    // there is no energy term, and it does not affect the moisture tracer.
+    let m = [state[1], state[2], state[3]];
+    let o = self.omega;
+    let coriolis = [
+      -2.0 * (o[1] * m[2] - o[2] * m[1]),
+      -2.0 * (o[2] * m[0] - o[0] * m[2]),
+      -2.0 * (o[0] * m[1] - o[1] * m[0]),
+    ];
+    [
+      dry[0],
+      dry[1] + coriolis[0],
+      dry[2] + coriolis[1],
+      dry[3] + coriolis[2],
+      dry[4],
+      0.0,
+    ]
+  }
+
+  fn fix_state(&self, state: &mut [f64; 6]) {
+    let mut dry = Self::dry_state(state);
+    self.dry.fix_state(&mut dry);
+    state[..5].copy_from_slice(&dry);
+    // Moisture mass cannot go negative.
+    if state[5] < 0.0 {
+      state[5] = 0.0;
+    }
+  }
+}
+
+impl LawFieldSchema<3, 6> for MoistEuler3D {
+  fn conserved_field_names(&self) -> [&'static str; 6] {
+    ["rho", "rho_u", "rho_v", "rho_w", "energy", "rho_q"]
+  }
+
+  fn derived_field_names(&self) -> &'static [&'static str] {
+    &["u", "v", "w", "pressure", "humidity"]
+  }
+
+  fn write_derived_fields(
+    &self,
+    state: &[f64; 6],
+    _centroid: &Point<3>,
+    _metrics: &CellMetrics<3>,
+    out: &mut [f64],
+  ) {
+    debug_assert_eq!(out.len(), 5);
+    let rho = state[0];
+    out[0] = state[1] / rho;
+    out[1] = state[2] / rho;
+    out[2] = state[3] / rho;
+    out[3] = self.pressure(state);
+    out[4] = self.specific_humidity(state);
   }
 }
 

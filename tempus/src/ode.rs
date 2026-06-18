@@ -11,6 +11,12 @@ pub trait OdeStepper<const D: usize, S: OdeSystem<D>> {
 }
 
 /// Second-order system in the form `d²q/dt² = a(t, q, v)`.
-pub trait SecondOrderSystem<const D: usize>  {
-  fn acceleration(&self, t: f64, q: &[Vector<f64, D>], v: &[Vector<f64, D>], a: &mut [Vector<f64, D>]);
+pub trait SecondOrderSystem<const D: usize> {
+  fn acceleration(
+    &self,
+    t: f64,
+    q: &[Vector<f64, D>],
+    v: &[Vector<f64, D>],
+    a: &mut [Vector<f64, D>],
+  );
 }

@@ -3,7 +3,7 @@ use utility::maths::vector::Vector;
 use crate::ode::{OdeStepper, OdeSystem, SecondOrderSystem};
 
 #[derive(Clone, Debug, Default)]
-pub struct ForwardEuler<const D: usize>  {
+pub struct ForwardEuler<const D: usize> {
   rhs: Vec<Vector<f64, D>>,
 }
 
@@ -50,23 +50,30 @@ impl<const D: usize, S: OdeSystem<D>> OdeStepper<D, S> for Rk4<D> {
 
     system.rhs(t, y, &mut self.k1);
 
-    for ((scratch, y_), k1) in self.scratch.iter_mut().zip(&mut *y).zip(&mut self.k1) {
+    for ((scratch, y_), k1) in
+      self.scratch.iter_mut().zip(&mut *y).zip(&mut self.k1)
+    {
       *scratch = *y_ + (*k1 * 0.5 * dt);
     }
     system.rhs(t + 0.5 * dt, &self.scratch, &mut self.k2);
 
-    for ((scratch, y_), k2) in self.scratch.iter_mut().zip(&mut *y).zip(&mut self.k2) {
+    for ((scratch, y_), k2) in
+      self.scratch.iter_mut().zip(&mut *y).zip(&mut self.k2)
+    {
       *scratch = *y_ + (*k2 * 0.5 * dt);
     }
     system.rhs(t + 0.5 * dt, &self.scratch, &mut self.k3);
 
-    for ((scratch, y_), k3) in self.scratch.iter_mut().zip(&mut *y).zip(&mut self.k3) {
+    for ((scratch, y_), k3) in
+      self.scratch.iter_mut().zip(&mut *y).zip(&mut self.k3)
+    {
       *scratch = *y_ + (*k3 * dt);
     }
     system.rhs(t + dt, &self.scratch, &mut self.k4);
 
     for (i, value) in y.iter_mut().enumerate() {
-      *value += (self.k1[i] + self.k2[i] * 2.0 + self.k3[i] * 2.0 + self.k4[i]) * (dt / 6.0);
+      *value += (self.k1[i] + self.k2[i] * 2.0 + self.k3[i] * 2.0 + self.k4[i])
+        * (dt / 6.0);
     }
   }
 }

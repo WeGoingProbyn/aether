@@ -7,15 +7,15 @@
 //! physics crate. Physics crates own their state layout and call these kernels
 //! from their own stages/models.
 
-pub mod ode;
 pub mod integrator;
+pub mod ode;
 
 #[cfg(test)]
 mod tests {
   use utility::maths::vector::Vector;
 
-use super::ode::*;
   use super::integrator::*;
+  use super::ode::*;
 
   struct Exponential;
 
@@ -28,7 +28,13 @@ use super::ode::*;
   struct HarmonicOscillator;
 
   impl SecondOrderSystem<1> for HarmonicOscillator {
-    fn acceleration(&self, _t: f64, q: &[Vector<f64, 1>], _v: &[Vector<f64, 1>], a: &mut [Vector<f64, 1>]) {
+    fn acceleration(
+      &self,
+      _t: f64,
+      q: &[Vector<f64, 1>],
+      _v: &[Vector<f64, 1>],
+      a: &mut [Vector<f64, 1>],
+    ) {
       a[0][0] = -q[0][0];
     }
   }

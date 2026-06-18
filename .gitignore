@@ -27,3 +27,4 @@ output/
 #.idea/
 
 .codex
+.aider*

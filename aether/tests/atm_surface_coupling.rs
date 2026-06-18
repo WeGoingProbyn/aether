@@ -127,7 +127,7 @@ fn full_stack_atm_surface_radiation_runs_without_blowup() -> AetherResult<()> {
     .pleroma()
     .read(surface_fields.temperature)
     .expect("surface temperature");
-  let atmosphere_state: &SoaField<5> = world
+  let atmosphere_state: &SoaField<6> = world
     .pleroma()
     .read(atmosphere_fields.euler_state)
     .expect("atmosphere euler state");

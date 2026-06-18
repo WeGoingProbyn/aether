@@ -73,6 +73,16 @@ pub enum FieldName {
   Humidity,
   RadiativeHeatingTendency,
   NetSurfaceFlux,
+  /// Upward water-vapour mass flux (kg/m²/s) from the sea surface into the
+  /// atmosphere — the source side of the hydrological cycle.
+  EvaporationFlux,
+  /// Downward liquid-water mass flux (kg/m²/s) condensing out of the
+  /// atmosphere and returning to the surface/ocean.
+  PrecipitationFlux,
+  /// Sea-surface temperature (K) mapped onto the atmosphere mesh from the
+  /// ocean's top layer, so the air–sea evaporation flux can read it as a
+  /// field on its own mesh.
+  SeaSurfaceTemperature,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -80,6 +90,10 @@ pub enum MeshType {
   Atmosphere,
   Surface,
   Mantle,
+  /// Liquid water column beneath the surface skin (a radial stack of ocean
+  /// layers). Owns sea temperature / heat content; the top layer is the
+  /// sea surface that exchanges heat and water with the atmosphere.
+  Ocean,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -89,6 +103,7 @@ impl MeshKey {
   pub const ATMOSPHERE: MeshKey = MeshKey(MeshType::Atmosphere);
   pub const SURFACE: MeshKey = MeshKey(MeshType::Surface);
   pub const MANTLE: MeshKey = MeshKey(MeshType::Mantle);
+  pub const OCEAN: MeshKey = MeshKey(MeshType::Ocean);
 
   pub const fn new(mesh_type: MeshType) -> Self {
     MeshKey(mesh_type)

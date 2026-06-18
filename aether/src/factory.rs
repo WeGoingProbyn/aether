@@ -168,6 +168,10 @@ impl WorldFactory {
     self.with_cube_sphere_shell(MeshKey::MANTLE, spec)
   }
 
+  pub fn cube_sphere_ocean(self, spec: CubeSphereShellSpec) -> Self {
+    self.with_cube_sphere_shell(MeshKey::OCEAN, spec)
+  }
+
   pub fn add_coupler(
     &mut self,
     mesh_a: MeshKey,

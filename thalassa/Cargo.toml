@@ -1,0 +1,13 @@
+[package]
+name = "thalassa"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[dependencies]
+nexus = { path = "../nexus" }
+tessera = { path = "../tessera" }
+utility = { path = "../utility" }
+
+[dev-dependencies]
+pleroma = { path = "../pleroma" }

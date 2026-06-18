@@ -10,7 +10,7 @@ use utility::error::{AetherError, AetherResult};
 
 use crate::{
   diagnostics::EulerDiagnosticsStep,
-  dynamics::{BackgroundCorrectionMode, EulerAtmosphereStep},
+  dynamics::{BackgroundCorrectionMode, EulerAtmosphereStep, RotationMode},
   error::AerError,
   init::AtmosphereSpec,
   thermal::TemperatureTendencyToEulerEnergyStep,
@@ -25,6 +25,9 @@ pub struct AtmosphereFields {
   pub velocity_x: FieldKey,
   pub velocity_y: FieldKey,
   pub velocity_z: FieldKey,
+  /// Specific humidity `q` diagnosed from the prognostic `ρq` carried in
+  /// the 6th Euler component. Read by microphysics and the air–sea flux.
+  pub humidity: FieldKey,
 }
 
 impl AtmosphereFields {
@@ -37,10 +40,11 @@ impl AtmosphereFields {
       velocity_x: FieldKey::new(mesh, FieldName::VelocityX),
       velocity_y: FieldKey::new(mesh, FieldName::VelocityY),
       velocity_z: FieldKey::new(mesh, FieldName::VelocityZ),
+      humidity: FieldKey::new(mesh, FieldName::Humidity),
     }
   }
 
-  pub fn all(self) -> [FieldKey; 7] {
+  pub fn all(self) -> [FieldKey; 8] {
     [
       self.temperature,
       self.temperature_tendency,
@@ -49,6 +53,7 @@ impl AtmosphereFields {
       self.velocity_x,
       self.velocity_y,
       self.velocity_z,
+      self.humidity,
     ]
   }
 }
@@ -65,6 +70,7 @@ pub struct AtmosphereModel {
   mesh: MeshKey,
   fields: AtmosphereFields,
   cfl: f64,
+  rotation: RotationMode,
   background_correction: BackgroundCorrectionMode,
   /// Extra dT/dt fields aer's energy stage should sum into the Euler
   /// energy update on top of `fields.temperature_tendency`. Lumen's
@@ -78,9 +84,17 @@ impl AtmosphereModel {
       mesh,
       fields: AtmosphereFields::for_mesh(mesh),
       cfl: 0.25,
+      rotation: RotationMode::None,
       background_correction: BackgroundCorrectionMode::None,
       extra_tendencies: Vec::new(),
     }
+  }
+
+  /// Enable the planetary Coriolis source (rotation about world +z at the
+  /// body's angular velocity) — the dynamical driver of weather systems.
+  pub fn with_rotation(mut self) -> Self {
+    self.rotation = RotationMode::Planetary;
+    self
   }
 
   pub fn with_fields(mut self, fields: AtmosphereFields) -> Self {
@@ -174,6 +188,8 @@ impl AtmosphereModel {
       .register_field(self.fields.velocity_y, SoaField::<1>::zeros(cell_count));
     pleroma
       .register_field(self.fields.velocity_z, SoaField::<1>::zeros(cell_count));
+    pleroma
+      .register_field(self.fields.humidity, SoaField::<1>::zeros(cell_count));
 
     Ok(())
   }
@@ -198,7 +214,8 @@ impl AtmosphereModel {
         self.fields.euler_state,
         self.cfl,
       )?
-      .with_background_correction(self.background_correction),
+      .with_background_correction(self.background_correction)
+      .with_rotation_mode(self.rotation),
     );
     let diagnostics = nexus.add(EulerDiagnosticsStep::new(
       self.mesh,
@@ -208,6 +225,7 @@ impl AtmosphereModel {
       self.fields.velocity_x,
       self.fields.velocity_y,
       self.fields.velocity_z,
+      self.fields.humidity,
     )?);
 
     Ok(AtmosphereStageIds {

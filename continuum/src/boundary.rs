@@ -67,6 +67,36 @@ impl BoundaryCondition<3, 5> for ReflectiveWall {
   }
 }
 
+// 3D moist Euler version (6-state): reflect the velocity exactly as the
+// dry wall does and carry energy + the moisture tracer through unchanged
+// (zero-gradient on water vapour at a solid/ground wall).
+impl BoundaryCondition<3, 6> for ReflectiveWall {
+  fn ghost_state(
+    &self,
+    interior: &[f64; 6],
+    normal: &Vector<f64, 3>,
+  ) -> [f64; 6] {
+    let rho = interior[0];
+    let u = interior[1] / rho;
+    let v = interior[2] / rho;
+    let w = interior[3] / rho;
+
+    let vn = u * normal[0] + v * normal[1] + w * normal[2];
+    let u_g = u - 2.0 * vn * normal[0];
+    let v_g = v - 2.0 * vn * normal[1];
+    let w_g = w - 2.0 * vn * normal[2];
+
+    [
+      rho,
+      rho * u_g,
+      rho * v_g,
+      rho * w_g,
+      interior[4],
+      interior[5],
+    ]
+  }
+}
+
 pub struct BoundaryRegistry<const D: usize, const N: usize> {
   entries: Vec<(BoundaryTag, Box<dyn BoundaryCondition<D, N>>)>,
 }

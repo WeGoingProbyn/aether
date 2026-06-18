@@ -25,8 +25,9 @@ pub struct EulerDiagnosticsStep {
   velocity_x: FieldKey,
   velocity_y: FieldKey,
   velocity_z: FieldKey,
+  humidity: FieldKey,
   reads: [FieldKey; 1],
-  writes: [FieldKey; 5],
+  writes: [FieldKey; 6],
 }
 
 impl EulerDiagnosticsStep {
@@ -38,6 +39,7 @@ impl EulerDiagnosticsStep {
     velocity_x: FieldKey,
     velocity_y: FieldKey,
     velocity_z: FieldKey,
+    humidity: FieldKey,
   ) -> AetherResult<Self> {
     validate_mesh_fields(
       mesh,
@@ -48,6 +50,7 @@ impl EulerDiagnosticsStep {
         velocity_x,
         velocity_y,
         velocity_z,
+        humidity,
       ],
     )?;
 
@@ -59,8 +62,16 @@ impl EulerDiagnosticsStep {
       velocity_x,
       velocity_y,
       velocity_z,
+      humidity,
       reads: [state],
-      writes: [temperature, pressure, velocity_x, velocity_y, velocity_z],
+      writes: [
+        temperature,
+        pressure,
+        velocity_x,
+        velocity_y,
+        velocity_z,
+        humidity,
+      ],
     })
   }
 
@@ -107,7 +118,7 @@ impl Stage for EulerDiagnosticsStep {
 
     let spec = AtmosphereSpec::from_world_constants(ctx.world.constants)?;
     let diagnostics = {
-      let state: &SoaField<5> =
+      let state: &SoaField<6> =
         ctx.world.fields.read(self.state).ok_or_else(|| {
           AetherError::new(AerError::MissingReadField)
             .context(format!("{:?}", self.state))
@@ -156,6 +167,12 @@ impl Stage for EulerDiagnosticsStep {
       &diagnostics.velocity_z,
       mesh_cell_count,
     )?;
+    write_scalar_field(
+      &mut ctx.world.fields,
+      self.humidity,
+      &diagnostics.humidity,
+      mesh_cell_count,
+    )?;
 
     Ok(())
   }
@@ -167,10 +184,11 @@ struct EulerDiagnostics {
   velocity_x: Vec<f64>,
   velocity_y: Vec<f64>,
   velocity_z: Vec<f64>,
+  humidity: Vec<f64>,
 }
 
 fn derive_diagnostics(
-  state: &SoaField<5>,
+  state: &SoaField<6>,
   gamma: f64,
   gas_constant: f64,
 ) -> AetherResult<EulerDiagnostics> {
@@ -179,6 +197,7 @@ fn derive_diagnostics(
   let mut velocity_x = Vec::with_capacity(state.len());
   let mut velocity_y = Vec::with_capacity(state.len());
   let mut velocity_z = Vec::with_capacity(state.len());
+  let mut humidity = Vec::with_capacity(state.len());
 
   for i in 0..state.len() {
     let cell = CellId::from(i);
@@ -204,12 +223,15 @@ fn derive_diagnostics(
           .context(format!("cell {} pressure {}, temperature {}", i, p, t)),
       );
     }
+    // Specific humidity q = ρq / ρ (water-vapour mass fraction).
+    let q = s[5] * inv_rho;
 
     temperature.push(t);
     pressure.push(p);
     velocity_x.push(u);
     velocity_y.push(v);
     velocity_z.push(w);
+    humidity.push(q);
   }
 
   Ok(EulerDiagnostics {
@@ -218,6 +240,7 @@ fn derive_diagnostics(
     velocity_x,
     velocity_y,
     velocity_z,
+    humidity,
   })
 }
 
@@ -290,6 +313,8 @@ mod tests {
     FieldKey::new(MeshKey::ATMOSPHERE, FieldName::VelocityY);
   const VELOCITY_Z: FieldKey =
     FieldKey::new(MeshKey::ATMOSPHERE, FieldName::VelocityZ);
+  const HUMIDITY: FieldKey =
+    FieldKey::new(MeshKey::ATMOSPHERE, FieldName::Humidity);
 
   fn constants() -> WorldConstants {
     WorldConstants {
@@ -333,16 +358,18 @@ mod tests {
         + velocity[2] * velocity[2]);
     let energy = pressure / (gamma - 1.0) + kinetic;
 
+    let humidity_q = 0.012;
     let mut pleroma = Pleroma::new();
     pleroma.register_field(
       STATE,
-      SoaField::<5>::from_fn(1, |_| {
+      SoaField::<6>::from_fn(1, |_| {
         [
           rho,
           rho * velocity[0],
           rho * velocity[1],
           rho * velocity[2],
           energy,
+          rho * humidity_q,
         ]
       }),
     );
@@ -351,6 +378,7 @@ mod tests {
     pleroma.register_field(VELOCITY_X, SoaField::<1>::zeros(1));
     pleroma.register_field(VELOCITY_Y, SoaField::<1>::zeros(1));
     pleroma.register_field(VELOCITY_Z, SoaField::<1>::zeros(1));
+    pleroma.register_field(HUMIDITY, SoaField::<1>::zeros(1));
 
     let mut nexus = Nexus::new();
     nexus.add(
@@ -362,6 +390,7 @@ mod tests {
         VELOCITY_X,
         VELOCITY_Y,
         VELOCITY_Z,
+        HUMIDITY,
       )
       .unwrap(),
     );
@@ -382,11 +411,13 @@ mod tests {
     let u: &SoaField<1> = pleroma.read(VELOCITY_X).unwrap();
     let v: &SoaField<1> = pleroma.read(VELOCITY_Y).unwrap();
     let w: &SoaField<1> = pleroma.read(VELOCITY_Z).unwrap();
+    let q: &SoaField<1> = pleroma.read(HUMIDITY).unwrap();
 
     assert_eq!(temperature.state(CellId::from(0))[0], 200.0);
     assert_eq!(pressure_field.state(CellId::from(0))[0], pressure);
     assert_eq!(u.state(CellId::from(0))[0], velocity[0]);
     assert_eq!(v.state(CellId::from(0))[0], velocity[1]);
     assert_eq!(w.state(CellId::from(0))[0], velocity[2]);
+    assert_eq!(q.state(CellId::from(0))[0], humidity_q);
   }
 }

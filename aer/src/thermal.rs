@@ -129,7 +129,7 @@ impl Stage for TemperatureTendencyToEulerEnergyStep {
       }
     }
 
-    let state: &mut SoaField<5> =
+    let state: &mut SoaField<6> =
       ctx.world.fields.write(self.state).ok_or_else(|| {
         AetherError::new(AerError::MissingWriteField)
           .context(format!("{:?}", self.state))
@@ -229,7 +229,7 @@ mod tests {
     let mut pleroma = Pleroma::new();
     pleroma.register_field(
       STATE,
-      SoaField::<5>::from_fn(1, |_| [2.0, 0.0, 0.0, 0.0, 10.0]),
+      SoaField::<6>::from_fn(1, |_| [2.0, 0.0, 0.0, 0.0, 10.0, 0.0]),
     );
     pleroma.register_field(TENDENCY, SoaField::<1>::from_fn(1, |_| [0.5]));
 
@@ -254,7 +254,7 @@ mod tests {
       )
       .unwrap();
 
-    let state: &SoaField<5> = pleroma.read(STATE).unwrap();
+    let state: &SoaField<6> = pleroma.read(STATE).unwrap();
     let updated = state.state(CellId::from(0));
     let cv = 300.0 / (1.4 - 1.0);
     assert_eq!(updated[4], 10.0 + 4.0 * 2.0 * cv * 0.5);

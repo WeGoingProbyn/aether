@@ -11,6 +11,31 @@ use utility::{
 
 use crate::constants::WorldConstants;
 
+/// Identifies which subsystem clock a stage advances on.
+///
+/// Stages sharing a `SubsystemId` share a cadence (a target dt registered
+/// on the `Nexus`). The scheduler may subcycle a fast subsystem (e.g. a
+/// CFL-limited atmosphere) several times within one slow outer world step
+/// (e.g. an ocean), so that physics evolving on very different time scales
+/// can be advanced together without forcing the whole world onto the
+/// fastest dt. A stage that doesn't opt in belongs to
+/// [`SubsystemId::DEFAULT`], which always advances once per outer tick.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
+pub struct SubsystemId(pub usize);
+
+impl SubsystemId {
+  /// The subsystem every stage belongs to unless it overrides
+  /// [`Stage::subsystem`]. It advances exactly once per outer world step at
+  /// the world dt, which reproduces the original single-rate behaviour.
+  pub const DEFAULT: SubsystemId = SubsystemId(0);
+}
+
+impl Default for SubsystemId {
+  fn default() -> Self {
+    SubsystemId::DEFAULT
+  }
+}
+
 /// One unit of physics work inside a `Nexus`. Stages declare which fields
 /// and resources they read and write; nexus uses those declarations to
 /// build a DAG and run non-conflicting stages in parallel.
@@ -18,6 +43,14 @@ pub trait Stage: Send + Sync {
   fn name(&self) -> &'static str;
   fn reads(&self) -> &[FieldKey];
   fn writes(&self) -> &[FieldKey];
+
+  /// Which subsystem clock this stage advances on. Defaults to
+  /// [`SubsystemId::DEFAULT`] (once per outer tick). Override to place a
+  /// stage on a faster or slower subsystem so the scheduler can subcycle
+  /// it independently — see [`SubsystemId`].
+  fn subsystem(&self) -> SubsystemId {
+    SubsystemId::DEFAULT
+  }
 
   /// Non-mesh-bound resources this stage reads (e.g. body state, sun
   /// direction). Default is empty.

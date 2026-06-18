@@ -91,6 +91,7 @@ const fn mesh_key_tag(key: MeshKey) -> u64 {
     MeshType::Atmosphere => 1,
     MeshType::Surface => 2,
     MeshType::Mantle => 3,
+    MeshType::Ocean => 4,
   }
 }
 

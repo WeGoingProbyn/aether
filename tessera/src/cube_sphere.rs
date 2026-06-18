@@ -4,7 +4,11 @@
 use std::collections::HashMap;
 
 use utility::{
-  domain::{BoundaryTag, CellId, FaceId, Point}, end_profile, inline_profile, maths::{matrix::Matrix, vector::Vector}, profile, profiler::SpanGuard
+  domain::{BoundaryTag, CellId, FaceId, Point},
+  end_profile, inline_profile,
+  maths::{matrix::Matrix, vector::Vector},
+  profile,
+  profiler::SpanGuard,
 };
 
 use crate::{

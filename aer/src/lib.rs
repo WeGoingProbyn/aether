@@ -14,14 +14,19 @@ pub mod shell;
 pub mod thermal;
 pub mod tracers;
 
-pub use background::BackgroundCorrectedEuler3D;
+pub use background::BackgroundCorrectedMoistEuler3D;
 pub use diagnostics::EulerDiagnosticsStep;
 pub use dynamics::{
-  BackgroundCorrectionMode, EulerAtmosphereStep, GravityMode,
+  BackgroundCorrectionMode, EulerAtmosphereStep, GravityMode, RotationMode,
 };
 pub use error::AerError;
 pub use flux::TemperatureTendencyStep;
 pub use init::AtmosphereSpec;
+pub use microphysics::{
+  LATENT_HEAT_VAPORISATION, SaturationAdjustmentStep, precipitation_field,
+  saturation_specific_humidity, saturation_vapour_pressure,
+};
 pub use model::{AtmosphereFields, AtmosphereModel, AtmosphereStageIds};
 pub use shell::AtmosphereShellLayout;
 pub use thermal::TemperatureTendencyToEulerEnergyStep;
+pub use tracers::{EvaporationStep, ShellColumns};

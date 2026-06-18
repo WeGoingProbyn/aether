@@ -434,6 +434,13 @@ fn read_scalar_component(
       return Some(storage.component(component).as_ref().to_vec());
     }
   }
+  if let Some(storage) =
+    pleroma.read::<pleroma::core::storage::SoaField<6>>(field)
+  {
+    if component < 6 {
+      return Some(storage.component(component).as_ref().to_vec());
+    }
+  }
   None
 }
 

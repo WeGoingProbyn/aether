@@ -128,6 +128,13 @@ impl World {
     (&self.tessera, &mut self.pleroma)
   }
 
+  /// Whether this world's nexus advances more than one subsystem clock —
+  /// i.e. the multirate driver subcycles it and it cannot be fused into the
+  /// shared multi-world scheduler graph.
+  pub fn is_multirate(&self) -> bool {
+    self.nexus.is_multirate()
+  }
+
   pub fn tick(&mut self, pool: &Pool, dt: f64) -> AetherResult<()> {
     self.nexus.tick_with_partition_count(
       self.id,
@@ -304,6 +311,22 @@ impl Aether {
   pub fn step(&mut self, dt: f64) -> AetherResult<()> {
     let systems = &mut self.systems;
     let pool = &self.pool;
+
+    // Multirate worlds subcycle their subsystems internally and can't be
+    // fused into the shared cross-world graph, so they tick individually.
+    // When no world is multirate this collapses to the original single
+    // fused-graph path, preserving behaviour and cross-world parallelism.
+    let any_multirate = systems
+      .values()
+      .flat_map(System::worlds)
+      .any(World::is_multirate);
+    if any_multirate {
+      for system in systems.values_mut() {
+        system.tick(pool, dt)?;
+      }
+      return Ok(());
+    }
+
     let mut graph = ScopedTaskGraph::new();
 
     for system in systems.values_mut() {

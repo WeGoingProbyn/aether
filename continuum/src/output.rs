@@ -16,8 +16,8 @@ use utility::{
   error::{AetherError, AetherResult, ErrorDomain},
   serial::{
     field::{
-      partition_debug, FieldArray, FieldAssociation, FieldDataset,
-      FieldDatasetWriter, FieldValues, UnstructuredMesh,
+      FieldArray, FieldAssociation, FieldDataset, FieldDatasetWriter,
+      FieldValues, UnstructuredMesh, partition_debug,
     },
     vtk::{PvtuSchema, XmlPvtuWriter, XmlVtuWriter},
   },
@@ -709,7 +709,7 @@ mod tests {
   use crate::solver::{FvmSolver, SolverConfig, TimeIntegration};
 
   use super::{
-    build_cell_state_arrays, write_partitioned_vtu, MeshFieldDatasetBuilder,
+    MeshFieldDatasetBuilder, build_cell_state_arrays, write_partitioned_vtu,
   };
 
   #[test]

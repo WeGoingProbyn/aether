@@ -15,11 +15,13 @@
 //! on the atm mesh) are plain nexus DAG edges; the cross-mesh hop
 //! (atm-bottom radiance ↔ surface) goes through syzygy.
 
+pub mod diurnal;
 pub mod error;
 pub mod model;
 pub mod optical;
 pub mod transfer;
 
+pub use diurnal::DiurnalSunStep;
 pub use error::LumenError;
 pub use model::{RadiationFields, RadiationModel, RadiationStageIds};
 pub use optical::{normalise, zenith_cosine};

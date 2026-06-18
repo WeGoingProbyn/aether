@@ -106,6 +106,7 @@ dependencies = [
  "syzygy",
  "terra",
  "tessera",
+ "thalassa",
  "utility",
 ]
 
@@ -4378,9 +4379,11 @@ dependencies = [
  "lumen",
  "nexus",
  "pleroma",
+ "syzygy",
  "tempfile",
  "terra",
  "tessera",
+ "thalassa",
  "utility",
 ]
 
@@ -4742,6 +4745,16 @@ dependencies = [
 name = "tessera"
 version = "0.1.0"
 dependencies = [
+ "utility",
+]
+
+[[package]]
+name = "thalassa"
+version = "0.1.0"
+dependencies = [
+ "nexus",
+ "pleroma",
+ "tessera",
  "utility",
 ]
 

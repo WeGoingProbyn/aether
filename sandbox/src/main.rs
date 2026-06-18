@@ -18,14 +18,21 @@ use eidolon::{
   ir::{LayerHandle, LayerId, MeshRepresentation, RenderMeshId},
   runtime::{render_channel, spawn_runner},
 };
-use sandbox::{SANDBOX_WORLD_ID, build_demo_aether, demo_extract_config};
+use sandbox::{
+  SANDBOX_WORLD_ID, build_ocean_world_aether, ocean_world_extract_config,
+};
 use utility::error::AetherResult;
 use utility::logger::{Level, Logger, StdSink};
 use utility::profiler::Profiler;
 use utility::{domain::MeshKey, info};
 
-/// Simulation timestep, in simulation seconds.
-const TICK_DT: f64 = 0.05;
+/// Simulation timestep, in simulation seconds. Sized to roughly one
+/// atmosphere CFL substep so each rendered frame advances meaningful
+/// sim-time (the sun travels, the sea surface warms and cools) while the
+/// moist solver still only takes a handful of internal substeps per frame.
+/// A tiny dt here makes the world look frozen — it isn't, it's just
+/// advancing thousands of times slower than the solver can handle.
+const TICK_DT: f64 = 60.0;
 
 /// Wall-clock pacing for the runner thread. 60 Hz matches typical
 /// monitor refresh and means the producer extracts at the same rate
@@ -40,8 +47,8 @@ fn main() -> AetherResult<()> {
   );
   Profiler::init();
 
-  let (mut aether, _layout) = build_demo_aether()?;
-  let mut producer = FrameProducer::new(demo_extract_config());
+  let (mut aether, _layout) = build_ocean_world_aether()?;
+  let mut producer = FrameProducer::new(ocean_world_extract_config());
 
   let (tx, rx) = render_channel(64);
 
@@ -81,7 +88,10 @@ fn main() -> AetherResult<()> {
     Ok(Some(batch))
   });
 
-  info!("sandbox: starting bevy app — keys 1/2/3 swap surface scalar");
+  info!(
+    "sandbox: ocean world — ocean shows SST; keys 1/2/3 swap atmosphere \
+     temperature/humidity/pressure"
+  );
   App::new()
     .add_plugins(DefaultPlugins)
     .add_plugins(PanOrbitCameraPlugin)
@@ -123,18 +133,13 @@ fn spawn_camera_and_light(mut commands: Commands) {
   ));
 }
 
-/// On `1`/`2`/`3`, rebind the surface mesh to the temperature /
-/// atmosphere-temperature / pressure scalar. Quick UX for the demo.
+/// On `1`/`2`/`3`, rebind the atmosphere mesh to the humidity /
+/// temperature / pressure scalar (the ocean mesh always shows SST). Quick
+/// UX for the ocean-world demo.
 fn layer_toggle_input(
   keys: Res<ButtonInput<KeyCode>>,
   mut registry: ResMut<RenderRegistry>,
 ) {
-  let surface_mesh = RenderMeshId {
-    world: SANDBOX_WORLD_ID,
-    mesh: MeshKey::SURFACE,
-    representation: MeshRepresentation::BoundaryFaces,
-  }
-  .handle();
   let atmosphere_mesh = RenderMeshId {
     world: SANDBOX_WORLD_ID,
     mesh: MeshKey::ATMOSPHERE,
@@ -142,9 +147,9 @@ fn layer_toggle_input(
   }
   .handle();
 
-  let surface_temp = LayerHandle::for_target(
-    LayerId::from_static("surface_temperature"),
-    surface_mesh,
+  let atmosphere_humidity = LayerHandle::for_target(
+    LayerId::from_static("atmosphere_humidity"),
+    atmosphere_mesh,
   );
   let atmosphere_temp = LayerHandle::for_target(
     LayerId::from_static("atmosphere_temperature"),
@@ -156,14 +161,16 @@ fn layer_toggle_input(
   );
 
   if keys.just_pressed(KeyCode::Digit1) {
-    registry.bindings.insert(surface_mesh, surface_temp);
-    registry.dirty_meshes.insert(surface_mesh);
-    info!("surface ← surface_temperature");
-  }
-  if keys.just_pressed(KeyCode::Digit2) {
     registry.bindings.insert(atmosphere_mesh, atmosphere_temp);
     registry.dirty_meshes.insert(atmosphere_mesh);
     info!("atmosphere ← atmosphere_temperature");
+  }
+  if keys.just_pressed(KeyCode::Digit2) {
+    registry
+      .bindings
+      .insert(atmosphere_mesh, atmosphere_humidity);
+    registry.dirty_meshes.insert(atmosphere_mesh);
+    info!("atmosphere ← atmosphere_humidity");
   }
   if keys.just_pressed(KeyCode::Digit3) {
     registry

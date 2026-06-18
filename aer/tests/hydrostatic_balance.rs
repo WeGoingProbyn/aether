@@ -52,7 +52,7 @@ fn hydrostatic_state_remains_hydrostatic_under_background_correction() {
   // the solver isn't blowing up — the background correction should
   // hold the state to single-precision-ish drift.
   let initial: Vec<[f64; 5]> = {
-    let state: &SoaField<5> = pleroma.read(fields.euler_state).unwrap();
+    let state: &SoaField<6> = pleroma.read(fields.euler_state).unwrap();
     (0..mesh.cell_count())
       .map(|i| {
         let s = state.state(CellId::from(i));
@@ -78,7 +78,7 @@ fn hydrostatic_state_remains_hydrostatic_under_background_correction() {
       .unwrap();
   }
 
-  let final_state: &SoaField<5> = pleroma.read(fields.euler_state).unwrap();
+  let final_state: &SoaField<6> = pleroma.read(fields.euler_state).unwrap();
   for (i, before) in initial.iter().enumerate() {
     let after = final_state.state(CellId::from(i));
     let rho_before = before[0];

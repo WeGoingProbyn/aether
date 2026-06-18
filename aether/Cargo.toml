@@ -16,3 +16,4 @@ syzygy = { path = "../syzygy" }
 aer = { path = "../aer" }
 terra = { path = "../terra" }
 lumen = { path = "../lumen" }
+thalassa = { path = "../thalassa" }

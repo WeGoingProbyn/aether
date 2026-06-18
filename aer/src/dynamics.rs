@@ -5,7 +5,7 @@ use continuum::{
   boundary::{
     BoundaryCondition, BoundaryRegistry, ReflectiveWall, Transmissive,
   },
-  model::{Euler3D, RusanovFlux},
+  model::{MoistEuler3D, RusanovFlux},
   solver::{FvmSolver, SolverConfig, TimeIntegration},
 };
 use nexus::{
@@ -27,13 +27,23 @@ use utility::{
 };
 
 use crate::{
-  background::BackgroundCorrectedEuler3D, error::AerError, init::AtmosphereSpec,
+  background::BackgroundCorrectedMoistEuler3D, error::AerError,
+  init::AtmosphereSpec,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GravityMode {
   None,
   Radial,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RotationMode {
+  /// Non-rotating frame — no Coriolis force.
+  None,
+  /// Rotate about the world +z axis at the body's `angular_velocity`,
+  /// applying the Coriolis source that organises weather systems.
+  Planetary,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -46,8 +56,9 @@ pub enum BackgroundCorrectionMode {
 
 /// Compressible atmosphere dynamics stage.
 ///
-/// The prognostic state is a Pleroma `SoaField<5>` using continuum's Euler3D
-/// ordering: `[rho, rho_u, rho_v, rho_w, energy]`. Aer owns the solver and
+/// The prognostic state is a Pleroma `SoaField<6>` using continuum's
+/// MoistEuler3D ordering: `[rho, rho_u, rho_v, rho_w, energy, rho_q]`, where
+/// `rho_q` is the advected water-vapour mass. Aer owns the solver and
 /// residual scratch; Tessera owns the mesh; constants arrive through
 /// `WorldView`.
 pub struct EulerAtmosphereStep {
@@ -57,11 +68,12 @@ pub struct EulerAtmosphereStep {
   writes: [FieldKey; 1],
   config: SolverConfig,
   gravity: GravityMode,
+  rotation: RotationMode,
   background_correction: BackgroundCorrectionMode,
-  boundaries: BoundaryRegistry<3, 5>,
-  solver: Option<FvmSolver<3, 5, BackgroundCorrectedEuler3D, RusanovFlux>>,
-  partition_source_correction: Option<Vec<Vec<[f64; 5]>>>,
-  residual: SoaField<5>,
+  boundaries: BoundaryRegistry<3, 6>,
+  solver: Option<FvmSolver<3, 6, BackgroundCorrectedMoistEuler3D, RusanovFlux>>,
+  partition_source_correction: Option<Vec<Vec<[f64; 6]>>>,
+  residual: SoaField<6>,
   last_dt: Option<f64>,
   last_substeps: usize,
   max_substeps: usize,
@@ -87,11 +99,12 @@ impl EulerAtmosphereStep {
       writes: [state],
       config,
       gravity: GravityMode::Radial,
+      rotation: RotationMode::None,
       background_correction: BackgroundCorrectionMode::None,
       boundaries: default_atmosphere_boundaries(),
       solver: None,
       partition_source_correction: None,
-      residual: SoaField::<5>::zeros(0),
+      residual: SoaField::<6>::zeros(0),
       last_dt: None,
       last_substeps: 0,
       max_substeps: 10_000,
@@ -117,6 +130,17 @@ impl EulerAtmosphereStep {
     self
   }
 
+  pub fn with_rotation_mode(mut self, rotation: RotationMode) -> Self {
+    self.rotation = rotation;
+    self.solver = None;
+    self.partition_source_correction = None;
+    self
+  }
+
+  pub fn rotation_mode(&self) -> RotationMode {
+    self.rotation
+  }
+
   pub fn with_background_correction(
     mut self,
     mode: BackgroundCorrectionMode,
@@ -134,7 +158,7 @@ impl EulerAtmosphereStep {
   pub fn with_boundary(
     mut self,
     tag: BoundaryTag,
-    condition: impl BoundaryCondition<3, 5> + 'static,
+    condition: impl BoundaryCondition<3, 6> + 'static,
   ) -> Self {
     self.boundaries.register(tag, condition);
     self.solver = None;
@@ -175,7 +199,7 @@ impl EulerAtmosphereStep {
     &mut self,
     constants: &nexus::WorldConstants,
     mesh: &dyn Mesh<3>,
-    background_state: Option<&SoaField<5>>,
+    background_state: Option<&SoaField<6>>,
   ) -> AetherResult<()> {
     if self.solver.is_some() {
       return Ok(());
@@ -199,8 +223,8 @@ impl EulerAtmosphereStep {
       }
     };
 
-    let law = BackgroundCorrectedEuler3D::new(
-      euler_law(&spec, self.gravity, mesh),
+    let law = BackgroundCorrectedMoistEuler3D::new(
+      euler_law(&spec, self.gravity, self.rotation, mesh),
       source_correction,
     );
     self.solver = Some(FvmSolver::new(self.config.clone(), law, RusanovFlux));
@@ -212,7 +236,7 @@ impl EulerAtmosphereStep {
     constants: &nexus::WorldConstants,
     mesh: &dyn Mesh<3>,
     decomposition: &Decomposition<3, CubeSphere>,
-    background_state: Option<&SoaField<5>>,
+    background_state: Option<&SoaField<6>>,
   ) -> AetherResult<()> {
     match self.background_correction {
       BackgroundCorrectionMode::None => Ok(()),
@@ -241,7 +265,7 @@ impl EulerAtmosphereStep {
         for partition in &decomposition.partitions {
           let local_background =
             gather_partition_field(background_state, partition);
-          let mut local_residual = LocalPartitionField::<5>::zeros(
+          let mut local_residual = LocalPartitionField::<6>::zeros(
             partition.num_owned(),
             partition.local_cell_count() - partition.num_owned(),
           );
@@ -319,7 +343,7 @@ impl Stage for EulerAtmosphereStep {
     let background_state = if self.solver.is_none()
       && self.background_correction == BackgroundCorrectionMode::CurrentState
     {
-      let state: &SoaField<5> =
+      let state: &SoaField<6> =
         ctx.world.fields.read(self.state).ok_or_else(|| {
           AetherError::new(AerError::MissingReadField)
             .context(format!("{:?}", self.state))
@@ -336,10 +360,10 @@ impl Stage for EulerAtmosphereStep {
 
     self.ensure_solver(constants, mesh.as_ref(), background_state.as_ref())?;
     if self.residual.len() != cell_count {
-      self.residual = SoaField::<5>::zeros(cell_count);
+      self.residual = SoaField::<6>::zeros(cell_count);
     }
 
-    let state: &mut SoaField<5> =
+    let state: &mut SoaField<6> =
       ctx.world.fields.write(self.state).ok_or_else(|| {
         AetherError::new(AerError::MissingWriteField)
           .context(format!("{:?}", self.state))
@@ -437,13 +461,14 @@ impl<'a> nexus::StageProgram<'a> for EulerPartitionProgram<'a> {
 
     let spec = AtmosphereSpec::from_world_constants(constants)?;
     let gravity = stage.gravity;
+    let rotation = stage.rotation;
     let config = stage.config.clone();
     let max_substeps = stage.max_substeps;
     let partition_count = decomposition.partitions.len();
     let background_state = if stage.partition_source_correction.is_none()
       && stage.background_correction == BackgroundCorrectionMode::CurrentState
     {
-      let state: &SoaField<5> =
+      let state: &SoaField<6> =
         ctx.world.fields.read(stage.state).ok_or_else(|| {
           AetherError::new(AerError::MissingReadField)
             .context(format!("{:?}", stage.state))
@@ -474,8 +499,8 @@ impl<'a> nexus::StageProgram<'a> for EulerPartitionProgram<'a> {
       let source_correction = partition_source_correction
         .map(|corrections| corrections[index].clone())
         .unwrap_or_default();
-      let law = BackgroundCorrectedEuler3D::new(
-        euler_law(&spec, gravity, partition),
+      let law = BackgroundCorrectedMoistEuler3D::new(
+        euler_law(&spec, gravity, rotation, partition),
         source_correction,
       );
       solvers.push(Mutex::new(FvmSolver::new(
@@ -483,17 +508,17 @@ impl<'a> nexus::StageProgram<'a> for EulerPartitionProgram<'a> {
         law,
         RusanovFlux,
       )));
-      states.push(Mutex::new(LocalPartitionField::<5>::zeros(
+      states.push(Mutex::new(LocalPartitionField::<6>::zeros(
         partition.num_owned(),
         partition.local_cell_count() - partition.num_owned(),
       )));
-      residuals.push(Mutex::new(LocalPartitionField::<5>::zeros(
+      residuals.push(Mutex::new(LocalPartitionField::<6>::zeros(
         partition.num_owned(),
         partition.local_cell_count() - partition.num_owned(),
       )));
     }
 
-    let state: &mut SoaField<5> =
+    let state: &mut SoaField<6> =
       ctx.world.fields.write(stage.state).ok_or_else(|| {
         AetherError::new(AerError::MissingWriteField)
           .context(format!("{:?}", stage.state))
@@ -584,36 +609,47 @@ impl<'a> nexus::StageProgram<'a> for EulerPartitionProgram<'a> {
   }
 }
 
-fn default_atmosphere_boundaries() -> BoundaryRegistry<3, 5> {
-  let mut boundaries = BoundaryRegistry::<3, 5>::new();
+fn default_atmosphere_boundaries() -> BoundaryRegistry<3, 6> {
+  let mut boundaries = BoundaryRegistry::<3, 6>::new();
   boundaries.register(BoundaryTag::Ground, ReflectiveWall);
   boundaries.register(BoundaryTag::AtmosphereEdge, Transmissive);
   boundaries
 }
 
+/// Planetary rotation vector for the Coriolis source: spin about world +z
+/// at the body's angular velocity, or zero when rotation is disabled.
+fn rotation_omega(rotation: RotationMode, spec: &AtmosphereSpec) -> [f64; 3] {
+  match rotation {
+    RotationMode::None => [0.0; 3],
+    RotationMode::Planetary => [0.0, 0.0, spec.angular_velocity()],
+  }
+}
+
 fn euler_law<M>(
   spec: &AtmosphereSpec,
   gravity: GravityMode,
+  rotation: RotationMode,
   mesh: &M,
-) -> Euler3D
+) -> MoistEuler3D
 where
   M: Mesh<3> + ?Sized,
 {
-  match gravity {
-    GravityMode::None => spec.euler3d(),
-    GravityMode::Radial => spec.euler3d_with_radial_gravity(
+  let law = match gravity {
+    GravityMode::None => spec.moist_euler3d(),
+    GravityMode::Radial => spec.moist_euler3d_with_radial_gravity(
       radial_gravity_field(mesh, spec.surface_gravity()),
     ),
-  }
+  };
+  law.with_rotation(rotation_omega(rotation, spec))
 }
 
 fn background_residual_correction(
   spec: &AtmosphereSpec,
   gravity: GravityMode,
   mesh: &dyn Mesh<3>,
-  boundaries: &BoundaryRegistry<3, 5>,
-  background_state: &SoaField<5>,
-) -> AetherResult<Vec<[f64; 5]>> {
+  boundaries: &BoundaryRegistry<3, 6>,
+  background_state: &SoaField<6>,
+) -> AetherResult<Vec<[f64; 6]>> {
   let cell_count = mesh.cell_count();
   if background_state.len() != cell_count {
     return Err(AetherError::new(AerError::FieldLengthMismatch).context(
@@ -625,7 +661,7 @@ fn background_residual_correction(
     ));
   }
 
-  let mut residual = SoaField::<5>::zeros(cell_count);
+  let mut residual = SoaField::<6>::zeros(cell_count);
   background_residual_correction_with_residual(
     spec,
     gravity,
@@ -640,12 +676,12 @@ fn background_residual_correction_with_residual<S, M>(
   spec: &AtmosphereSpec,
   gravity: GravityMode,
   mesh: &M,
-  boundaries: &BoundaryRegistry<3, 5>,
+  boundaries: &BoundaryRegistry<3, 6>,
   background_state: &S,
   residual: &mut S,
-) -> AetherResult<Vec<[f64; 5]>>
+) -> AetherResult<Vec<[f64; 6]>>
 where
-  S: FieldStorage<5>,
+  S: FieldStorage<6>,
   M: Mesh<3> + ?Sized,
 {
   let cell_count = mesh.cell_count();
@@ -668,9 +704,12 @@ where
     ));
   }
 
+  // The background residual is evaluated at the (at-rest) captured state,
+  // where the Coriolis source is identically zero, so the correction is
+  // rotation-independent.
   let solver = FvmSolver::new(
     SolverConfig::new(1.0, 1.0, TimeIntegration::ForwardEuler),
-    euler_law(spec, gravity, mesh),
+    euler_law(spec, gravity, RotationMode::None, mesh),
     RusanovFlux,
   );
   solver.compute_residual(background_state, residual, mesh, boundaries);
@@ -678,7 +717,7 @@ where
   Ok(
     (0..cell_count)
       .map(|i| {
-        let mut residual_state = [0.0; 5];
+        let mut residual_state = [0.0; 6];
         residual.state_into(CellId::from(i), &mut residual_state);
         [
           -residual_state[0],
@@ -686,6 +725,7 @@ where
           -residual_state[2],
           -residual_state[3],
           -residual_state[4],
+          -residual_state[5],
         ]
       })
       .collect(),
@@ -793,7 +833,7 @@ mod tests {
       )
       .unwrap();
 
-    let state: &SoaField<5> = pleroma.read(EULER_STATE).unwrap();
+    let state: &SoaField<6> = pleroma.read(EULER_STATE).unwrap();
     for i in 0..cell_count {
       let cell_state = state.state(CellId::from(i));
       assert!(cell_state[0] > 0.0);
@@ -840,7 +880,7 @@ mod tests {
       )
       .unwrap();
 
-    let state: &SoaField<5> = pleroma.read(EULER_STATE).unwrap();
+    let state: &SoaField<6> = pleroma.read(EULER_STATE).unwrap();
     for i in 0..cell_count {
       let cell_state = state.state(CellId::from(i));
       assert!(cell_state[0] > 0.0);
@@ -893,7 +933,7 @@ mod tests {
       )
       .unwrap();
 
-    let state: &SoaField<5> = pleroma.read(EULER_STATE).unwrap();
+    let state: &SoaField<6> = pleroma.read(EULER_STATE).unwrap();
     for i in 0..cell_count {
       let cell_state = state.state(CellId::from(i));
       assert!(cell_state[0] > 0.0);
@@ -936,7 +976,7 @@ mod tests {
       let cell = CellId::from(i);
       let a = serial.state(cell);
       let b = partitioned.state(cell);
-      for component in 0..5 {
+      for component in 0..6 {
         let scale = a[component].abs().max(1.0);
         let rel = (a[component] - b[component]).abs() / scale;
         assert!(
@@ -955,10 +995,10 @@ mod tests {
   fn run_euler_test_step(
     mesh: Arc<CubeSphere>,
     decomposition: Option<tessera::partition::Decomposition<3, CubeSphere>>,
-    initial: SoaField<5>,
+    initial: SoaField<6>,
     constants: &WorldConstants,
     partition_count: usize,
-  ) -> SoaField<5> {
+  ) -> SoaField<6> {
     let mut tessera = Tessera::new();
     tessera.register_mesh(MeshKey::ATMOSPHERE, mesh);
     if let Some(decomposition) = decomposition {
@@ -996,7 +1036,7 @@ mod tests {
       .unwrap();
 
     pleroma
-      .read::<SoaField<5>>(EULER_STATE)
+      .read::<SoaField<6>>(EULER_STATE)
       .unwrap()
       .clone_state()
   }
@@ -1043,12 +1083,12 @@ mod tests {
       )
       .unwrap();
 
-    let state: &SoaField<5> = pleroma.read(EULER_STATE).unwrap();
+    let state: &SoaField<6> = pleroma.read(EULER_STATE).unwrap();
     for i in 0..cell_count {
       let cell = CellId::from(i);
       let before = initial_state.state(cell);
       let after = state.state(cell);
-      for component in 0..5 {
+      for component in 0..6 {
         assert!(
           (after[component] - before[component]).abs() < 1.0e-10,
           "cell {} component {} drifted from {} to {}",
@@ -1110,12 +1150,12 @@ mod tests {
       )
       .unwrap();
 
-    let state: &SoaField<5> = pleroma.read(EULER_STATE).unwrap();
+    let state: &SoaField<6> = pleroma.read(EULER_STATE).unwrap();
     for i in 0..cell_count {
       let cell = CellId::from(i);
       let before = initial_state.state(cell);
       let after = state.state(cell);
-      for component in 0..5 {
+      for component in 0..6 {
         assert!(
           (after[component] - before[component]).abs() < 1.0e-10,
           "cell {} component {} drifted from {} to {}",
