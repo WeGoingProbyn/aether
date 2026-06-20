@@ -1,7 +1,7 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-use continuum::model::{ConservationLaw, MoistEuler3D};
+use continuum::model::{ConservationLaw, MoistEuler3D, Scalar};
 use tessera::geometry::CellMetrics;
 use utility::domain::{CellId, Point};
 
@@ -34,25 +34,25 @@ impl ConservationLaw<3, 6> for BackgroundCorrectedMoistEuler3D {
     self.base.fix_state(state);
   }
 
-  fn flux(&self, state: &[f64; 6]) -> [[f64; 6]; 3] {
+  fn flux<T: Scalar>(&self, state: &[T; 6]) -> [[T; 6]; 3] {
     self.base.flux(state)
   }
 
-  fn max_wave_speed(&self, state: &[f64; 6]) -> f64 {
+  fn max_wave_speed<T: Scalar>(&self, state: &[T; 6]) -> T {
     self.base.max_wave_speed(state)
   }
 
-  fn source(
+  fn source<T: Scalar>(
     &self,
-    state: &[f64; 6],
+    state: &[T; 6],
     cell: CellId,
     centroid: &Point<3>,
     metrics: &CellMetrics<3>,
-  ) -> [f64; 6] {
+  ) -> [T; 6] {
     let mut source = self.base.source(state, cell, centroid, metrics);
     if let Some(correction) = self.source_correction.get(cell.index()) {
       for i in 0..6 {
-        source[i] += correction[i];
+        source[i] = source[i] + correction[i];
       }
     }
     source

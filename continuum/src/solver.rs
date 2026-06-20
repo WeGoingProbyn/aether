@@ -148,6 +148,11 @@ where
     &self.law
   }
 
+  /// Borrow the solver's backend (e.g. to read a hybrid/implicit step report).
+  pub fn backend(&self) -> &B {
+    &self.backend
+  }
+
   pub fn config(&self) -> &SolverConfig {
     &self.config
   }

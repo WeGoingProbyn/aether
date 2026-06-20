@@ -1,60 +1,156 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
+use num_dual::DualNum;
 use utility::domain::{CellId, Point};
-use utility::{StateDiagnostics, maths::vector::Vector, profile};
+use utility::{StateDiagnostics, maths::vector::Vector};
 
 use tessera::geometry::CellMetrics;
 
 use crate::output::LawFieldSchema;
 
+/// The scalar field the conservation-law math is generic over. It is `f64` for
+/// the ordinary (explicit / residual) path and a forward-mode dual number for
+/// exact automatic-differentiation Jacobians. `f64: Scalar` and
+/// `Dual64: Scalar`, so the same law body serves both with no duplication.
+///
+/// Note: dual arithmetic only supports `dual * f64` (not `f64 * dual`), so law
+/// bodies keep the real operand on the right of any mixed product.
+pub trait Scalar: DualNum<f64> + Copy {}
+impl<T: DualNum<f64> + Copy> Scalar for T {}
+
+/// Branch-select max for scalars (Rosenbrock dual numbers compare by real
+/// part), used for the Rusanov dissipation speed.
+fn max_scalar<T: Scalar>(a: T, b: T) -> T {
+  if a > b { a } else { b }
+}
+
+/// Regularisation added inside the velocity-magnitude `sqrt` in wave-speed
+/// estimates. `sqrt` has an infinite slope at 0, so a state at rest makes the
+/// automatic-differentiation Jacobian NaN; this tiny floor keeps the dual
+/// derivative finite (its value at the kink, 0) while shifting the real result
+/// by at most ~1e-9 m/s — utterly negligible against the ~340 m/s sound speed.
+const SPEED_EPS: f64 = 1e-18;
+
 pub trait ConservationLaw<const D: usize, const N: usize>: Send + Sync {
+  /// Clamp a *real* state back to the physical set (positive density etc.).
+  /// Only applied to materialised states, never to dual numbers.
   fn fix_state(&self, state: &mut [f64; N]);
-  fn flux(&self, state: &[f64; N]) -> [[f64; N]; D];
-  fn max_wave_speed(&self, state: &[f64; N]) -> f64;
+  fn flux<T: Scalar>(&self, state: &[T; N]) -> [[T; N]; D];
+  fn max_wave_speed<T: Scalar>(&self, state: &[T; N]) -> T;
   /// Per-cell source term. `cell` is the global cell ID — laws that carry
   /// pre-computed per-cell data (e.g. radial gravity vectors) index into
   /// their own arrays with it. Laws with no spatial dependence ignore it.
-  fn source(
+  /// Geometry (`centroid`, `metrics`) stays real; only the state is generic.
+  fn source<T: Scalar>(
     &self,
-    state: &[f64; N],
+    state: &[T; N],
     cell: CellId,
     centroid: &Point<D>,
     metrics: &CellMetrics<D>,
-  ) -> [f64; N];
+  ) -> [T; N];
+
+  // --- IMEX operator split (optional) ---
+  //
+  // A law may split its dynamics into an implicit part (stiff — e.g. the
+  // acoustic terms) and an explicit remainder, so an IMEX integrator can step
+  // only the stiff part implicitly. The defaults make the implicit operator
+  // empty, so a law that does not opt in runs fully explicitly under IMEX and
+  // every existing law is unaffected. The invariant the IMEX backend relies on
+  // is `R = R_explicit + R_implicit`, with `R_implicit` built from
+  // `implicit_flux` / `implicit_source` and the [`acoustic_speed`] dissipation.
+
+  /// The implicit (stiff) part of the flux. Default: none — fully explicit.
+  fn implicit_flux<T: Scalar>(&self, _state: &[T; N]) -> [[T; N]; D] {
+    [[T::from(0.0); N]; D]
+  }
+
+  /// The implicit (stiff) part of the source. Default: none.
+  fn implicit_source<T: Scalar>(
+    &self,
+    _state: &[T; N],
+    _cell: CellId,
+    _centroid: &Point<D>,
+    _metrics: &CellMetrics<D>,
+  ) -> [T; N] {
+    [T::from(0.0); N]
+  }
+
+  /// Dissipation speed for the implicit numerical flux (the fast/acoustic wave
+  /// speed). Default 0 → the implicit operator carries no dissipation, leaving
+  /// the full Rusanov dissipation in the explicit remainder.
+  fn acoustic_speed<T: Scalar>(&self, _state: &[T; N]) -> T {
+    T::from(0.0)
+  }
+
+  /// Wave speed bounding the *explicit* part of an IMEX split, used to size the
+  /// (advective) CFL step. Default: the full wave speed (no speed-up).
+  fn explicit_wave_speed<T: Scalar>(&self, state: &[T; N]) -> T {
+    self.max_wave_speed(state)
+  }
 }
 
 pub trait NumericalFlux<const D: usize, const N: usize>: Send + Sync {
-  fn compute(
+  /// Numerical flux through a face with unit `normal` (real geometry). Generic
+  /// over the scalar and the law so dual evaluations need no `&dyn` and the
+  /// Jacobian can be taken by automatic differentiation.
+  fn compute<T: Scalar, L: ConservationLaw<D, N>>(
     &self,
-    law: &dyn ConservationLaw<D, N>,
-    left: &[f64; N],
-    right: &[f64; N],
+    law: &L,
+    left: &[T; N],
+    right: &[T; N],
     normal: &Vector<f64, D>,
-  ) -> [f64; N];
+  ) -> [T; N];
+
+  /// Numerical flux of the *implicit* part of the operator (for IMEX): a
+  /// central average of `implicit_flux` plus dissipation scaled by the
+  /// `acoustic_speed`. With the default (empty) implicit operator this is zero.
+  /// Splitting the dissipation this way keeps `R = R_explicit + R_implicit`:
+  /// the explicit remainder keeps `(full_speed − acoustic_speed)` dissipation.
+  fn compute_implicit<T: Scalar, L: ConservationLaw<D, N>>(
+    &self,
+    law: &L,
+    left: &[T; N],
+    right: &[T; N],
+    normal: &Vector<f64, D>,
+  ) -> [T; N] {
+    let fl = law.implicit_flux(left);
+    let fr = law.implicit_flux(right);
+    let s = max_scalar(law.acoustic_speed(left), law.acoustic_speed(right));
+
+    let mut result = [T::from(0.0); N];
+    for i in 0..N {
+      let mut fn_avg = T::from(0.0);
+      for d in 0..D {
+        fn_avg = fn_avg + (fl[d][i] + fr[d][i]) * normal[d] * 0.5;
+      }
+      result[i] = fn_avg - (right[i] - left[i]) * s * 0.5;
+    }
+    result
+  }
 }
 
 pub struct RusanovFlux;
 
 impl<const D: usize, const N: usize> NumericalFlux<D, N> for RusanovFlux {
-  fn compute(
+  fn compute<T: Scalar, L: ConservationLaw<D, N>>(
     &self,
-    law: &dyn ConservationLaw<D, N>,
-    left: &[f64; N],
-    right: &[f64; N],
+    law: &L,
+    left: &[T; N],
+    right: &[T; N],
     normal: &Vector<f64, D>,
-  ) -> [f64; N] {
+  ) -> [T; N] {
     let fl = law.flux(left);
     let fr = law.flux(right);
-    let s_max = law.max_wave_speed(left).max(law.max_wave_speed(right));
+    let s_max = max_scalar(law.max_wave_speed(left), law.max_wave_speed(right));
 
-    let mut result = [0.0; N];
+    let mut result = [T::from(0.0); N];
     for i in 0..N {
-      let mut fn_avg = 0.0;
+      let mut fn_avg = T::from(0.0);
       for d in 0..D {
-        fn_avg += 0.5 * (fl[d][i] + fr[d][i]) * normal[d];
+        fn_avg = fn_avg + (fl[d][i] + fr[d][i]) * normal[d] * 0.5;
       }
-      result[i] = fn_avg - 0.5 * s_max * (right[i] - left[i]);
+      result[i] = fn_avg - (right[i] - left[i]) * s_max * 0.5;
     }
     result
   }
@@ -86,28 +182,28 @@ impl Euler2D {
     Euler2D { gamma }
   }
 
-  pub fn velocity(&self, state: &[f64; 4]) -> [f64; 2] {
+  pub fn velocity<T: Scalar>(&self, state: &[T; 4]) -> [T; 2] {
     let rho = state[0];
     [state[1] / rho, state[2] / rho]
   }
 
-  pub fn speed(&self, state: &[f64; 4]) -> f64 {
+  pub fn speed<T: Scalar>(&self, state: &[T; 4]) -> T {
     let [u, v] = self.velocity(state);
     (u * u + v * v).sqrt()
   }
 
-  pub fn kinetic_energy_density(&self, state: &[f64; 4]) -> f64 {
+  pub fn kinetic_energy_density<T: Scalar>(&self, state: &[T; 4]) -> T {
     let rho = state[0];
-    0.5 / rho * (state[1] * state[1] + state[2] * state[2])
+    (state[1] * state[1] + state[2] * state[2]) / rho * 0.5
   }
 
-  pub fn pressure(&self, state: &[f64; 4]) -> f64 {
-    (self.gamma - 1.0) * (state[3] - self.kinetic_energy_density(state))
+  pub fn pressure<T: Scalar>(&self, state: &[T; 4]) -> T {
+    (state[3] - self.kinetic_energy_density(state)) * (self.gamma - 1.0)
   }
 }
 
 impl ConservationLaw<2, 4> for Euler2D {
-  fn flux(&self, state: &[f64; 4]) -> [[f64; 4]; 2] {
+  fn flux<T: Scalar>(&self, state: &[T; 4]) -> [[T; 4]; 2] {
     let rho = state[0];
 
     let u = state[1] / rho;
@@ -129,23 +225,26 @@ impl ConservationLaw<2, 4> for Euler2D {
     [fx, fy]
   }
 
-  fn max_wave_speed(&self, state: &[f64; 4]) -> f64 {
+  fn max_wave_speed<T: Scalar>(&self, state: &[T; 4]) -> T {
     let rho = state[0];
     let u = state[1] / rho;
     let v = state[2] / rho;
     let p = self.pressure(state);
-    let c = (self.gamma * p / rho).sqrt();
-    (u * u + v * v).sqrt() + c
+    let c = (p / rho * self.gamma).sqrt();
+    // Regularise the speed `|u|` so the dual derivative is finite at u = 0
+    // (sqrt' is singular there); the offset is negligible beside the sound
+    // speed and its subgradient at the kink is the correct 0.
+    (u * u + v * v + SPEED_EPS).sqrt() + c
   }
 
-  fn source(
+  fn source<T: Scalar>(
     &self,
-    _state: &[f64; 4],
+    _state: &[T; 4],
     _cell: CellId,
     _centroid: &Point<2>,
     _metrics: &CellMetrics<2>,
-  ) -> [f64; 4] {
-    [0.0; 4] // no source terms for basic Euler
+  ) -> [T; 4] {
+    [T::from(0.0); 4] // no source terms for basic Euler
   }
 
   fn fix_state(&self, state: &mut [f64; 4]) {
@@ -231,24 +330,24 @@ impl Euler3D {
     }
   }
 
-  pub fn velocity(&self, state: &[f64; 5]) -> [f64; 3] {
+  pub fn velocity<T: Scalar>(&self, state: &[T; 5]) -> [T; 3] {
     let rho = state[0];
     [state[1] / rho, state[2] / rho, state[3] / rho]
   }
 
-  pub fn speed(&self, state: &[f64; 5]) -> f64 {
+  pub fn speed<T: Scalar>(&self, state: &[T; 5]) -> T {
     let [u, v, w] = self.velocity(state);
     (u * u + v * v + w * w).sqrt()
   }
 
-  pub fn kinetic_energy_density(&self, state: &[f64; 5]) -> f64 {
+  pub fn kinetic_energy_density<T: Scalar>(&self, state: &[T; 5]) -> T {
     let rho = state[0];
-    0.5 / rho
-      * (state[1] * state[1] + state[2] * state[2] + state[3] * state[3])
+    (state[1] * state[1] + state[2] * state[2] + state[3] * state[3]) / rho
+      * 0.5
   }
 
-  pub fn pressure(&self, state: &[f64; 5]) -> f64 {
-    (self.gamma - 1.0) * (state[4] - self.kinetic_energy_density(state))
+  pub fn pressure<T: Scalar>(&self, state: &[T; 5]) -> T {
+    (state[4] - self.kinetic_energy_density(state)) * (self.gamma - 1.0)
   }
 
   pub fn gamma(&self) -> f64 {
@@ -257,7 +356,7 @@ impl Euler3D {
 }
 
 impl ConservationLaw<3, 5> for Euler3D {
-  fn flux(&self, state: &[f64; 5]) -> [[f64; 5]; 3] {
+  fn flux<T: Scalar>(&self, state: &[T; 5]) -> [[T; 5]; 3] {
     let rho = state[0];
     let u = state[1] / rho;
     let v = state[2] / rho;
@@ -289,32 +388,34 @@ impl ConservationLaw<3, 5> for Euler3D {
     [fx, fy, fz]
   }
 
-  fn max_wave_speed(&self, state: &[f64; 5]) -> f64 {
+  fn max_wave_speed<T: Scalar>(&self, state: &[T; 5]) -> T {
     let rho = state[0];
     let u = state[1] / rho;
     let v = state[2] / rho;
     let w = state[3] / rho;
     let p = self.pressure(state);
-    let c = (self.gamma * p / rho).sqrt();
-    (u * u + v * v + w * w).sqrt() + c
+    let c = (p / rho * self.gamma).sqrt();
+    // Regularise `|u|` so the dual derivative is finite at u = 0 (sqrt' is
+    // singular there); negligible beside the sound speed.
+    (u * u + v * v + w * w + SPEED_EPS).sqrt() + c
   }
 
-  fn source(
+  fn source<T: Scalar>(
     &self,
-    state: &[f64; 5],
+    state: &[T; 5],
     cell: CellId,
     _: &Point<3>,
     _: &CellMetrics<3>,
-  ) -> [f64; 5] {
+  ) -> [T; 5] {
     let g = match &self.gravity {
-      GravityField::None => return [0.0; 5],
+      GravityField::None => return [T::from(0.0); 5],
       GravityField::Constant(g) => *g,
       GravityField::PerCell(field) => field[cell.index()],
     };
     let rho = state[0];
     // Gravity: force/volume = ρ·g on momentum, work/volume = (ρu)·g on energy.
     [
-      0.0,
+      T::from(0.0),
       rho * g[0],
       rho * g[1],
       rho * g[2],
@@ -427,15 +528,15 @@ impl MoistEuler3D {
   }
 
   /// The dry 5-component sub-state `[ρ, ρu, ρv, ρw, E]`.
-  pub fn dry_state(state: &[f64; 6]) -> [f64; 5] {
+  pub fn dry_state<T: Scalar>(state: &[T; 6]) -> [T; 5] {
     [state[0], state[1], state[2], state[3], state[4]]
   }
 
-  pub fn velocity(&self, state: &[f64; 6]) -> [f64; 3] {
+  pub fn velocity<T: Scalar>(&self, state: &[T; 6]) -> [T; 3] {
     self.dry.velocity(&Self::dry_state(state))
   }
 
-  pub fn pressure(&self, state: &[f64; 6]) -> f64 {
+  pub fn pressure<T: Scalar>(&self, state: &[T; 6]) -> T {
     self.dry.pressure(&Self::dry_state(state))
   }
 
@@ -444,19 +545,19 @@ impl MoistEuler3D {
   }
 
   /// Specific humidity `q = ρq / ρ` (water-vapour mass fraction).
-  pub fn specific_humidity(&self, state: &[f64; 6]) -> f64 {
+  pub fn specific_humidity<T: Scalar>(&self, state: &[T; 6]) -> T {
     state[5] / state[0]
   }
 }
 
 impl ConservationLaw<3, 6> for MoistEuler3D {
-  fn flux(&self, state: &[f64; 6]) -> [[f64; 6]; 3] {
+  fn flux<T: Scalar>(&self, state: &[T; 6]) -> [[T; 6]; 3] {
     let dry = Self::dry_state(state);
     let dry_flux = self.dry.flux(&dry);
     let rho = state[0];
     let rho_q = state[5];
     // Advective flux of ρq in each direction is ρq · u_d = ρq · (ρu_d / ρ).
-    let mut out = [[0.0; 6]; 3];
+    let mut out = [[T::from(0.0); 6]; 3];
     for d in 0..3 {
       for i in 0..5 {
         out[d][i] = dry_flux[d][i];
@@ -467,19 +568,19 @@ impl ConservationLaw<3, 6> for MoistEuler3D {
     out
   }
 
-  fn max_wave_speed(&self, state: &[f64; 6]) -> f64 {
+  fn max_wave_speed<T: Scalar>(&self, state: &[T; 6]) -> T {
     // Tracer advection speed |u| never exceeds the acoustic bound used by
     // the dry law, so the dry estimate also bounds the moist system.
     self.dry.max_wave_speed(&Self::dry_state(state))
   }
 
-  fn source(
+  fn source<T: Scalar>(
     &self,
-    state: &[f64; 6],
+    state: &[T; 6],
     cell: CellId,
     centroid: &Point<3>,
     metrics: &CellMetrics<3>,
-  ) -> [f64; 6] {
+  ) -> [T; 6] {
     let dry = self
       .dry
       .source(&Self::dry_state(state), cell, centroid, metrics);
@@ -488,9 +589,9 @@ impl ConservationLaw<3, 6> for MoistEuler3D {
     let m = [state[1], state[2], state[3]];
     let o = self.omega;
     let coriolis = [
-      -2.0 * (o[1] * m[2] - o[2] * m[1]),
-      -2.0 * (o[2] * m[0] - o[0] * m[2]),
-      -2.0 * (o[0] * m[1] - o[1] * m[0]),
+      (m[2] * o[1] - m[1] * o[2]) * -2.0,
+      (m[0] * o[2] - m[2] * o[0]) * -2.0,
+      (m[1] * o[0] - m[0] * o[1]) * -2.0,
     ];
     [
       dry[0],
@@ -498,7 +599,7 @@ impl ConservationLaw<3, 6> for MoistEuler3D {
       dry[2] + coriolis[1],
       dry[3] + coriolis[2],
       dry[4],
-      0.0,
+      T::from(0.0),
     ]
   }
 
@@ -510,6 +611,42 @@ impl ConservationLaw<3, 6> for MoistEuler3D {
     if state[5] < 0.0 {
       state[5] = 0.0;
     }
+  }
+
+  /// Acoustic part of the flux for an IMEX split: the terms that carry the
+  /// sound speed — the mass flux `ρu` (the velocity divergence in continuity),
+  /// the pressure gradient on the momentum diagonal, and the pressure work
+  /// `p·u` in energy. Momentum/energy *advection* and the moisture tracer stay
+  /// in the explicit remainder.
+  fn implicit_flux<T: Scalar>(&self, state: &[T; 6]) -> [[T; 6]; 3] {
+    let rho = state[0];
+    let p = self.pressure(state);
+    let mut out = [[T::from(0.0); 6]; 3];
+    for d in 0..3 {
+      let u_d = state[1 + d] / rho;
+      out[d][0] = state[1 + d]; // mass flux ρu_d
+      out[d][1 + d] = p; // pressure on the momentum diagonal
+      out[d][4] = p * u_d; // pressure work
+    }
+    out
+  }
+
+  /// Sound speed `c = √(γ·p/ρ)` — the dissipation speed for the implicit
+  /// (acoustic) flux.
+  fn acoustic_speed<T: Scalar>(&self, state: &[T; 6]) -> T {
+    let rho = state[0];
+    let p = self.pressure(state);
+    (p / rho * self.gamma()).sqrt()
+  }
+
+  /// Explicit (advective) wave speed `|u|`: with the acoustics handled
+  /// implicitly, the explicit CFL is set by advection, not sound.
+  fn explicit_wave_speed<T: Scalar>(&self, state: &[T; 6]) -> T {
+    let rho = state[0];
+    let u = state[1] / rho;
+    let v = state[2] / rho;
+    let w = state[3] / rho;
+    (u * u + v * v + w * w + SPEED_EPS).sqrt()
   }
 }
 
