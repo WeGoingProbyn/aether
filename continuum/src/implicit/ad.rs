@@ -91,7 +91,9 @@ pub fn face_adjacency_colouring(
 
 /// Invert an `N×N` matrix by Gauss–Jordan elimination with partial pivoting.
 /// Returns `None` if (near-)singular.
-fn invert<const N: usize>(mut a: [[f64; N]; N]) -> Option<[[f64; N]; N]> {
+pub(crate) fn invert<const N: usize>(
+  mut a: [[f64; N]; N],
+) -> Option<[[f64; N]; N]> {
   let mut inv = [[0.0; N]; N];
   for (i, row) in inv.iter_mut().enumerate() {
     row[i] = 1.0;

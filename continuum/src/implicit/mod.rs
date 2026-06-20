@@ -16,6 +16,7 @@ pub mod ad;
 pub mod backend;
 pub mod dispatch;
 pub mod gmres;
+pub mod hevi;
 pub mod hybrid;
 pub mod jacobian;
 pub mod linalg;
