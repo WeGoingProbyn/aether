@@ -161,10 +161,38 @@ pub fn build_ocean_world_aether()
   build_ocean_world_scheme(aer::AtmosphereScheme::Hevi)
 }
 
+/// Which coupling stages to wire into the ocean world — for bisecting which
+/// source drives the coupled instability. Default = the full demo.
+#[derive(Clone, Copy, Debug)]
+pub struct OceanWorldCoupling {
+  pub radiation: bool,
+  pub evaporation: bool,
+  pub saturation: bool,
+}
+
+impl Default for OceanWorldCoupling {
+  fn default() -> Self {
+    Self {
+      radiation: true,
+      evaporation: true,
+      saturation: true,
+    }
+  }
+}
+
 /// Build the ocean world with a chosen atmosphere time-stepping scheme — for
 /// A/B comparison of explicit vs HEVI dynamics.
 pub fn build_ocean_world_scheme(
   scheme: aer::AtmosphereScheme,
+) -> AetherResult<(Aether, AtmosphereShellLayout)> {
+  build_ocean_world_configured(scheme, OceanWorldCoupling::default())
+}
+
+/// Build the ocean world with a chosen scheme and a chosen subset of coupling
+/// stages enabled.
+pub fn build_ocean_world_configured(
+  scheme: aer::AtmosphereScheme,
+  coupling: OceanWorldCoupling,
 ) -> AetherResult<(Aether, AtmosphereShellLayout)> {
   let angular_dims = [16, 16];
   let atmosphere_layers = 6;
@@ -267,7 +295,9 @@ pub fn build_ocean_world_scheme(
   // Add order fixes coupling resolution (earlier-added runs first on any
   // data conflict). Atmosphere group is the default subsystem; the ocean
   // is its own slower subsystem.
-  radiation_model.add_stages(factory.nexus_mut())?;
+  if coupling.radiation {
+    radiation_model.add_stages(factory.nexus_mut())?;
+  }
   let sst_relax = ScalarRelaxation::from_coupler(
     factory.tessera(),
     coupler,
@@ -277,19 +307,23 @@ pub fn build_ocean_world_scheme(
   )?;
   factory.add_stage(sst_relax);
   atmosphere_model.add_stages(factory.nexus_mut())?;
-  factory.add_stage(EvaporationStep::new(
-    MeshKey::ATMOSPHERE,
-    atmosphere_fields.euler_state,
-    sst,
-    evaporation,
-    ShellColumns::cube_sphere(angular_dims, atmosphere_layers),
-    1.0e-2,
-  )?);
-  factory.add_stage(SaturationAdjustmentStep::new(
-    MeshKey::ATMOSPHERE,
-    atmosphere_fields.euler_state,
-    precipitation,
-  )?);
+  if coupling.evaporation {
+    factory.add_stage(EvaporationStep::new(
+      MeshKey::ATMOSPHERE,
+      atmosphere_fields.euler_state,
+      sst,
+      evaporation,
+      ShellColumns::cube_sphere(angular_dims, atmosphere_layers),
+      1.0e-2,
+    )?);
+  }
+  if coupling.saturation {
+    factory.add_stage(SaturationAdjustmentStep::new(
+      MeshKey::ATMOSPHERE,
+      atmosphere_fields.euler_state,
+      precipitation,
+    )?);
+  }
   factory.add_stage(DiurnalSunStep::new(angular_velocity));
   ocean_model.add_stages(factory.nexus_mut())?;
 

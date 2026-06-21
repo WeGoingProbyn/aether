@@ -13,45 +13,68 @@ use nexus::{FieldStorage, MeshKey, SoaField};
 use sandbox::{SANDBOX_WORLD_ID, build_ocean_world_scheme};
 use utility::domain::{CellId, FieldKey, FieldName};
 
-fn density_spread(aether: &aether::core::Aether) -> Option<(f64, f64)> {
+struct Stats {
+  min_rho: f64,
+  max_rho: f64,
+  total_mass: f64,
+  total_energy: f64,
+  total_moisture: f64,
+}
+
+fn stats(aether: &aether::core::Aether) -> Option<Stats> {
   let world = aether.world(SANDBOX_WORLD_ID).unwrap();
   let key = FieldKey::new(MeshKey::ATMOSPHERE, FieldName::EulerState);
   let state = world.pleroma().read::<SoaField<6>>(key)?;
-  let mut min = f64::INFINITY;
-  let mut max = f64::NEG_INFINITY;
+  let mut s = Stats {
+    min_rho: f64::INFINITY,
+    max_rho: f64::NEG_INFINITY,
+    total_mass: 0.0,
+    total_energy: 0.0,
+    total_moisture: 0.0,
+  };
   for i in 0..state.len() {
-    let rho = state.state(CellId::from(i))[0];
+    let cell = state.state(CellId::from(i));
+    let rho = cell[0];
     if !rho.is_finite() {
       return None;
     }
-    min = min.min(rho);
-    max = max.max(rho);
+    s.min_rho = s.min_rho.min(rho);
+    s.max_rho = s.max_rho.max(rho);
+    s.total_mass += rho;
+    s.total_energy += cell[4];
+    s.total_moisture += cell[5];
   }
-  Some((min, max))
+  Some(s)
 }
 
 fn run(scheme: AtmosphereScheme, label: &str) {
   let dt = 20.0;
   let steps = 400;
   let (mut aether, _) = build_ocean_world_scheme(scheme).unwrap();
+  let m0 = stats(&aether).unwrap().total_mass;
   for step in 1..=steps {
     if aether.step(dt).is_err() {
       eprintln!("[{label}] step {step}: STEP ERROR (non-physical)");
       return;
     }
-    let Some((min, max)) = density_spread(&aether) else {
+    let Some(s) = stats(&aether) else {
       eprintln!("[{label}] step {step}: NaN density");
       return;
     };
-    if step % 50 == 0 || max - min > 1.0 {
+    let spread = s.max_rho - s.min_rho;
+    if step % 5 == 0 || spread > 1.0 {
       eprintln!(
-        "[{label}] step {step:4} (sim {:6.0}s): rho [{min:.4}, {max:.4}] spread {:.4}",
-        step as f64 * dt,
-        max - min
+        "[{label}] step {step:4}: rho [{:.3},{:.3}] | mass {:.2} ({:+.1}%) energy {:.3e} moist {:.3e}",
+        s.min_rho,
+        s.max_rho,
+        s.total_mass,
+        100.0 * (s.total_mass - m0) / m0,
+        s.total_energy,
+        s.total_moisture,
       );
     }
-    if max - min > 5.0 {
-      eprintln!("[{label}] step {step}: spread runaway — checkerboard");
+    if spread > 5.0 {
+      eprintln!("[{label}] step {step}: runaway");
       return;
     }
   }
