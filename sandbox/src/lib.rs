@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use aer::{
   AtmosphereModel, AtmosphereShellLayout, EvaporationStep,
-  SaturationAdjustmentStep, ShellColumns,
+  LATENT_HEAT_VAPORISATION, SaturationAdjustmentStep, ShellColumns,
 };
 use aether::{
   core::{Aether, System},
@@ -25,7 +25,7 @@ use eidolon::ir::{
 };
 use lumen::{DiurnalSunStep, RadiationCoefficients, RadiationModel};
 use nexus::{MeshKey, SoaField, SubsystemId, WorldId};
-use syzygy::ScalarRelaxation;
+use syzygy::{ScalarInterfaceDeposition, ScalarRelaxation};
 use terra::SurfaceThermalModel;
 use tessera::cube_sphere::CubeSphereShellSpec;
 use thalassa::{OceanColumnLayout, OceanModel};
@@ -314,7 +314,13 @@ pub fn build_ocean_world_configured(
       sst,
       evaporation,
       ShellColumns::cube_sphere(angular_dims, atmosphere_layers),
-      1.0e-2,
+      // Bulk air–sea moisture exchange rate (1/s). The latent-heat flux this
+      // implies (≈ L_v · Δz · ρ · k · q_sat ≈ 1e8 · k W/m²) must be a flux the
+      // ocean can actually supply now that the latent-heat sink debits it
+      // conservatively; 1e-6 gives ~100 W/m², a realistic tropical value. (The
+      // old 1e-2 implied ~1 MW/m² — physical only because the ocean was an
+      // infinite reservoir, which is exactly the bug this couples away.)
+      1.0e-6,
     )?);
   }
   if coupling.saturation {
@@ -323,6 +329,26 @@ pub fn build_ocean_world_configured(
       atmosphere_fields.euler_state,
       precipitation,
     )?);
+  }
+  if coupling.evaporation {
+    // Conservative air–sea latent-heat exchange. Evaporation lifts vapour into
+    // the air carrying its latent heat; condensation later releases that heat
+    // into the atmosphere. For the coupled system to conserve energy the ocean
+    // must lose it here — so debit the ocean surface net flux by the latent
+    // heat flux `L_v · ṁ`, where the surface mass flux `ṁ = Δz · evap_flux`
+    // (evap_flux is per unit volume of the bottom atmosphere layer of
+    // thickness Δz). The ocean's finite heat capacity then self-limits
+    // evaporation instead of acting as an infinite reservoir. Runs after
+    // radiation (which writes net_flux) and evaporation, before the ocean step.
+    let layer_thickness = atmosphere_height / atmosphere_layers as f64;
+    let latent_sink = ScalarInterfaceDeposition::from_coupler(
+      factory.tessera(),
+      coupler,
+      evaporation,
+      ocean_fields.net_flux,
+      -LATENT_HEAT_VAPORISATION * layer_thickness,
+    )?;
+    factory.add_stage(latent_sink);
   }
   factory.add_stage(DiurnalSunStep::new(angular_velocity));
   ocean_model.add_stages(factory.nexus_mut())?;

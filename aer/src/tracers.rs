@@ -208,6 +208,13 @@ impl Stage for EvaporationStep {
         let q_sat_sea = saturation_specific_humidity(t_sea, p);
         let dq = self.exchange_rate * dt * (q_sat_sea - q);
         if dq > 0.0 {
+          // The vapour carries its latent heat implicitly: the air's sensible
+          // energy is unchanged here (sea-surface evaporation draws its latent
+          // heat from the OCEAN, not the air). The condensation half releases
+          // that latent heat into the air; conservation closes by debiting the
+          // ocean surface for `LATENT · evaporation_flux` (see the air–sea
+          // latent-heat sink stage), so the air–sea heat flux is real and
+          // bounded by the ocean's finite heat capacity.
           let delta_rho_q = rho * dq;
           s[5] += delta_rho_q;
           added[cell] = delta_rho_q / dt; // kg/m³/s diagnostic

@@ -32,12 +32,12 @@ fn run(label: &str, coupling: OceanWorldCoupling) {
   let (mut aether, _) =
     build_ocean_world_configured(AtmosphereScheme::Hevi, coupling).unwrap();
   let m0 = total_mass(&aether).unwrap();
-  for step in 1..=40 {
+  for step in 1..=120 {
     if aether.step(20.0).is_err() || total_mass(&aether).is_none() {
       eprintln!("[{label}] step {step}: non-physical");
       return;
     }
-    if step % 10 == 0 {
+    if step % 20 == 0 {
       let m = total_mass(&aether).unwrap();
       eprintln!(
         "[{label}] step {step:3}: mass {m:.1} ({:+.1}%)",
@@ -61,8 +61,20 @@ fn bisect_coupling_runaway() {
     saturation: false,
   };
   run("none", off);
-  run("radiation only", OceanWorldCoupling { radiation: true, ..off });
-  run("evaporation only", OceanWorldCoupling { evaporation: true, ..off });
+  run(
+    "radiation only",
+    OceanWorldCoupling {
+      radiation: true,
+      ..off
+    },
+  );
+  run(
+    "evaporation only",
+    OceanWorldCoupling {
+      evaporation: true,
+      ..off
+    },
+  );
   run(
     "evap+saturation",
     OceanWorldCoupling {

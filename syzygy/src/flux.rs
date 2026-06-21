@@ -147,6 +147,123 @@ impl Stage for ScalarInterfaceFlux {
   }
 }
 
+/// Deposits a scaled source-side scalar onto a target-side scalar across an
+/// interface stencil — `target[t] += scale · weight · source[s]`.
+///
+/// Unlike [`ScalarInterfaceFlux`] (a gradient-driven exchange written to a
+/// separate tendency), this *accumulates directly* onto an existing target
+/// field, so it composes with other contributors to that field (e.g. radiation
+/// writing the ocean's net surface flux first). It is the conservative air–sea
+/// latent-heat sink: the atmosphere's evaporative mass flux, scaled by
+/// `-L_v · Δz`, debits the ocean surface energy the vapour will later release
+/// on condensation.
+pub struct ScalarInterfaceDeposition {
+  stencil: CouplingStencil,
+  source: FieldKey,
+  target: FieldKey,
+  scale: f64,
+  reads: [FieldKey; 1],
+  writes: [FieldKey; 1],
+}
+
+impl ScalarInterfaceDeposition {
+  pub fn new(
+    stencil: CouplingStencil,
+    source: FieldKey,
+    target: FieldKey,
+    scale: f64,
+  ) -> AetherResult<Self> {
+    validate_conductance(scale)?;
+    if source.mesh() != stencil.source_mesh()
+      || target.mesh() != stencil.target_mesh()
+    {
+      return Err(AetherError::new(SyzygyError::FieldMeshMismatch).context(
+        format!(
+          "source {:?}, target {:?}, stencil {:?} -> {:?}",
+          source,
+          target,
+          stencil.source_mesh(),
+          stencil.target_mesh()
+        ),
+      ));
+    }
+    Ok(Self {
+      stencil,
+      source,
+      target,
+      scale,
+      reads: [source],
+      writes: [target],
+    })
+  }
+
+  pub fn from_coupler(
+    tessera: &Tessera,
+    coupler_index: usize,
+    source: FieldKey,
+    target: FieldKey,
+    scale: f64,
+  ) -> AetherResult<Self> {
+    let stencil = CouplingStencil::from_tessera_coupler(
+      tessera,
+      coupler_index,
+      source.mesh(),
+      target.mesh(),
+    )?;
+    Self::new(stencil, source, target, scale)
+  }
+}
+
+impl Stage for ScalarInterfaceDeposition {
+  fn name(&self) -> &'static str {
+    "syzygy_scalar_interface_deposition"
+  }
+
+  fn reads(&self) -> &[FieldKey] {
+    &self.reads
+  }
+
+  fn writes(&self) -> &[FieldKey] {
+    &self.writes
+  }
+
+  fn run(&mut self, mut ctx: StageContext<'_>) -> AetherResult<()> {
+    // Accumulate per target cell from the source field first.
+    let deposits = {
+      let source: &SoaField<1> =
+        ctx.world.fields.read(self.source).ok_or_else(|| {
+          AetherError::new(SyzygyError::MissingReadField)
+            .context(format!("{:?}", self.source))
+        })?;
+      let mut deposits = vec![0.0; source.len().max(1)];
+      let mut target_len = 0usize;
+      for entry in self.stencil.entries() {
+        ensure_cell_in_bounds(entry.source_cell, source.len(), "source")?;
+        target_len = target_len.max(entry.target_cell.index() + 1);
+        if deposits.len() < target_len {
+          deposits.resize(target_len, 0.0);
+        }
+        let s = source.state(entry.source_cell).as_state()[0];
+        deposits[entry.target_cell.index()] += self.scale * entry.weight * s;
+      }
+      deposits
+    };
+
+    let target: &mut SoaField<1> =
+      ctx.world.fields.write(self.target).ok_or_else(|| {
+        AetherError::new(SyzygyError::MissingWriteField)
+          .context(format!("{:?}", self.target))
+      })?;
+    for (cell, add) in deposits.into_iter().enumerate() {
+      if add != 0.0 && cell < target.len() {
+        let current = target.state(CellId::from(cell)).as_state()[0];
+        target.write(CellId::from(cell), &[current + add]);
+      }
+    }
+    Ok(())
+  }
+}
+
 fn validate_conductance(conductance: f64) -> AetherResult<()> {
   if conductance.is_finite() {
     Ok(())

@@ -10,6 +10,6 @@ pub mod scalar;
 pub mod stencil;
 
 pub use error::SyzygyError;
-pub use flux::ScalarInterfaceFlux;
+pub use flux::{ScalarInterfaceDeposition, ScalarInterfaceFlux};
 pub use scalar::ScalarRelaxation;
 pub use stencil::{CouplingEntry, CouplingStencil};
