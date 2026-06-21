@@ -16,6 +16,7 @@ use crate::ir::{LayerSamples, ScalarSamples};
 
 use super::{
   palette::colour_for_scalar,
+  playback::FrameInterpolatorResource,
   registry::{LayerKindCache, RenderRegistry},
 };
 
@@ -23,6 +24,7 @@ use super::{
 pub fn paint_layers_system(
   mut registry: ResMut<RenderRegistry>,
   mut meshes: ResMut<Assets<Mesh>>,
+  interp: Res<FrameInterpolatorResource>,
 ) {
   if registry.dirty_meshes.is_empty() {
     return;
@@ -44,10 +46,15 @@ pub fn paint_layers_system(
       // Vector / Mask layers aren't painted as vertex colours yet.
       continue;
     };
-    let Some(LayerSamples::Scalar(ScalarSamples::PerCell(samples))) =
-      layer_entry.samples.as_ref()
-    else {
-      continue;
+    // Prefer the render-clock-interpolated samples; fall back to the raw
+    // latest samples when the interpolator has nothing for this layer.
+    let interpolated = interp.0.samples(*layer_handle);
+    let samples: &[f64] = match interpolated.as_deref() {
+      Some(values) => values,
+      None => match layer_entry.samples.as_ref() {
+        Some(LayerSamples::Scalar(ScalarSamples::PerCell(values))) => values,
+        _ => continue,
+      },
     };
 
     let palette_handle = match palette {

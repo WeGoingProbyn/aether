@@ -13,7 +13,9 @@ use bevy::prelude::*;
 use crate::runtime::UpdateReceiver;
 
 use super::{
-  apply::apply_updates_system, paint::paint_layers_system,
+  apply::apply_updates_system,
+  paint::paint_layers_system,
+  playback::{FrameInterpolatorResource, advance_playback_system},
   registry::RenderRegistry,
 };
 
@@ -57,7 +59,11 @@ impl Plugin for AetherBevyPlugin {
     app
       .insert_resource(UpdateReceiverResource::new(receiver))
       .init_resource::<RenderRegistry>()
+      .init_resource::<FrameInterpolatorResource>()
       .add_systems(PreUpdate, apply_updates_system)
-      .add_systems(Update, paint_layers_system);
+      .add_systems(
+        Update,
+        (advance_playback_system, paint_layers_system).chain(),
+      );
   }
 }

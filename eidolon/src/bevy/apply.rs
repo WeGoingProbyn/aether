@@ -13,6 +13,7 @@ use utility::profile;
 use crate::ir::{LayerKind, RenderGeometry, Update, UpdateBatch};
 
 use super::{
+  playback::{FrameInterpolatorResource, snapshot_sample_frame},
   plugin::UpdateReceiverResource,
   registry::{
     LayerEntry, LayerKindCache, MeshEntry, RenderRegistry, WorldEntry,
@@ -27,6 +28,7 @@ pub fn apply_updates_system(
   mut registry: ResMut<RenderRegistry>,
   mut meshes: ResMut<Assets<Mesh>>,
   mut materials: ResMut<Assets<StandardMaterial>>,
+  mut interp: ResMut<FrameInterpolatorResource>,
 ) {
   let Some(batch) = pull_batch(&receiver) else {
     return;
@@ -34,6 +36,12 @@ pub fn apply_updates_system(
 
   let UpdateBatch { updates, .. } = batch;
   for update in updates {
+    // A frame boundary: the registry now holds this frame's complete samples,
+    // so snapshot them into the interpolator before the (no-op) apply.
+    if let Update::SetSimTime { sim_time, .. } = &update {
+      let frame = snapshot_sample_frame(&registry, *sim_time);
+      interp.0.push(frame);
+    }
     apply_one(
       update,
       &mut commands,

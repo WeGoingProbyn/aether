@@ -12,5 +12,6 @@ pub mod bevy;
 pub mod export;
 pub mod extract;
 pub mod ir;
+pub mod playback;
 pub mod registry;
 pub mod runtime;

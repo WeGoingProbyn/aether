@@ -11,6 +11,7 @@ pub mod apply;
 pub mod camera;
 pub mod paint;
 pub mod palette;
+pub mod playback;
 pub mod plugin;
 pub mod registry;
 pub mod sun;
