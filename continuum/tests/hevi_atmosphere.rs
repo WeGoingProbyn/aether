@@ -146,7 +146,7 @@ fn bench_hevi_vs_explicit() {
   eprintln!("explicit: {steps:5} steps, {explicit_ms:8.1} ms");
 
   // HEVI at a large multiple of the vertical CFL.
-  for &mult in &[20.0_f64, 40.0, 80.0] {
+  for &mult in &[20.0_f64, 40.0, 80.0, 160.0, 320.0] {
     let target = mult * vertical_cfl;
     let mut hevi = FvmSolver::with_backend(
       config.clone(),

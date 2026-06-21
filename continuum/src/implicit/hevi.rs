@@ -25,7 +25,7 @@ use utility::{
 };
 
 use crate::{
-  boundary::{BoundaryRegistry, BoundaryScalar},
+  boundary::BoundaryRegistry,
   implicit::ad::invert,
   kernel,
   model::{ConservationLaw, NumericalFlux},
@@ -322,145 +322,97 @@ where
   })
 }
 
-/// The vertical (radial) implicit residual at column position `k`, generic over
-/// the scalar so its exact Jacobian can be taken by AD. It is the implicit
-/// (acoustic) flux through cell `k`'s up and down radial faces, divided by
-/// volume. Interior radial faces only — the boundary caps stay in the explicit
-/// RHS, so the per-column system is purely tridiagonal.
-#[allow(clippy::too_many_arguments)]
-fn radial_residual<const D: usize, const N: usize, L, F, T>(
+/// Compute the two `N×N` Jacobians of one interior radial face's implicit flux:
+/// `∂F/∂U_lower` and `∂F/∂U_upper`, by forward-mode AD. Computed **once per
+/// face** and distributed to both adjacent cells' blocks (face-sharing), which
+/// avoids recomputing each face from both sides.
+fn face_flux_jacobian<const D: usize, const N: usize, L, F>(
   law: &L,
   flux: &F,
-  up: &[UpFace<D>],
-  bottom: Option<&CapFace<D>>,
-  top: Option<&CapFace<D>>,
-  bcs: &BoundaryRegistry<D, N>,
-  k: usize,
-  m: usize,
-  inv_vol: f64,
-  s_down: &[T; N],
-  s_k: &[T; N],
-  s_up: &[T; N],
-) -> [T; N]
+  normal: &Vector<f64, D>,
+  u_lower: &[f64; N],
+  u_upper: &[f64; N],
+  owner_is_lower: bool,
+) -> ([[f64; N]; N], [[f64; N]; N])
 where
   L: ConservationLaw<D, N>,
   F: NumericalFlux<D, N>,
-  T: BoundaryScalar<D, N>,
 {
-  let mut acc = [T::from(0.0); N];
-
-  // Up face between cells[k] (lower) and cells[k+1] (upper).
-  if k + 1 < m {
-    let uf = &up[k];
-    let (left, right) = if uf.owner_is_lower {
-      (s_k, s_up)
+  let mut jl = [[0.0; N]; N];
+  let mut ju = [[0.0; N]; N];
+  for c in 0..N {
+    // ∂F/∂U_lower column c.
+    let dl = dual_seed(u_lower, Some(c));
+    let du = dual_seed(u_upper, None);
+    let (left, right) = if owner_is_lower {
+      (&dl, &du)
     } else {
-      (s_up, s_k)
+      (&du, &dl)
     };
-    let f = flux.compute_implicit(law, left, right, &uf.normal);
-    let sign = if uf.owner_is_lower { -1.0 } else { 1.0 };
-    for i in 0..N {
-      acc[i] = acc[i] + f[i] * (sign * uf.scale);
+    let f = flux.compute_implicit(law, left, right, normal);
+    for (row, fr) in f.iter().enumerate() {
+      jl[row][c] = fr.eps;
     }
-  }
-
-  // Down face = up_faces[k-1], between cells[k-1] (lower) and cells[k] (upper).
-  if k > 0 {
-    let uf = &up[k - 1];
-    let (left, right) = if uf.owner_is_lower {
-      (s_down, s_k)
+    // ∂F/∂U_upper column c.
+    let dl = dual_seed(u_lower, None);
+    let du = dual_seed(u_upper, Some(c));
+    let (left, right) = if owner_is_lower {
+      (&dl, &du)
     } else {
-      (s_k, s_down)
+      (&du, &dl)
     };
-    let f = flux.compute_implicit(law, left, right, &uf.normal);
-    // cells[k] is the upper cell of this face.
-    let sign = if uf.owner_is_lower { 1.0 } else { -1.0 };
-    for i in 0..N {
-      acc[i] = acc[i] + f[i] * (sign * uf.scale);
+    let f = flux.compute_implicit(law, left, right, normal);
+    for (row, fr) in f.iter().enumerate() {
+      ju[row][c] = fr.eps;
     }
   }
-
-  // Boundary radial caps at the column ends (owner always loses through the
-  // boundary face): ghost depends only on this cell, so it stays on the
-  // diagonal block.
-  if k == 0
-    && let Some(cap) = bottom
-    && let Some(bc) = bcs.get(cap.tag)
-  {
-    let ghost = T::ghost(bc, s_k, &cap.normal);
-    let f = flux.compute_implicit(law, s_k, &ghost, &cap.normal);
-    for i in 0..N {
-      acc[i] = acc[i] - f[i] * cap.scale;
-    }
-  }
-  if k + 1 == m
-    && let Some(cap) = top
-    && let Some(bc) = bcs.get(cap.tag)
-  {
-    let ghost = T::ghost(bc, s_k, &cap.normal);
-    let f = flux.compute_implicit(law, s_k, &ghost, &cap.normal);
-    for i in 0..N {
-      acc[i] = acc[i] - f[i] * cap.scale;
-    }
-  }
-
-  let mut out = [T::from(0.0); N];
-  for i in 0..N {
-    out[i] = acc[i] * inv_vol;
-  }
-  out
+  (jl, ju)
 }
 
-/// Build the `N×N` Jacobian block `∂R_vert_k/∂U_j` by forward-mode AD: seed each
-/// component of the `j` state's dual part in turn and read the residual's dual
-/// part. `which` selects which neighbour state is the variable.
-#[allow(clippy::too_many_arguments)]
-fn jacobian_block<const D: usize, const N: usize, L, F>(
+/// `∂F_cap/∂U_k` for a boundary radial cap, via AD (the ghost depends on the
+/// end cell only, so this lands on the diagonal block).
+fn cap_flux_jacobian<const D: usize, const N: usize, L, F>(
   law: &L,
   flux: &F,
-  up: &[UpFace<D>],
-  bottom: Option<&CapFace<D>>,
-  top: Option<&CapFace<D>>,
-  bcs: &BoundaryRegistry<D, N>,
-  k: usize,
-  m: usize,
-  inv_vol: f64,
-  s_down: &[f64; N],
-  s_k: &[f64; N],
-  s_up: &[f64; N],
-  which: Var,
+  bc: &dyn crate::boundary::BoundaryCondition<D, N>,
+  normal: &Vector<f64, D>,
+  u_k: &[f64; N],
 ) -> [[f64; N]; N]
 where
   L: ConservationLaw<D, N>,
   F: NumericalFlux<D, N>,
 {
-  let dual = |s: &[f64; N], seed: Option<usize>| {
-    let mut d = [Dual64::from(0.0); N];
-    for i in 0..N {
-      d[i] = Dual64::new(s[i], if seed == Some(i) { 1.0 } else { 0.0 });
-    }
-    d
-  };
-  let mut block = [[0.0; N]; N];
+  let mut j = [[0.0; N]; N];
   for c in 0..N {
-    let dd = dual(s_down, (which == Var::Down).then_some(c));
-    let dk = dual(s_k, (which == Var::Self_).then_some(c));
-    let du = dual(s_up, (which == Var::Up).then_some(c));
-    let r = radial_residual(
-      law, flux, up, bottom, top, bcs, k, m, inv_vol, &dd, &dk, &du,
-    );
-    for (row, rv) in r.iter().enumerate() {
-      block[row][c] = rv.eps;
+    let dk = dual_seed(u_k, Some(c));
+    let ghost = bc.ghost_state_dual(&dk, normal);
+    let f = flux.compute_implicit(law, &dk, &ghost, normal);
+    for (row, fr) in f.iter().enumerate() {
+      j[row][c] = fr.eps;
     }
   }
-  block
+  j
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Var {
-  Down,
-  Self_,
-  Up,
+fn dual_seed<const N: usize>(s: &[f64; N], seed: Option<usize>) -> [Dual64; N] {
+  let mut d = [Dual64::from(0.0); N];
+  for i in 0..N {
+    d[i] = Dual64::new(s[i], if seed == Some(i) { 1.0 } else { 0.0 });
+  }
+  d
+}
+
+/// `dst += alpha · src` on `N×N` blocks.
+fn axpy_block<const N: usize>(
+  dst: &mut [[f64; N]; N],
+  alpha: f64,
+  src: &[[f64; N]; N],
+) {
+  for r in 0..N {
+    for c in 0..N {
+      dst[r][c] += alpha * src[r][c];
+    }
+  }
 }
 
 /// Vertically-implicit (HEVI) finite-volume backend. The full residual `R(U)`
@@ -551,103 +503,89 @@ impl<const N: usize> HeviBackend<N> {
     );
 
     self.fell_back = 0;
-    let zero = [0.0; N];
+    let inv_dt = 1.0 / dt;
     let mut rows: Vec<BlockRow<N>> = Vec::new();
     let mut sol: Vec<[f64; N]> = Vec::new();
+    let mut diag: Vec<[[f64; N]; N]> = Vec::new();
+    let mut sub: Vec<[[f64; N]; N]> = Vec::new();
+    let mut sup: Vec<[[f64; N]; N]> = Vec::new();
 
     for ((col, up), caps) in
       self.columns.iter().zip(&self.up_faces).zip(&self.caps)
     {
       let (bottom, top) = (caps.0.as_ref(), caps.1.as_ref());
       let m = col.cells.len();
-      rows.clear();
-      let inv_dt = 1.0 / dt;
-      for k in 0..m {
-        let ck = col.cells[k].index();
-        let s_k = self.state_cache[ck];
-        let s_down = if k > 0 {
-          self.state_cache[col.cells[k - 1].index()]
-        } else {
-          zero
-        };
-        let s_up = if k + 1 < m {
-          self.state_cache[col.cells[k + 1].index()]
-        } else {
-          zero
-        };
 
-        let inv_vol = 1.0 / mesh.cell_metrics(col.cells[k]).phys_volume;
+      // Per-cell tridiagonal blocks: diag starts at I/dt, off-diagonals at 0,
+      // then each radial face's shared Jacobian is distributed into all four
+      // touched blocks (diag_lower, sup_lower, diag_upper, sub_upper).
+      let zero = [[0.0; N]; N];
+      diag.clear();
+      diag.resize(m, zero);
+      sub.clear();
+      sub.resize(m, zero);
+      sup.clear();
+      sup.resize(m, zero);
+      for d in diag.iter_mut() {
+        for r in 0..N {
+          d[r][r] = inv_dt;
+        }
+      }
 
-        // diag = I/dt − ∂R_vert_k/∂U_k
-        let mut diag = jacobian_block(
+      let inv_vol =
+        |k: usize| 1.0 / mesh.cell_metrics(col.cells[k]).phys_volume;
+
+      // Interior faces — computed once, distributed to both adjacent cells.
+      for k in 0..m.saturating_sub(1) {
+        let uf = &up[k];
+        let s_lower = self.state_cache[col.cells[k].index()];
+        let s_upper = self.state_cache[col.cells[k + 1].index()];
+        let (jl, ju) = face_flux_jacobian(
           law,
           flux,
-          up,
-          bottom,
-          top,
-          bcs,
-          k,
-          m,
-          inv_vol,
-          &s_down,
-          &s_k,
-          &s_up,
-          Var::Self_,
+          &uf.normal,
+          &s_lower,
+          &s_upper,
+          uf.owner_is_lower,
         );
-        for r in 0..N {
-          for c in 0..N {
-            diag[r][c] = -diag[r][c];
-          }
-          diag[r][r] += inv_dt;
-        }
-        let sub = if k > 0 {
-          let mut b = jacobian_block(
-            law,
-            flux,
-            up,
-            bottom,
-            top,
-            bcs,
-            k,
-            m,
-            inv_vol,
-            &s_down,
-            &s_k,
-            &s_up,
-            Var::Down,
-          );
-          negate(&mut b);
-          b
+        let (sign_l, sign_u) = if uf.owner_is_lower {
+          (-1.0, 1.0)
         } else {
-          [[0.0; N]; N]
+          (1.0, -1.0)
         };
-        let sup = if k + 1 < m {
-          let mut b = jacobian_block(
-            law,
-            flux,
-            up,
-            bottom,
-            top,
-            bcs,
-            k,
-            m,
-            inv_vol,
-            &s_down,
-            &s_k,
-            &s_up,
-            Var::Up,
-          );
-          negate(&mut b);
-          b
-        } else {
-          [[0.0; N]; N]
-        };
+        let coef_l = sign_l * uf.scale * inv_vol(k);
+        let coef_u = sign_u * uf.scale * inv_vol(k + 1);
+        // diag = I/dt − ∂R/∂U ; sub/sup = −∂R/∂U_neighbour.
+        axpy_block(&mut diag[k], -coef_l, &jl);
+        axpy_block(&mut sup[k], -coef_l, &ju);
+        axpy_block(&mut diag[k + 1], -coef_u, &ju);
+        axpy_block(&mut sub[k + 1], -coef_u, &jl);
+      }
 
+      // Boundary caps (diagonal only).
+      if let Some(cap) = bottom
+        && let Some(bc) = bcs.get(cap.tag)
+      {
+        let s = self.state_cache[col.cells[0].index()];
+        let j = cap_flux_jacobian(law, flux, bc, &cap.normal, &s);
+        axpy_block(&mut diag[0], cap.scale * inv_vol(0), &j);
+      }
+      if let Some(cap) = top
+        && let Some(bc) = bcs.get(cap.tag)
+      {
+        let last = m - 1;
+        let s = self.state_cache[col.cells[last].index()];
+        let j = cap_flux_jacobian(law, flux, bc, &cap.normal, &s);
+        axpy_block(&mut diag[last], cap.scale * inv_vol(last), &j);
+      }
+
+      rows.clear();
+      for k in 0..m {
         rows.push(BlockRow {
-          sub,
-          diag,
-          sup,
-          rhs: self.residual_cache[ck],
+          sub: sub[k],
+          diag: diag[k],
+          sup: sup[k],
+          rhs: self.residual_cache[col.cells[k].index()],
         });
       }
 
@@ -677,14 +615,6 @@ impl<const N: usize> HeviBackend<N> {
       }
       law.fix_state(&mut self.state_cache[i]);
       state.write(CellId::from(i), &self.state_cache[i]);
-    }
-  }
-}
-
-fn negate<const N: usize>(b: &mut [[f64; N]; N]) {
-  for row in b.iter_mut() {
-    for v in row.iter_mut() {
-      *v = -*v;
     }
   }
 }
