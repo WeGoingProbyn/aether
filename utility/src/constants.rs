@@ -18,7 +18,6 @@ pub const AU: f64 = 1.496e11;
 
 // ====== Fluid dynamics ============ //
 
-
 // ====== Solar constants =========== //
 pub const SOLAR_LUMIN: f64 = 3.828e26;
 pub const SOLAR_MASS: f64 = 1.9885e30; // kg
