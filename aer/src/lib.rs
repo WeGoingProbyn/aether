@@ -17,7 +17,8 @@ pub mod tracers;
 pub use background::BackgroundCorrectedMoistEuler3D;
 pub use diagnostics::EulerDiagnosticsStep;
 pub use dynamics::{
-  BackgroundCorrectionMode, EulerAtmosphereStep, GravityMode, RotationMode,
+  AtmosphereScheme, BackgroundCorrectionMode, EulerAtmosphereStep, GravityMode,
+  RotationMode,
 };
 pub use error::AerError;
 pub use flux::TemperatureTendencyStep;

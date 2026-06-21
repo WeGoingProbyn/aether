@@ -459,3 +459,30 @@ where
     volume.powf(1.0 / D as f64)
   }
 }
+
+/// The cell's *largest* directional spacing — `volume / min_face_area`. On a
+/// thin shell cell the smallest face is a side wall (`dx_h · dz`), so this
+/// returns the horizontal spacing `dx_h`. HEVI handles the vertical acoustics
+/// implicitly, so its explicit stability is set by this horizontal spacing, not
+/// the thin vertical one that [`characteristic_length`] returns.
+pub(crate) fn horizontal_characteristic_length<const D: usize, M>(
+  mesh: &M,
+  cell: CellId,
+) -> f64
+where
+  M: Mesh<D> + ?Sized,
+{
+  let volume = mesh.cell_metrics(cell).phys_volume;
+  let min_face_area = mesh
+    .cell_faces(cell)
+    .iter()
+    .map(|&face| mesh.face_metrics(face).phys_area)
+    .filter(|a| *a > 0.0 && a.is_finite())
+    .fold(f64::INFINITY, f64::min);
+
+  if min_face_area.is_finite() && min_face_area > 0.0 {
+    volume / min_face_area
+  } else {
+    volume.powf(1.0 / D as f64)
+  }
+}

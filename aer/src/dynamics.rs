@@ -5,8 +5,10 @@ use continuum::{
   boundary::{
     BoundaryCondition, BoundaryRegistry, ReflectiveWall, Transmissive,
   },
-  model::{MoistEuler3D, RusanovFlux},
-  solver::{FvmSolver, SolverConfig, TimeIntegration},
+  cpu::CpuBackend,
+  implicit::hevi::{HeviBackend, radial_columns_from_geometry},
+  model::{ConservationLaw, MoistEuler3D, NumericalFlux, RusanovFlux},
+  solver::{FvmBackend, FvmSolver, SolverConfig, TimeIntegration},
 };
 use nexus::{
   FieldKey, FieldStorage, LocalPartitionField, MeshKey, SoaField, Stage,
@@ -14,8 +16,8 @@ use nexus::{
 };
 use std::sync::Mutex;
 use tessera::{
-  cube_sphere::CubeSphere, mesh::Mesh, partition::Decomposition,
-  world_mesh::DecompositionKey,
+  cube_sphere::CubeSphere, geometry::CellGeometry, mesh::Mesh,
+  partition::Decomposition, world_mesh::DecompositionKey,
 };
 use utility::{
   debug,
@@ -54,6 +56,84 @@ pub enum BackgroundCorrectionMode {
   CurrentState,
 }
 
+/// Time-stepping scheme for the atmosphere solve.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AtmosphereScheme {
+  /// Explicit CFL-limited stepping (default, ground truth).
+  Explicit,
+  /// Horizontally-explicit / vertically-implicit: the vertical acoustic terms
+  /// are integrated implicitly per radial column, removing the (tiny) vertical
+  /// CFL on a thin shell so the step is bounded by the much larger horizontal
+  /// CFL instead.
+  Hevi,
+}
+
+/// Concrete per-partition solver backend. A D=3 / N=6 dispatch enum because the
+/// vertically-implicit [`HeviBackend`] is inherently 3-D and so cannot live in
+/// continuum's dimension-generic `BackendKind`.
+enum AtmosphereBackend {
+  Explicit(CpuBackend<6>),
+  Hevi(Box<HeviBackend<6>>),
+}
+
+impl<L, F> FvmBackend<3, 6, L, F> for AtmosphereBackend
+where
+  L: ConservationLaw<3, 6>,
+  F: NumericalFlux<3, 6>,
+{
+  fn step<S, M>(
+    &mut self,
+    config: &SolverConfig,
+    law: &L,
+    flux: &F,
+    state: &mut S,
+    residual: &mut S,
+    mesh: &M,
+    bcs: &BoundaryRegistry<3, 6>,
+  ) -> f64
+  where
+    S: FieldStorage<6>,
+    M: Mesh<3> + ?Sized,
+  {
+    match self {
+      AtmosphereBackend::Explicit(b) => {
+        b.step(config, law, flux, state, residual, mesh, bcs)
+      }
+      AtmosphereBackend::Hevi(b) => {
+        b.step(config, law, flux, state, residual, mesh, bcs)
+      }
+    }
+  }
+
+  fn step_with_dt<S, M>(
+    &mut self,
+    config: &SolverConfig,
+    law: &L,
+    flux: &F,
+    dt: f64,
+    state: &mut S,
+    residual: &mut S,
+    mesh: &M,
+    bcs: &BoundaryRegistry<3, 6>,
+  ) where
+    S: FieldStorage<6>,
+    M: Mesh<3> + ?Sized,
+  {
+    match self {
+      AtmosphereBackend::Explicit(b) => {
+        b.step_with_dt(config, law, flux, dt, state, residual, mesh, bcs)
+      }
+      AtmosphereBackend::Hevi(b) => {
+        b.step_with_dt(config, law, flux, dt, state, residual, mesh, bcs)
+      }
+    }
+  }
+
+  fn uses_explicit_cfl(&self) -> bool {
+    matches!(self, AtmosphereBackend::Hevi(_))
+  }
+}
+
 /// Compressible atmosphere dynamics stage.
 ///
 /// The prognostic state is a Pleroma `SoaField<6>` using continuum's
@@ -71,6 +151,7 @@ pub struct EulerAtmosphereStep {
   rotation: RotationMode,
   background_correction: BackgroundCorrectionMode,
   boundaries: BoundaryRegistry<3, 6>,
+  scheme: AtmosphereScheme,
   solver: Option<FvmSolver<3, 6, BackgroundCorrectedMoistEuler3D, RusanovFlux>>,
   partition_source_correction: Option<Vec<Vec<[f64; 6]>>>,
   residual: SoaField<6>,
@@ -102,6 +183,7 @@ impl EulerAtmosphereStep {
       rotation: RotationMode::None,
       background_correction: BackgroundCorrectionMode::None,
       boundaries: default_atmosphere_boundaries(),
+      scheme: AtmosphereScheme::Explicit,
       solver: None,
       partition_source_correction: None,
       residual: SoaField::<6>::zeros(0),
@@ -109,6 +191,14 @@ impl EulerAtmosphereStep {
       last_substeps: 0,
       max_substeps: 10_000,
     })
+  }
+
+  /// Select the time-stepping scheme. HEVI removes the vertical acoustic CFL on
+  /// the thin shell; it runs through the partitioned path with one
+  /// vertically-implicit solver per panel partition.
+  pub fn with_scheme(mut self, scheme: AtmosphereScheme) -> Self {
+    self.scheme = scheme;
+    self
   }
 
   pub fn forward_euler(
@@ -503,10 +593,32 @@ impl<'a> nexus::StageProgram<'a> for EulerPartitionProgram<'a> {
         euler_law(&spec, gravity, rotation, partition),
         source_correction,
       );
-      solvers.push(Mutex::new(FvmSolver::new(
+      // Build the per-partition backend. HEVI extracts this partition's radial
+      // columns from its OWNED cells (ghost halo cells stay as explicit
+      // horizontal-flux neighbours); columns never cross a panel partition, so
+      // the per-column block-tridiagonal solve is fully local.
+      let backend = match stage.scheme {
+        AtmosphereScheme::Explicit => {
+          AtmosphereBackend::Explicit(CpuBackend::default())
+        }
+        AtmosphereScheme::Hevi => {
+          let num_owned = partition.num_owned();
+          let columns = radial_columns_from_geometry(
+            partition,
+            |c| {
+              let p = partition.cell_world_centroid(c);
+              [p[0], p[1], p[2]]
+            },
+            |c| c.index() < num_owned,
+          );
+          AtmosphereBackend::Hevi(Box::new(HeviBackend::new(columns)))
+        }
+      };
+      solvers.push(Mutex::new(FvmSolver::with_backend(
         config.clone(),
         law,
         RusanovFlux,
+        backend,
       )));
       states.push(Mutex::new(LocalPartitionField::<6>::zeros(
         partition.num_owned(),

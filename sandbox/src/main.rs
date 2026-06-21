@@ -30,9 +30,13 @@ use utility::{domain::MeshKey, info};
 /// atmosphere CFL substep so each rendered frame advances meaningful
 /// sim-time (the sun travels, the sea surface warms and cools) while the
 /// moist solver still only takes a handful of internal substeps per frame.
-/// A tiny dt here makes the world look frozen — it isn't, it's just
-/// advancing thousands of times slower than the solver can handle.
-const TICK_DT: f64 = 60.0;
+/// Outer simulation step per tick. HEVI removes the atmosphere's vertical
+/// acoustic CFL, but the radiation/ocean coupling imposes its own limit — the
+/// coupled world stays physical to ~30 s and blows up by 60 s (radiation energy
+/// tendency × dt overshoots at the thin top layers). 20 s sits safely inside
+/// that, and HEVI still clears it in one atmosphere solve where explicit would
+/// take ~8 sub-steps. The eidolon frame interpolation smooths the larger steps.
+const TICK_DT: f64 = 20.0;
 
 /// Wall-clock pacing for the runner thread. 60 Hz matches typical
 /// monitor refresh and means the producer extracts at the same rate

@@ -10,7 +10,10 @@ use utility::error::{AetherError, AetherResult};
 
 use crate::{
   diagnostics::EulerDiagnosticsStep,
-  dynamics::{BackgroundCorrectionMode, EulerAtmosphereStep, RotationMode},
+  dynamics::{
+    AtmosphereScheme, BackgroundCorrectionMode, EulerAtmosphereStep,
+    RotationMode,
+  },
   error::AerError,
   init::AtmosphereSpec,
   thermal::TemperatureTendencyToEulerEnergyStep,
@@ -72,6 +75,8 @@ pub struct AtmosphereModel {
   cfl: f64,
   rotation: RotationMode,
   background_correction: BackgroundCorrectionMode,
+  scheme: AtmosphereScheme,
+  max_substeps: usize,
   /// Extra dT/dt fields aer's energy stage should sum into the Euler
   /// energy update on top of `fields.temperature_tendency`. Lumen's
   /// `RadiativeHeatingTendency` is the typical first entry.
@@ -86,14 +91,36 @@ impl AtmosphereModel {
       cfl: 0.25,
       rotation: RotationMode::None,
       background_correction: BackgroundCorrectionMode::None,
+      scheme: AtmosphereScheme::Explicit,
+      max_substeps: 10_000,
       extra_tendencies: Vec::new(),
     }
+  }
+
+  /// Cap the number of inner CFL sub-steps the dynamics may take per outer
+  /// tick (it errors past this). Useful to assert a scheme actually removes the
+  /// sub-step explosion.
+  pub fn with_max_substeps(mut self, max_substeps: usize) -> Self {
+    self.max_substeps = max_substeps.max(1);
+    self
   }
 
   /// Enable the planetary Coriolis source (rotation about world +z at the
   /// body's angular velocity) — the dynamical driver of weather systems.
   pub fn with_rotation(mut self) -> Self {
     self.rotation = RotationMode::Planetary;
+    self
+  }
+
+  /// Use the vertically-implicit (HEVI) scheme for the dynamics — large stable
+  /// steps on the thin atmospheric shell (removes the vertical acoustic CFL).
+  pub fn with_hevi(self) -> Self {
+    self.with_scheme(AtmosphereScheme::Hevi)
+  }
+
+  /// Select the dynamics time-stepping scheme.
+  pub fn with_scheme(mut self, scheme: AtmosphereScheme) -> Self {
+    self.scheme = scheme;
     self
   }
 
@@ -215,7 +242,9 @@ impl AtmosphereModel {
         self.cfl,
       )?
       .with_background_correction(self.background_correction)
-      .with_rotation_mode(self.rotation),
+      .with_rotation_mode(self.rotation)
+      .with_scheme(self.scheme)
+      .with_max_substeps(self.max_substeps),
     );
     let diagnostics = nexus.add(EulerDiagnosticsStep::new(
       self.mesh,

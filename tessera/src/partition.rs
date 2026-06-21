@@ -88,6 +88,14 @@ where
     self.mesh.cell_centroid(global)
   }
 
+  fn cell_world_centroid(&self, cell: CellId) -> Point<D> {
+    // Forward to the underlying mesh's (possibly overridden) world mapping —
+    // the default would return the *computational* centroid, breaking any
+    // caller that needs real world positions (e.g. HEVI's radial direction).
+    let global = self.local_to_global_cell[cell.index()];
+    self.mesh.cell_world_centroid(global)
+  }
+
   fn cell_volume(&self, cell: CellId) -> f64 {
     let global = self.local_to_global_cell[cell.index()];
     self.mesh.cell_volume(global)
@@ -110,6 +118,11 @@ where
   fn face_centroid(&self, face: FaceId) -> &Point<D> {
     let global = self.local_to_global_face[face.index()];
     self.mesh.face_centroid(global)
+  }
+
+  fn face_world_centroid(&self, face: FaceId) -> Point<D> {
+    let global = self.local_to_global_face[face.index()];
+    self.mesh.face_world_centroid(global)
   }
 
   fn face_area_vector(&self, face: FaceId) -> Vector<f64, D> {

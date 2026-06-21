@@ -212,6 +212,72 @@ mod tests {
   }
 
   #[test]
+  fn handles_stall_then_burst() {
+    // A backend that falls back to an explicit burst delivers frames slowly,
+    // then a rapid catch-up flurry. The interpolator must never extrapolate
+    // past the newest frame (so it only shows produced state) and must always
+    // serve a valid, finite sample — through the stall (clock dilates/holds)
+    // and the burst (clock catches up by advancing the window).
+    let l = LayerHandle(3);
+    let mut fi = FrameInterpolator::new();
+    fi.push(frame(0.0, l, &[0.0]));
+    fi.advance(1.0);
+    fi.push(frame(10.0, l, &[10.0])); // establishes rate
+
+    let mut newest = 10.0_f64;
+    let mut max_clock_overshoot = 0.0_f64;
+    let mut min_alpha = f64::INFINITY;
+    let mut max_alpha = f64::NEG_INFINITY;
+    let mut check = |fi: &FrameInterpolator, newest: f64| {
+      // Never shows the future.
+      max_clock_overshoot = max_clock_overshoot.max(fi.clock() - newest);
+      let a = fi.alpha();
+      min_alpha = min_alpha.min(a);
+      max_alpha = max_alpha.max(a);
+      assert!(
+        fi.samples(l).unwrap().iter().all(|v| v.is_finite()),
+        "non-finite sample"
+      );
+    };
+
+    // --- Stall: render keeps ticking, no new frames for a long while. ---
+    for _ in 0..50 {
+      fi.advance(1.0);
+      check(&fi, newest);
+    }
+
+    // --- Burst: a flurry of frames arrive with almost no render time between
+    // them (the explicit catch-up). ---
+    for _ in 0..8 {
+      newest += 10.0;
+      fi.push(frame(newest, l, &[newest]));
+      fi.advance(0.05);
+      check(&fi, newest);
+    }
+
+    // --- Settle back to a steady cadence. ---
+    for _ in 0..20 {
+      fi.advance(0.2);
+      check(&fi, newest);
+    }
+
+    assert!(
+      max_clock_overshoot < 1e-9,
+      "clock extrapolated past newest frame by {max_clock_overshoot}"
+    );
+    assert!(
+      min_alpha >= -1e-9 && max_alpha <= 1.0 + 1e-9,
+      "alpha left [0,1]: [{min_alpha}, {max_alpha}]"
+    );
+    // After the burst + settle, playback has caught up near the newest frame.
+    assert!(
+      fi.clock() >= newest - 10.0 - 1e-9,
+      "clock {} did not catch up toward newest {newest}",
+      fi.clock()
+    );
+  }
+
+  #[test]
   fn clock_holds_when_sim_stalls() {
     let l = LayerHandle(7);
     let mut fi = FrameInterpolator::new();

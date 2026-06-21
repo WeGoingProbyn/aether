@@ -50,15 +50,21 @@ pub struct RadialColumn {
 
 /// Extract radial columns from a shell mesh. `world_pos(cell)` gives each
 /// cell's world position (so "radial" = the direction from the origin); an
-/// interior face is *radial* when its normal aligns with that direction. Works
-/// for any origin-centred shell (cube-sphere, radial stack).
-pub fn radial_columns_from_geometry<const D: usize, M, W>(
+/// interior face is *radial* when its normal aligns with that direction.
+/// `is_owned(cell)` filters which cells a column may contain — on a partitioned
+/// mesh only owned cells are solved implicitly (ghost halo cells stay as
+/// explicit horizontal-flux neighbours), so pass `partition.cell_kind == Owned`
+/// there and `|_| true` for a whole mesh. Works for any origin-centred shell
+/// (cube-sphere, radial stack).
+pub fn radial_columns_from_geometry<const D: usize, M, W, O>(
   mesh: &M,
   world_pos: W,
+  is_owned: O,
 ) -> Vec<RadialColumn>
 where
   M: Mesh<D> + ?Sized,
   W: Fn(CellId) -> [f64; 3],
+  O: Fn(CellId) -> bool,
 {
   let cells = mesh.cell_count();
   let radius = |c: CellId| {
@@ -127,16 +133,21 @@ where
     }
   }
 
-  // Walk each column from its bottom (no radial neighbour below).
+  // Walk each column from its bottom (an owned cell with no radial neighbour
+  // below). Ghost cells never start or extend a column, so on a partitioned
+  // mesh only owned columns are produced.
   let mut columns = Vec::new();
   for start in 0..cells {
-    if down[start].is_some() {
+    if down[start].is_some() || !is_owned(CellId::from(start)) {
       continue;
     }
     let mut col_cells = vec![CellId::from(start)];
     let mut up_faces = Vec::new();
     let mut cur = start;
     while let Some((face, next)) = up[cur] {
+      if !is_owned(next) {
+        break;
+      }
       up_faces.push(face);
       col_cells.push(next);
       cur = next.index();
@@ -671,6 +682,10 @@ where
     let _ = (config, residual);
     self.advance(law, flux, dt, state, mesh, bcs);
   }
+
+  fn uses_explicit_cfl(&self) -> bool {
+    true
+  }
 }
 
 #[cfg(test)]
@@ -763,10 +778,14 @@ mod tests {
     use tessera::geometry::CellGeometry;
     let (na, nr) = (6, 5);
     let mesh = CubeSphere::new([na, na, nr], 1.0, 1.2);
-    let columns = radial_columns_from_geometry(&mesh, |c| {
-      let p = mesh.cell_world_centroid(c);
-      [p[0], p[1], p[2]]
-    });
+    let columns = radial_columns_from_geometry(
+      &mesh,
+      |c| {
+        let p = mesh.cell_world_centroid(c);
+        [p[0], p[1], p[2]]
+      },
+      |_| true,
+    );
 
     // One column per angular cell across all 6 panels; each is nr cells tall,
     // capped top and bottom, with nr-1 interior radial links.

@@ -26,7 +26,7 @@ fn spread(world: &aether::core::World, key: FieldKey) -> (f64, f64, f64) {
 #[test]
 #[ignore = "diagnostic: builds + steps the full demo world; ~15s"]
 fn report_field_evolution_at_demo_dt() {
-  let dt = 60.0_f64;
+  let dt = 20.0_f64;
   let steps = 8;
   let ocean_t = FieldKey::new(MeshKey::OCEAN, FieldName::Temperature);
   let humidity = FieldKey::new(MeshKey::ATMOSPHERE, FieldName::Humidity);

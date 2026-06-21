@@ -57,4 +57,19 @@ impl ConservationLaw<3, 6> for BackgroundCorrectedMoistEuler3D {
     }
     source
   }
+
+  // Forward the IMEX/HEVI operator split to the base moist-Euler law so a
+  // vertically-implicit (HEVI) backend sees the acoustic split (the background
+  // correction is an explicit per-cell source, so it stays in the RHS only).
+  fn implicit_flux<T: Scalar>(&self, state: &[T; 6]) -> [[T; 6]; 3] {
+    self.base.implicit_flux(state)
+  }
+
+  fn acoustic_speed<T: Scalar>(&self, state: &[T; 6]) -> T {
+    self.base.acoustic_speed(state)
+  }
+
+  fn explicit_wave_speed<T: Scalar>(&self, state: &[T; 6]) -> T {
+    self.base.explicit_wave_speed(state)
+  }
 }

@@ -158,6 +158,14 @@ pub fn build_demo_aether() -> AetherResult<(Aether, AtmosphereShellLayout)> {
 #[profile]
 pub fn build_ocean_world_aether()
 -> AetherResult<(Aether, AtmosphereShellLayout)> {
+  build_ocean_world_scheme(aer::AtmosphereScheme::Hevi)
+}
+
+/// Build the ocean world with a chosen atmosphere time-stepping scheme — for
+/// A/B comparison of explicit vs HEVI dynamics.
+pub fn build_ocean_world_scheme(
+  scheme: aer::AtmosphereScheme,
+) -> AetherResult<(Aether, AtmosphereShellLayout)> {
   let angular_dims = [16, 16];
   let atmosphere_layers = 6;
   let ocean_layers = 2;
@@ -196,7 +204,10 @@ pub fn build_ocean_world_aether()
     .with_cfl(0.25)
     .with_current_state_background_correction()
     .with_radiative_heating()
-    .with_rotation();
+    .with_rotation()
+    // Vertically-implicit dynamics: large stable steps on the thin shell,
+    // one per-panel HEVI solver under nexus' partitioned dispatch.
+    .with_hevi();
   let atmosphere_fields = atmosphere_model.fields();
 
   let ocean_model = OceanModel::new(

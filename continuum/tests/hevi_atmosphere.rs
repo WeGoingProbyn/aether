@@ -45,10 +45,14 @@ fn make_state(mesh: &CubeSphere) -> SoaField<6> {
 }
 
 fn columns(mesh: &CubeSphere) -> Vec<continuum::implicit::hevi::RadialColumn> {
-  radial_columns_from_geometry(mesh, |c| {
-    let p = mesh.cell_world_centroid(c);
-    [p[0], p[1], p[2]]
-  })
+  radial_columns_from_geometry(
+    mesh,
+    |c| {
+      let p = mesh.cell_world_centroid(c);
+      [p[0], p[1], p[2]]
+    },
+    |_| true,
+  )
 }
 
 fn finite_positive(state: &SoaField<6>, cells: usize) -> bool {
@@ -63,6 +67,44 @@ fn total_mass(state: &SoaField<6>, cells: usize) -> f64 {
   (0..cells)
     .map(|i| state.state(CellId::from(i)).as_state()[0])
     .sum()
+}
+
+#[test]
+fn hevi_columns_cover_partition_owned_cells() {
+  use std::sync::Arc;
+  use tessera::partition::decompose_cube_sphere_panels;
+
+  let mesh = Arc::new(shell(8, 6));
+  let decomposition = decompose_cube_sphere_panels(mesh);
+  assert_eq!(decomposition.partitions.len(), 6, "one partition per panel");
+
+  for (i, partition) in decomposition.partitions.iter().enumerate() {
+    let num_owned = partition.num_owned();
+    let columns = radial_columns_from_geometry(
+      partition,
+      |c| {
+        let p = partition.cell_world_centroid(c);
+        [p[0], p[1], p[2]]
+      },
+      |c| c.index() < num_owned,
+    );
+    let covered: usize = columns.iter().map(|c| c.cells.len()).sum();
+    eprintln!(
+      "partition {i}: {num_owned} owned, {} columns covering {covered} cells",
+      columns.len()
+    );
+    assert!(!columns.is_empty(), "partition {i} produced no columns");
+    assert_eq!(
+      covered, num_owned,
+      "partition {i}: columns must cover exactly the owned cells"
+    );
+    // No column may include a ghost cell.
+    for col in &columns {
+      for &c in &col.cells {
+        assert!(c.index() < num_owned, "column contains a ghost cell");
+      }
+    }
+  }
 }
 
 #[test]

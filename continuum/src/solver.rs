@@ -87,6 +87,14 @@ where
   ) where
     S: FieldStorage<N>,
     M: Mesh<D> + ?Sized;
+
+  /// Whether this backend's stable step is bounded by the *explicit*
+  /// (advective) wave speed rather than the full wave speed — true for HEVI,
+  /// where the acoustics are handled implicitly. Used by [`FvmSolver::compute_dt`]
+  /// so the CFL estimate matches the backend.
+  fn uses_explicit_cfl(&self) -> bool {
+    false
+  }
 }
 
 #[derive(Clone)]
@@ -169,6 +177,10 @@ where
   {
     let mut dt_min = self.config.dt_max;
     let mut cell_state = [0.0; N];
+    // HEVI handles the *vertical* acoustics implicitly, so its explicit
+    // stability is set by the horizontal cell spacing (not the thin vertical
+    // one) under the full wave speed — i.e. the horizontal acoustic CFL.
+    let horizontal = self.backend.uses_explicit_cfl();
 
     for i in 0..mesh.cell_count() {
       let cell = CellId::from(i);
@@ -176,7 +188,11 @@ where
 
       let speed = self.law.max_wave_speed(&cell_state);
       if speed > 1e-14 {
-        let dx = kernel::characteristic_length(mesh, cell);
+        let dx = if horizontal {
+          kernel::horizontal_characteristic_length(mesh, cell)
+        } else {
+          kernel::characteristic_length(mesh, cell)
+        };
         let dt_local = self.config.cfl() * dx / speed;
         dt_min = dt_min.min(dt_local);
       }
