@@ -76,7 +76,6 @@ fn full_stack_atm_surface_radiation_runs_without_blowup() -> AetherResult<()> {
 
   let atmosphere_model = AtmosphereModel::new(MeshKey::ATMOSPHERE)
     .with_cfl(0.25)
-    .with_current_state_background_correction()
     .with_radiative_heating();
   let atmosphere_fields = atmosphere_model.fields();
 

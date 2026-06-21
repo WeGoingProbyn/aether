@@ -1,7 +1,6 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
-pub mod background;
 pub mod diagnostics;
 pub mod dynamics;
 pub mod error;
@@ -14,11 +13,9 @@ pub mod shell;
 pub mod thermal;
 pub mod tracers;
 
-pub use background::BackgroundCorrectedMoistEuler3D;
 pub use diagnostics::EulerDiagnosticsStep;
 pub use dynamics::{
-  AtmosphereScheme, BackgroundCorrectionMode, EulerAtmosphereStep, GravityMode,
-  RotationMode,
+  AtmosphereScheme, EulerAtmosphereStep, GravityMode, RotationMode,
 };
 pub use error::AerError;
 pub use flux::TemperatureTendencyStep;

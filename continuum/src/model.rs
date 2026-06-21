@@ -88,6 +88,59 @@ pub trait ConservationLaw<const D: usize, const N: usize>: Send + Sync {
   fn explicit_wave_speed<T: Scalar>(&self, state: &[T; N]) -> T {
     self.max_wave_speed(state)
   }
+
+  // --- Well-balancing for hydrostatic equilibria (optional) ---
+  //
+  // A fluid at rest in a gravity field satisfies ∇p = ρg. A naive finite-volume
+  // scheme does not preserve this discretely — the face pressure reconstructed
+  // by averaging cell centres disagrees with the cell-centred ρg source, so a
+  // hydrostatic atmosphere spuriously accelerates. A *well-balanced* law fixes
+  // this with hydrostatic reconstruction: the kernel extrapolates each cell's
+  // state to the shared face along the local hydrostatic profile
+  // (`hydrostatic_extrapolate`), computes the flux on those reconstructed
+  // states (so the dissipation vanishes at rest), and adds the matching
+  // pressure source (`hydrostatic_pressure_force`); the law's `source` then
+  // omits the gravity *momentum* term, which the kernel supplies exactly. The
+  // result balances `flux − source = 0` to machine precision per face for the
+  // equilibrium, while reducing to the true `ρg` force off-equilibrium. The
+  // defaults make every existing law unaffected (ordinary scheme).
+
+  /// Whether the kernel should apply hydrostatic reconstruction for this law.
+  fn is_well_balanced(&self) -> bool {
+    false
+  }
+
+  /// Gravitational potential `Φ` at a world position (`g = -∇Φ`). The kernel
+  /// uses the *exact* potential difference between a cell centre and a face,
+  /// `ΔΦ = Φ(face) − Φ(cell)`, to reconstruct hydrostatic face states — which
+  /// matters for radial gravity where `Φ = g·r` is nonlinear and the local
+  /// `g·displacement` is only its first-order approximation. Default: 0.
+  fn geopotential(&self, _position: &[f64; D]) -> f64 {
+    0.0
+  }
+
+  /// Extrapolate `state` along the local hydrostatic profile across a
+  /// geopotential difference `delta_phi`. Default: identity (no
+  /// reconstruction).
+  fn hydrostatic_extrapolate<T: Scalar>(
+    &self,
+    state: &[T; N],
+    _delta_phi: f64,
+  ) -> [T; N] {
+    *state
+  }
+
+  /// The hydrostatic pressure force `p · scaled_area` of a reconstructed face
+  /// state — the well-balanced gravity momentum source contribution (non-zero
+  /// only on the momentum components). `scaled_area` is the outward face area
+  /// vector times the face metric factor. Default: zero.
+  fn hydrostatic_pressure_force<T: Scalar>(
+    &self,
+    _reconstructed: &[T; N],
+    _scaled_area: &[f64; D],
+  ) -> [T; N] {
+    [T::from(0.0); N]
+  }
 }
 
 pub trait NumericalFlux<const D: usize, const N: usize>: Send + Sync {
@@ -263,13 +316,20 @@ impl ConservationLaw<2, 4> for Euler2D {
 }
 
 /// Body-force-per-unit-mass field for `Euler3D`. Choose between no gravity
-/// (free flow), a single constant vector (flat box), or a per-cell vector
-/// (radial gravity on a sphere shell, or any other spatially-varying field).
+/// (free flow), a single constant vector (flat box), a per-cell vector, or a
+/// radial field on a sphere shell.
 pub enum GravityField {
   None,
   Constant([f64; 3]),
   /// One gravity vector per global cell ID.
   PerCell(Vec<[f64; 3]>),
+  /// Constant-magnitude radial gravity pointing toward the origin:
+  /// `g(x) = -surface_g · x̂`, with potential `Φ(x) = surface_g · |x|`. Unlike
+  /// `PerCell`, this carries the geopotential analytically so the well-balanced
+  /// scheme is exact.
+  Radial {
+    surface_g: f64,
+  },
 }
 
 /// Compressible Euler in 3D with an optional body-force per unit mass.
@@ -299,6 +359,7 @@ pub enum GravityField {
 pub struct Euler3D {
   gamma: f64,
   gravity: GravityField,
+  well_balanced: bool,
 }
 
 impl Euler3D {
@@ -307,6 +368,7 @@ impl Euler3D {
     Self {
       gamma,
       gravity: GravityField::None,
+      well_balanced: false,
     }
   }
 
@@ -316,6 +378,7 @@ impl Euler3D {
     Self {
       gamma,
       gravity: GravityField::Constant(gravity),
+      well_balanced: false,
     }
   }
 
@@ -327,7 +390,81 @@ impl Euler3D {
     Self {
       gamma,
       gravity: GravityField::PerCell(gravity),
+      well_balanced: false,
     }
+  }
+
+  /// Enable hydrostatic-reconstruction well-balancing. With gravity present the
+  /// scheme then preserves a hydrostatic atmosphere at rest to machine
+  /// precision instead of spuriously accelerating it.
+  pub fn well_balanced(mut self, on: bool) -> Self {
+    self.well_balanced = on;
+    self
+  }
+
+  /// Construct with constant-magnitude radial gravity toward the origin,
+  /// `g(x) = -surface_g·x̂` — the physically-correct field for a sphere shell.
+  /// It carries the geopotential analytically (`Φ = surface_g·|x|`) so the
+  /// well-balanced scheme is exact, unlike [`with_per_cell_gravity`].
+  pub fn with_radial_gravity(gamma: f64, surface_g: f64) -> Self {
+    Self {
+      gamma,
+      gravity: GravityField::Radial { surface_g },
+      well_balanced: false,
+    }
+  }
+
+  /// The gravity vector at `cell` / world `position` (force per unit mass), or
+  /// `None` for free flow.
+  fn gravity_at(&self, cell: CellId, position: &[f64; 3]) -> Option<[f64; 3]> {
+    match &self.gravity {
+      GravityField::None => None,
+      GravityField::Constant(g) => Some(*g),
+      GravityField::PerCell(field) => Some(field[cell.index()]),
+      GravityField::Radial { surface_g } => {
+        let r = (position[0] * position[0]
+          + position[1] * position[1]
+          + position[2] * position[2])
+          .sqrt();
+        Some([
+          -surface_g * position[0] / r,
+          -surface_g * position[1] / r,
+          -surface_g * position[2] / r,
+        ])
+      }
+    }
+  }
+
+  /// Gravitational potential `Φ` at a world `position` (`g = -∇Φ`). `PerCell`
+  /// has no analytic potential, so it is not well-balanced.
+  fn geopotential_at(&self, position: &[f64; 3]) -> f64 {
+    match &self.gravity {
+      GravityField::None | GravityField::PerCell(_) => 0.0,
+      GravityField::Constant(g) => {
+        -(g[0] * position[0] + g[1] * position[1] + g[2] * position[2])
+      }
+      GravityField::Radial { surface_g } => {
+        surface_g
+          * (position[0] * position[0]
+            + position[1] * position[1]
+            + position[2] * position[2])
+            .sqrt()
+      }
+    }
+  }
+
+  /// Isothermal hydrostatic scaling factor `exp(-ΔΦ·ρ/p)` for extrapolating a
+  /// state across a geopotential difference `delta_phi`. Every conserved
+  /// component scales by this same factor. Shared by [`Euler3D`] and
+  /// [`MoistEuler3D`] reconstruction.
+  pub fn hydrostatic_factor<T: Scalar>(
+    &self,
+    state: &[T; 5],
+    delta_phi: f64,
+  ) -> T {
+    let rho = state[0];
+    let p = self.pressure(state);
+    (rho * -delta_phi / p).exp()
   }
 
   pub fn velocity<T: Scalar>(&self, state: &[T; 5]) -> [T; 3] {
@@ -404,22 +541,78 @@ impl ConservationLaw<3, 5> for Euler3D {
     &self,
     state: &[T; 5],
     cell: CellId,
-    _: &Point<3>,
+    centroid: &Point<3>,
     _: &CellMetrics<3>,
   ) -> [T; 5] {
-    let g = match &self.gravity {
-      GravityField::None => return [T::from(0.0); 5],
-      GravityField::Constant(g) => *g,
-      GravityField::PerCell(field) => field[cell.index()],
+    let pos = [centroid[0], centroid[1], centroid[2]];
+    let Some(g) = self.gravity_at(cell, &pos) else {
+      return [T::from(0.0); 5];
     };
     let rho = state[0];
-    // Gravity: force/volume = ρ·g on momentum, work/volume = (ρu)·g on energy.
+    // Energy work `(ρu)·g` is always a cell-local source. The momentum force
+    // `ρ·g` is also cell-local in the ordinary scheme, but under well-balancing
+    // the kernel supplies it from the reconstructed face pressures (so it
+    // cancels the pressure flux exactly at rest), so we omit it here.
+    let energy_work = state[1] * g[0] + state[2] * g[1] + state[3] * g[2];
+    if self.well_balanced {
+      [
+        T::from(0.0),
+        T::from(0.0),
+        T::from(0.0),
+        T::from(0.0),
+        energy_work,
+      ]
+    } else {
+      [
+        T::from(0.0),
+        rho * g[0],
+        rho * g[1],
+        rho * g[2],
+        energy_work,
+      ]
+    }
+  }
+
+  fn is_well_balanced(&self) -> bool {
+    self.well_balanced
+      && matches!(
+        self.gravity,
+        GravityField::Radial { .. } | GravityField::Constant(_)
+      )
+  }
+
+  fn geopotential(&self, position: &[f64; 3]) -> f64 {
+    self.geopotential_at(position)
+  }
+
+  fn hydrostatic_extrapolate<T: Scalar>(
+    &self,
+    state: &[T; 5],
+    delta_phi: f64,
+  ) -> [T; 5] {
+    // Along a constant-temperature hydrostatic profile every conserved
+    // component scales by the same factor (density, momentum at fixed velocity,
+    // and the energy — internal and kinetic both scale with pressure/density).
+    let factor = self.hydrostatic_factor(state, delta_phi);
+    let mut out = *state;
+    for s in out.iter_mut() {
+      *s = *s * factor;
+    }
+    out
+  }
+
+  fn hydrostatic_pressure_force<T: Scalar>(
+    &self,
+    reconstructed: &[T; 5],
+    scaled_area: &[f64; 3],
+  ) -> [T; 5] {
+    let p = self.pressure(reconstructed);
     [
       T::from(0.0),
-      rho * g[0],
-      rho * g[1],
-      rho * g[2],
-      state[1] * g[0] + state[2] * g[1] + state[3] * g[2],
+      p * scaled_area[0],
+      p * scaled_area[1],
+      p * scaled_area[2],
+      T::from(0.0),
     ]
   }
 
@@ -510,10 +703,26 @@ impl MoistEuler3D {
     }
   }
 
+  /// Construct with constant-magnitude radial gravity — the well-balanced
+  /// choice for a sphere shell. See [`Euler3D::with_radial_gravity`].
+  pub fn with_radial_gravity(gamma: f64, surface_g: f64) -> Self {
+    Self {
+      dry: Euler3D::with_radial_gravity(gamma, surface_g),
+      omega: [0.0; 3],
+    }
+  }
+
   /// Set the planetary rotation vector Ω (rad/s, world frame) used for the
   /// Coriolis source. Defaults to no rotation.
   pub fn with_rotation(mut self, omega: [f64; 3]) -> Self {
     self.omega = omega;
+    self
+  }
+
+  /// Enable hydrostatic-reconstruction well-balancing (see
+  /// [`Euler3D::well_balanced`]).
+  pub fn well_balanced(mut self, on: bool) -> Self {
+    self.dry = self.dry.well_balanced(on);
     self
   }
 
@@ -611,6 +820,48 @@ impl ConservationLaw<3, 6> for MoistEuler3D {
     if state[5] < 0.0 {
       state[5] = 0.0;
     }
+  }
+
+  fn is_well_balanced(&self) -> bool {
+    self.dry.is_well_balanced()
+  }
+
+  fn geopotential(&self, position: &[f64; 3]) -> f64 {
+    self.dry.geopotential(position)
+  }
+
+  fn hydrostatic_extrapolate<T: Scalar>(
+    &self,
+    state: &[T; 6],
+    delta_phi: f64,
+  ) -> [T; 6] {
+    // The moisture mass `ρq` rides the same hydrostatic scaling as the dry
+    // state (`q` constant on extrapolation), so every component scales by the
+    // shared factor.
+    let factor = self
+      .dry
+      .hydrostatic_factor(&Self::dry_state(state), delta_phi);
+    let mut out = *state;
+    for s in out.iter_mut() {
+      *s = *s * factor;
+    }
+    out
+  }
+
+  fn hydrostatic_pressure_force<T: Scalar>(
+    &self,
+    reconstructed: &[T; 6],
+    scaled_area: &[f64; 3],
+  ) -> [T; 6] {
+    let p = self.pressure(reconstructed);
+    [
+      T::from(0.0),
+      p * scaled_area[0],
+      p * scaled_area[1],
+      p * scaled_area[2],
+      T::from(0.0),
+      T::from(0.0),
+    ]
   }
 
   /// Acoustic part of the flux for an IMEX split: the terms that carry the

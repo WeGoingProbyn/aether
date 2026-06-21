@@ -449,4 +449,87 @@ mod tests {
       "uncoupled atmosphere cells should be reset to zero"
     );
   }
+
+  #[test]
+  fn deposition_accumulates_scaled_source_onto_existing_target() {
+    let angular_dims = [2, 2];
+    let surface_layers = 2;
+    let atmosphere_layers = 2;
+    let surface = Arc::new(CubeSphere::new(
+      [angular_dims[0], angular_dims[1], surface_layers],
+      0.9,
+      1.0,
+    ));
+    let atmosphere = Arc::new(CubeSphere::new(
+      [angular_dims[0], angular_dims[1], atmosphere_layers],
+      1.0,
+      1.2,
+    ));
+    let surface_cell_count = surface.cell_count();
+    let atmosphere_cell_count = atmosphere.cell_count();
+
+    let mut tessera = Tessera::new();
+    let surface_for_registry: Arc<dyn Mesh<3>> = surface;
+    let atmosphere_for_registry: Arc<dyn Mesh<3>> = atmosphere;
+    tessera.register_mesh(MeshKey::SURFACE, surface_for_registry);
+    tessera.register_mesh(MeshKey::ATMOSPHERE, atmosphere_for_registry);
+    let coupler_index = tessera.add_coupler(
+      MeshKey::SURFACE,
+      MeshKey::ATMOSPHERE,
+      RadialStackCoupler::new(angular_dims, surface_layers, atmosphere_layers),
+    );
+
+    // A source flux on the atmosphere, an existing (radiation-written) value on
+    // the surface target — deposition must add, not overwrite.
+    let atmosphere_flux =
+      FieldKey::new(MeshKey::ATMOSPHERE, FieldName::EvaporationFlux);
+    let surface_net_flux =
+      FieldKey::new(MeshKey::SURFACE, FieldName::NetSurfaceFlux);
+    let mut pleroma = Pleroma::new();
+    pleroma.register_field(
+      atmosphere_flux,
+      SoaField::<1>::from_fn(atmosphere_cell_count, |_| [2.0]),
+    );
+    pleroma.register_field(
+      surface_net_flux,
+      SoaField::<1>::from_fn(surface_cell_count, |_| [100.0]),
+    );
+
+    let mut nexus = Nexus::new();
+    nexus.add(
+      ScalarInterfaceDeposition::from_coupler(
+        &tessera,
+        coupler_index,
+        atmosphere_flux,
+        surface_net_flux,
+        -3.0,
+      )
+      .unwrap(),
+    );
+    let mut compiled = nexus.build(&pleroma).unwrap();
+    compiled
+      .tick(
+        WorldId(0),
+        &tessera,
+        &WorldConstants::default(),
+        &mut pleroma,
+        &Pool::default(),
+        1.0,
+      )
+      .unwrap();
+
+    let net_flux: &SoaField<1> = pleroma.read(surface_net_flux).unwrap();
+    // Surface cells paired across the interface get 100 + (-3·1·2) = 94;
+    // unpaired (deep) cells keep their original 100 (add, not overwrite).
+    let values: Vec<f64> =
+      net_flux.component(0).as_ref().iter().copied().collect();
+    assert!(
+      values.iter().any(|v| (v - 94.0).abs() < 1e-9),
+      "coupled surface cells should be debited to 94, got {values:?}"
+    );
+    assert!(
+      values.iter().any(|v| (v - 100.0).abs() < 1e-9),
+      "uncoupled surface cells must keep their existing value"
+    );
+  }
 }

@@ -24,7 +24,6 @@ use utility::{
 struct Opts {
   scheme: AtmosphereScheme,
   rotation: bool,
-  background_correction: bool,
   dt: f64,
   steps: usize,
 }
@@ -64,10 +63,6 @@ fn run(opts: &Opts) -> AetherResult<bool> {
   if opts.rotation {
     atmosphere_model = atmosphere_model.with_rotation();
   }
-  if opts.background_correction {
-    atmosphere_model =
-      atmosphere_model.with_current_state_background_correction();
-  }
   let fields = atmosphere_model.fields();
   atmosphere_model.register_fields(
     factory.pleroma_mut(),
@@ -97,36 +92,36 @@ fn run(opts: &Opts) -> AetherResult<bool> {
   Ok(finite_positive)
 }
 
+/// With well-balancing (and no background-correction hack), the bare
+/// hydrostatic atmosphere — gravity, rotation, either scheme — must stay
+/// physical over a long run. Before well-balancing the un-corrected scheme
+/// drifted into a runaway within ~100 steps.
 #[test]
-fn bisect_hevi_large_step_breakage() {
+fn well_balanced_atmosphere_is_stable_over_a_long_run() {
   let dt = 20.0;
-  let steps = 40;
+  let steps = 120;
 
   let cases = [
-    (
-      "explicit, grav+rot+bg",
-      AtmosphereScheme::Explicit,
-      true,
-      true,
-    ),
-    ("hevi, grav only", AtmosphereScheme::Hevi, false, false),
-    ("hevi, grav+rot", AtmosphereScheme::Hevi, true, false),
-    ("hevi, grav+bg", AtmosphereScheme::Hevi, false, true),
-    ("hevi, grav+rot+bg", AtmosphereScheme::Hevi, true, true),
+    ("explicit, grav+rot", AtmosphereScheme::Explicit, true),
+    ("hevi, grav only", AtmosphereScheme::Hevi, false),
+    ("hevi, grav+rot", AtmosphereScheme::Hevi, true),
   ];
-  for (label, scheme, rotation, background_correction) in cases {
+  for (label, scheme, rotation) in cases {
     let opts = Opts {
       scheme,
       rotation,
-      background_correction,
       dt,
       steps,
     };
     let result = run(&opts);
-    match result {
+    match &result {
       Ok(true) => eprintln!("[OK   finite] {label}"),
       Ok(false) => eprintln!("[BAD  nonfin] {label}"),
       Err(e) => eprintln!("[ERR step    ] {label}: {e}"),
     }
+    assert!(
+      matches!(result, Ok(true)),
+      "{label}: well-balanced atmosphere should stay physical"
+    );
   }
 }

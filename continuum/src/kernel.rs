@@ -120,27 +120,58 @@ fn accumulate_face_fluxes<
   }
   accumulated.fill(zero);
 
+  // When the law is well-balanced, reconstruct face states along the local
+  // hydrostatic profile (so the flux dissipation vanishes for an equilibrium)
+  // and add the matching pressure force; this makes `flux − source = 0` to
+  // machine precision per face for a hydrostatic atmosphere at rest.
+  let well_balanced = law.is_well_balanced();
+
   for &(face, owner, neighbour) in mesh.interior_faces() {
     let area_vec = mesh.face_area_vector(face);
     let area = mesh.face_area(face);
     let normal = area_vec / area;
-
-    let flux = flux_solver.compute(
-      law,
-      &state_cache[owner.index()],
-      &state_cache[neighbour.index()],
-      &normal,
-    );
+    let sqrt_metric = mesh.face_metrics(face).sqrt_metric;
+    let face_scale = area * sqrt_metric;
 
     let owner_index = owner.index();
     let neighbour_index = neighbour.index();
-    let face_scale = area * mesh.face_metrics(face).sqrt_metric;
+
+    let (left, right) = if well_balanced {
+      let phi_face = geopotential_at(law, &mesh.face_world_centroid(face));
+      let dphi_o =
+        phi_face - geopotential_at(law, &mesh.cell_world_centroid(owner));
+      let dphi_n =
+        phi_face - geopotential_at(law, &mesh.cell_world_centroid(neighbour));
+      (
+        law.hydrostatic_extrapolate(&state_cache[owner_index], dphi_o),
+        law.hydrostatic_extrapolate(&state_cache[neighbour_index], dphi_n),
+      )
+    } else {
+      (state_cache[owner_index], state_cache[neighbour_index])
+    };
+
+    let flux = flux_solver.compute(law, &left, &right, &normal);
 
     for i in 0..N {
       let scaled = flux[i] * face_scale;
       accumulated[owner_index][i] = accumulated[owner_index][i] - scaled;
       accumulated[neighbour_index][i] =
         accumulated[neighbour_index][i] + scaled;
+    }
+
+    if well_balanced {
+      let scaled_area = scaled_area_vector(&area_vec, sqrt_metric);
+      // Outward area is `+area_vec` for the owner, `−area_vec` for the
+      // neighbour. The pressure force `Σ p* · n·A` per cell is exactly the
+      // gravity momentum source for the reconstructed equilibrium.
+      let src_owner = law.hydrostatic_pressure_force(&left, &scaled_area);
+      let src_neighbour = law.hydrostatic_pressure_force(&right, &scaled_area);
+      for i in 0..N {
+        accumulated[owner_index][i] =
+          accumulated[owner_index][i] + src_owner[i];
+        accumulated[neighbour_index][i] =
+          accumulated[neighbour_index][i] - src_neighbour[i];
+      }
     }
   }
 
@@ -154,20 +185,65 @@ fn accumulate_face_fluxes<
           _ => unreachable!(),
         };
         let normal = area_vec / area * out_sign;
+        let sqrt_metric = mesh.face_metrics(face).sqrt_metric;
+        let face_scale = area * sqrt_metric;
 
         let owner_index = owner.index();
-        let interior = &state_cache[owner_index];
-        let ghost = T::ghost(bc, interior, &normal);
-        let flux = flux_solver.compute(law, interior, &ghost, &normal);
-        let face_scale = area * mesh.face_metrics(face).sqrt_metric;
+
+        let interior = if well_balanced {
+          let dphi = geopotential_at(law, &mesh.face_world_centroid(face))
+            - geopotential_at(law, &mesh.cell_world_centroid(owner));
+          law.hydrostatic_extrapolate(&state_cache[owner_index], dphi)
+        } else {
+          state_cache[owner_index]
+        };
+        let ghost = T::ghost(bc, &interior, &normal);
+        let flux = flux_solver.compute(law, &interior, &ghost, &normal);
 
         for i in 0..N {
           accumulated[owner_index][i] =
             accumulated[owner_index][i] - flux[i] * face_scale;
         }
+
+        if well_balanced {
+          // Outward scaled area carries the boundary's outward sign.
+          let scaled_area =
+            scaled_area_vector(&(area_vec * out_sign), sqrt_metric);
+          let src = law.hydrostatic_pressure_force(&interior, &scaled_area);
+          for i in 0..N {
+            accumulated[owner_index][i] = accumulated[owner_index][i] + src[i];
+          }
+        }
       }
     }
   }
+}
+
+/// The law's geopotential at a world-coordinate point.
+fn geopotential_at<const D: usize, const N: usize, L>(
+  law: &L,
+  position: &utility::domain::Point<D>,
+) -> f64
+where
+  L: ConservationLaw<D, N>,
+{
+  let mut pos = [0.0; D];
+  for (i, slot) in pos.iter_mut().enumerate() {
+    *slot = position[i];
+  }
+  law.geopotential(&pos)
+}
+
+/// The face area vector scaled by the metric factor, as a plain array.
+fn scaled_area_vector<const D: usize>(
+  area_vec: &utility::maths::vector::Vector<f64, D>,
+  sqrt_metric: f64,
+) -> [f64; D] {
+  let mut a = [0.0; D];
+  for (i, slot) in a.iter_mut().enumerate() {
+    *slot = area_vec[i] * sqrt_metric;
+  }
+  a
 }
 
 #[profile]
@@ -200,8 +276,12 @@ pub(crate) fn compute_residual_from_cache_with_accum<
     let metrics = mesh.cell_metrics(cell);
     let vol = metrics.phys_volume;
 
-    let source =
-      law.source(&state_cache[i], cell, mesh.cell_centroid(cell), metrics);
+    let source = law.source(
+      &state_cache[i],
+      cell,
+      &mesh.cell_world_centroid(cell),
+      metrics,
+    );
 
     let mut out = [0.0; N];
     for j in 0..N {
@@ -252,8 +332,12 @@ pub(crate) fn compute_residual_generic<
     let metrics = mesh.cell_metrics(cell);
     let vol = metrics.phys_volume;
 
-    let source =
-      law.source(&state_cache[i], cell, mesh.cell_centroid(cell), metrics);
+    let source = law.source(
+      &state_cache[i],
+      cell,
+      &mesh.cell_world_centroid(cell),
+      metrics,
+    );
 
     for j in 0..N {
       out[i][j] = accum_state[j] / vol + source[j];
@@ -386,7 +470,7 @@ pub(crate) fn compute_residual_implicit<
     let source = law.implicit_source(
       &state_cache[i],
       cell,
-      mesh.cell_centroid(cell),
+      &mesh.cell_world_centroid(cell),
       metrics,
     );
 

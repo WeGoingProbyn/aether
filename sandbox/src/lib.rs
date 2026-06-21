@@ -99,7 +99,6 @@ pub fn build_demo_aether() -> AetherResult<(Aether, AtmosphereShellLayout)> {
   let surface_fields = surface_model.fields();
   let atmosphere_model = AtmosphereModel::new(MeshKey::ATMOSPHERE)
     .with_cfl(0.25)
-    .with_current_state_background_correction()
     .with_radiative_heating();
   let atmosphere_fields = atmosphere_model.fields();
   let radiation_model = RadiationModel::from_world_constants(
@@ -230,7 +229,6 @@ pub fn build_ocean_world_configured(
 
   let atmosphere_model = AtmosphereModel::new(MeshKey::ATMOSPHERE)
     .with_cfl(0.25)
-    .with_current_state_background_correction()
     .with_radiative_heating()
     .with_rotation()
     // Vertically-implicit dynamics: large stable steps on the thin shell,

@@ -17,21 +17,18 @@ use nexus::{
 use std::sync::Mutex;
 use tessera::{
   cube_sphere::CubeSphere, geometry::CellGeometry, mesh::Mesh,
-  partition::Decomposition, world_mesh::DecompositionKey,
+  world_mesh::DecompositionKey,
 };
 use utility::{
   debug,
-  domain::{BoundaryTag, CellId},
+  domain::BoundaryTag,
   end_profile,
   error::{AetherError, AetherResult, Unpoison},
   inline_profile, profile,
   thread::pool::{ScopedReduction, ScopedScheduler},
 };
 
-use crate::{
-  background::BackgroundCorrectedMoistEuler3D, error::AerError,
-  init::AtmosphereSpec,
-};
+use crate::{error::AerError, init::AtmosphereSpec};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GravityMode {
@@ -46,14 +43,6 @@ pub enum RotationMode {
   /// Rotate about the world +z axis at the body's `angular_velocity`,
   /// applying the Coriolis source that organises weather systems.
   Planetary,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BackgroundCorrectionMode {
-  None,
-  /// Capture the current Euler field when the solver is first initialized and
-  /// subtract its discrete residual as a fixed source correction.
-  CurrentState,
 }
 
 /// Time-stepping scheme for the atmosphere solve.
@@ -149,11 +138,9 @@ pub struct EulerAtmosphereStep {
   config: SolverConfig,
   gravity: GravityMode,
   rotation: RotationMode,
-  background_correction: BackgroundCorrectionMode,
   boundaries: BoundaryRegistry<3, 6>,
   scheme: AtmosphereScheme,
-  solver: Option<FvmSolver<3, 6, BackgroundCorrectedMoistEuler3D, RusanovFlux>>,
-  partition_source_correction: Option<Vec<Vec<[f64; 6]>>>,
+  solver: Option<FvmSolver<3, 6, MoistEuler3D, RusanovFlux>>,
   residual: SoaField<6>,
   last_dt: Option<f64>,
   last_substeps: usize,
@@ -181,11 +168,9 @@ impl EulerAtmosphereStep {
       config,
       gravity: GravityMode::Radial,
       rotation: RotationMode::None,
-      background_correction: BackgroundCorrectionMode::None,
       boundaries: default_atmosphere_boundaries(),
       scheme: AtmosphereScheme::Explicit,
       solver: None,
-      partition_source_correction: None,
       residual: SoaField::<6>::zeros(0),
       last_dt: None,
       last_substeps: 0,
@@ -216,33 +201,17 @@ impl EulerAtmosphereStep {
   pub fn with_gravity_mode(mut self, gravity: GravityMode) -> Self {
     self.gravity = gravity;
     self.solver = None;
-    self.partition_source_correction = None;
     self
   }
 
   pub fn with_rotation_mode(mut self, rotation: RotationMode) -> Self {
     self.rotation = rotation;
     self.solver = None;
-    self.partition_source_correction = None;
     self
   }
 
   pub fn rotation_mode(&self) -> RotationMode {
     self.rotation
-  }
-
-  pub fn with_background_correction(
-    mut self,
-    mode: BackgroundCorrectionMode,
-  ) -> Self {
-    self.background_correction = mode;
-    self.solver = None;
-    self.partition_source_correction = None;
-    self
-  }
-
-  pub fn with_current_state_background_correction(self) -> Self {
-    self.with_background_correction(BackgroundCorrectionMode::CurrentState)
   }
 
   pub fn with_boundary(
@@ -252,7 +221,6 @@ impl EulerAtmosphereStep {
   ) -> Self {
     self.boundaries.register(tag, condition);
     self.solver = None;
-    self.partition_source_correction = None;
     self
   }
 
@@ -273,10 +241,6 @@ impl EulerAtmosphereStep {
     self.gravity
   }
 
-  pub fn background_correction(&self) -> BackgroundCorrectionMode {
-    self.background_correction
-  }
-
   pub fn last_dt(&self) -> Option<f64> {
     self.last_dt
   }
@@ -289,92 +253,15 @@ impl EulerAtmosphereStep {
     &mut self,
     constants: &nexus::WorldConstants,
     mesh: &dyn Mesh<3>,
-    background_state: Option<&SoaField<6>>,
   ) -> AetherResult<()> {
     if self.solver.is_some() {
       return Ok(());
     }
 
     let spec = AtmosphereSpec::from_world_constants(constants)?;
-    let source_correction = match self.background_correction {
-      BackgroundCorrectionMode::None => Vec::new(),
-      BackgroundCorrectionMode::CurrentState => {
-        let background_state = background_state.ok_or_else(|| {
-          AetherError::new(AerError::MissingReadField)
-            .context("background correction needs the current Euler state")
-        })?;
-        background_residual_correction(
-          &spec,
-          self.gravity,
-          mesh,
-          &self.boundaries,
-          background_state,
-        )?
-      }
-    };
-
-    let law = BackgroundCorrectedMoistEuler3D::new(
-      euler_law(&spec, self.gravity, self.rotation, mesh),
-      source_correction,
-    );
+    let law = euler_law(&spec, self.gravity, self.rotation, mesh);
     self.solver = Some(FvmSolver::new(self.config.clone(), law, RusanovFlux));
     Ok(())
-  }
-
-  fn ensure_partition_source_correction(
-    &mut self,
-    constants: &nexus::WorldConstants,
-    mesh: &dyn Mesh<3>,
-    decomposition: &Decomposition<3, CubeSphere>,
-    background_state: Option<&SoaField<6>>,
-  ) -> AetherResult<()> {
-    match self.background_correction {
-      BackgroundCorrectionMode::None => Ok(()),
-      BackgroundCorrectionMode::CurrentState => {
-        if self.partition_source_correction.is_some() {
-          return Ok(());
-        }
-
-        let background_state = background_state.ok_or_else(|| {
-          AetherError::new(AerError::MissingReadField)
-            .context("background correction needs the current Euler state")
-        })?;
-        if background_state.len() != mesh.cell_count() {
-          return Err(AetherError::new(AerError::FieldLengthMismatch).context(
-            format!(
-              "background len {}, mesh cell count {}",
-              background_state.len(),
-              mesh.cell_count()
-            ),
-          ));
-        }
-
-        let spec = AtmosphereSpec::from_world_constants(constants)?;
-        let mut partition_corrections =
-          Vec::with_capacity(decomposition.partitions.len());
-        for partition in &decomposition.partitions {
-          let local_background =
-            gather_partition_field(background_state, partition);
-          let mut local_residual = LocalPartitionField::<6>::zeros(
-            partition.num_owned(),
-            partition.local_cell_count() - partition.num_owned(),
-          );
-          partition_corrections.push(
-            background_residual_correction_with_residual(
-              &spec,
-              self.gravity,
-              partition,
-              &self.boundaries,
-              &local_background,
-              &mut local_residual,
-            )?,
-          );
-        }
-
-        self.partition_source_correction = Some(partition_corrections);
-        Ok(())
-      }
-    }
   }
 }
 
@@ -430,25 +317,7 @@ impl Stage for EulerAtmosphereStep {
     })?;
     let cell_count = mesh.cell_count();
 
-    let background_state = if self.solver.is_none()
-      && self.background_correction == BackgroundCorrectionMode::CurrentState
-    {
-      let state: &SoaField<6> =
-        ctx.world.fields.read(self.state).ok_or_else(|| {
-          AetherError::new(AerError::MissingReadField)
-            .context(format!("{:?}", self.state))
-        })?;
-      if state.len() != cell_count {
-        return Err(AetherError::new(AerError::FieldLengthMismatch).context(
-          format!("state len {}, mesh cell count {}", state.len(), cell_count),
-        ));
-      }
-      Some(state.clone_state())
-    } else {
-      None
-    };
-
-    self.ensure_solver(constants, mesh.as_ref(), background_state.as_ref())?;
+    self.ensure_solver(constants, mesh.as_ref())?;
     if self.residual.len() != cell_count {
       self.residual = SoaField::<6>::zeros(cell_count);
     }
@@ -555,44 +424,17 @@ impl<'a> nexus::StageProgram<'a> for EulerPartitionProgram<'a> {
     let config = stage.config.clone();
     let max_substeps = stage.max_substeps;
     let partition_count = decomposition.partitions.len();
-    let background_state = if stage.partition_source_correction.is_none()
-      && stage.background_correction == BackgroundCorrectionMode::CurrentState
-    {
-      let state: &SoaField<6> =
-        ctx.world.fields.read(stage.state).ok_or_else(|| {
-          AetherError::new(AerError::MissingReadField)
-            .context(format!("{:?}", stage.state))
-        })?;
-      if state.len() != cell_count {
-        return Err(AetherError::new(AerError::FieldLengthMismatch).context(
-          format!("state len {}, mesh cell count {}", state.len(), cell_count),
-        ));
-      }
-      Some(state.clone_state())
-    } else {
-      None
-    };
-    stage.ensure_partition_source_correction(
-      constants,
-      mesh.as_ref(),
-      decomposition,
-      background_state.as_ref(),
-    )?;
     let boundaries = &stage.boundaries;
-    let partition_source_correction =
-      stage.partition_source_correction.as_ref();
     let mut solvers = Vec::with_capacity(partition_count);
     let mut states = Vec::with_capacity(partition_count);
     let mut residuals = Vec::with_capacity(partition_count);
 
     for (index, partition) in decomposition.partitions.iter().enumerate() {
-      let source_correction = partition_source_correction
-        .map(|corrections| corrections[index].clone())
-        .unwrap_or_default();
-      let law = BackgroundCorrectedMoistEuler3D::new(
-        euler_law(&spec, gravity, rotation, partition),
-        source_correction,
-      );
+      let _ = index;
+      // Well-balanced moist Euler on the partition: the radial gravity carries
+      // the analytic geopotential, so a hydrostatic atmosphere stays at rest to
+      // machine precision (no background-correction needed).
+      let law = euler_law(&spec, gravity, rotation, partition);
       // Build the per-partition backend. HEVI extracts this partition's radial
       // columns from its OWNED cells (ghost halo cells stay as explicit
       // horizontal-flux neighbours); columns never cross a panel partition, so
@@ -741,127 +583,22 @@ fn euler_law<M>(
   spec: &AtmosphereSpec,
   gravity: GravityMode,
   rotation: RotationMode,
-  mesh: &M,
+  _mesh: &M,
 ) -> MoistEuler3D
 where
   M: Mesh<3> + ?Sized,
 {
   let law = match gravity {
     GravityMode::None => spec.moist_euler3d(),
-    GravityMode::Radial => spec.moist_euler3d_with_radial_gravity(
-      radial_gravity_field(mesh, spec.surface_gravity()),
-    ),
+    // Constant-magnitude radial gravity with the analytic geopotential, so the
+    // scheme is well-balanced: a hydrostatic atmosphere at rest stays at rest
+    // to machine precision (no static background-correction hack needed).
+    GravityMode::Radial => {
+      MoistEuler3D::with_radial_gravity(spec.gamma(), spec.surface_gravity())
+        .well_balanced(true)
+    }
   };
   law.with_rotation(rotation_omega(rotation, spec))
-}
-
-fn background_residual_correction(
-  spec: &AtmosphereSpec,
-  gravity: GravityMode,
-  mesh: &dyn Mesh<3>,
-  boundaries: &BoundaryRegistry<3, 6>,
-  background_state: &SoaField<6>,
-) -> AetherResult<Vec<[f64; 6]>> {
-  let cell_count = mesh.cell_count();
-  if background_state.len() != cell_count {
-    return Err(AetherError::new(AerError::FieldLengthMismatch).context(
-      format!(
-        "background len {}, mesh cell count {}",
-        background_state.len(),
-        cell_count
-      ),
-    ));
-  }
-
-  let mut residual = SoaField::<6>::zeros(cell_count);
-  background_residual_correction_with_residual(
-    spec,
-    gravity,
-    mesh,
-    boundaries,
-    background_state,
-    &mut residual,
-  )
-}
-
-fn background_residual_correction_with_residual<S, M>(
-  spec: &AtmosphereSpec,
-  gravity: GravityMode,
-  mesh: &M,
-  boundaries: &BoundaryRegistry<3, 6>,
-  background_state: &S,
-  residual: &mut S,
-) -> AetherResult<Vec<[f64; 6]>>
-where
-  S: FieldStorage<6>,
-  M: Mesh<3> + ?Sized,
-{
-  let cell_count = mesh.cell_count();
-  if background_state.len() != cell_count {
-    return Err(AetherError::new(AerError::FieldLengthMismatch).context(
-      format!(
-        "background len {}, mesh cell count {}",
-        background_state.len(),
-        cell_count
-      ),
-    ));
-  }
-  if residual.len() != cell_count {
-    return Err(AetherError::new(AerError::FieldLengthMismatch).context(
-      format!(
-        "residual len {}, mesh cell count {}",
-        residual.len(),
-        cell_count
-      ),
-    ));
-  }
-
-  // The background residual is evaluated at the (at-rest) captured state,
-  // where the Coriolis source is identically zero, so the correction is
-  // rotation-independent.
-  let solver = FvmSolver::new(
-    SolverConfig::new(1.0, 1.0, TimeIntegration::ForwardEuler),
-    euler_law(spec, gravity, RotationMode::None, mesh),
-    RusanovFlux,
-  );
-  solver.compute_residual(background_state, residual, mesh, boundaries);
-
-  Ok(
-    (0..cell_count)
-      .map(|i| {
-        let mut residual_state = [0.0; 6];
-        residual.state_into(CellId::from(i), &mut residual_state);
-        [
-          -residual_state[0],
-          -residual_state[1],
-          -residual_state[2],
-          -residual_state[3],
-          -residual_state[4],
-          -residual_state[5],
-        ]
-      })
-      .collect(),
-  )
-}
-
-fn radial_gravity_field<M>(mesh: &M, surface_gravity: f64) -> Vec<[f64; 3]>
-where
-  M: Mesh<3> + ?Sized,
-{
-  (0..mesh.cell_count())
-    .map(|i| {
-      let p = mesh.cell_world_centroid(CellId::from(i));
-      let r = (p[0].powi(2) + p[1].powi(2) + p[2].powi(2)).sqrt();
-      if r <= f64::EPSILON {
-        return [0.0; 3];
-      }
-      [
-        -surface_gravity * p[0] / r,
-        -surface_gravity * p[1] / r,
-        -surface_gravity * p[2] / r,
-      ]
-    })
-    .collect()
 }
 
 #[cfg(test)]
@@ -880,6 +617,7 @@ mod tests {
     world_mesh::DecompositionKey,
     world_mesh::Tessera,
   };
+  use utility::domain::CellId;
   use utility::thread::pool::Pool;
 
   use super::*;
@@ -1180,8 +918,7 @@ mod tests {
         EULER_STATE,
         SolverConfig::new(0.25, 1.0, TimeIntegration::ForwardEuler),
       )
-      .unwrap()
-      .with_current_state_background_correction(),
+      .unwrap(),
     );
     let mut compiled = nexus.build(&pleroma).unwrap();
     compiled
@@ -1246,8 +983,7 @@ mod tests {
         EULER_STATE,
         SolverConfig::new(0.25, 1.0, TimeIntegration::ForwardEuler),
       )
-      .unwrap()
-      .with_current_state_background_correction(),
+      .unwrap(),
     );
     let mut compiled = nexus.build(&pleroma).unwrap();
     compiled

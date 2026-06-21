@@ -10,10 +10,7 @@ use utility::error::{AetherError, AetherResult};
 
 use crate::{
   diagnostics::EulerDiagnosticsStep,
-  dynamics::{
-    AtmosphereScheme, BackgroundCorrectionMode, EulerAtmosphereStep,
-    RotationMode,
-  },
+  dynamics::{AtmosphereScheme, EulerAtmosphereStep, RotationMode},
   error::AerError,
   init::AtmosphereSpec,
   thermal::TemperatureTendencyToEulerEnergyStep,
@@ -74,7 +71,6 @@ pub struct AtmosphereModel {
   fields: AtmosphereFields,
   cfl: f64,
   rotation: RotationMode,
-  background_correction: BackgroundCorrectionMode,
   scheme: AtmosphereScheme,
   max_substeps: usize,
   /// Extra dT/dt fields aer's energy stage should sum into the Euler
@@ -90,7 +86,6 @@ impl AtmosphereModel {
       fields: AtmosphereFields::for_mesh(mesh),
       cfl: 0.25,
       rotation: RotationMode::None,
-      background_correction: BackgroundCorrectionMode::None,
       scheme: AtmosphereScheme::Explicit,
       max_substeps: 10_000,
       extra_tendencies: Vec::new(),
@@ -134,18 +129,6 @@ impl AtmosphereModel {
     self
   }
 
-  pub fn with_background_correction(
-    mut self,
-    mode: BackgroundCorrectionMode,
-  ) -> Self {
-    self.background_correction = mode;
-    self
-  }
-
-  pub fn with_current_state_background_correction(self) -> Self {
-    self.with_background_correction(BackgroundCorrectionMode::CurrentState)
-  }
-
   /// Add an extra dT/dt source to be summed into the Euler energy
   /// update. The field must live on the same mesh as the atmosphere
   /// model. Repeated calls accumulate sources.
@@ -175,10 +158,6 @@ impl AtmosphereModel {
 
   pub fn cfl(&self) -> f64 {
     self.cfl
-  }
-
-  pub fn background_correction(&self) -> BackgroundCorrectionMode {
-    self.background_correction
   }
 
   pub fn register_fields<M>(
@@ -241,7 +220,6 @@ impl AtmosphereModel {
         self.fields.euler_state,
         self.cfl,
       )?
-      .with_background_correction(self.background_correction)
       .with_rotation_mode(self.rotation)
       .with_scheme(self.scheme)
       .with_max_substeps(self.max_substeps),
@@ -345,9 +323,7 @@ mod tests {
     let mut tessera = Tessera::new();
     tessera.register_mesh(MeshKey::ATMOSPHERE, mesh.clone());
 
-    let model = AtmosphereModel::default()
-      .with_cfl(0.25)
-      .with_current_state_background_correction();
+    let model = AtmosphereModel::default().with_cfl(0.25);
     let fields = model.fields();
     let mut pleroma = Pleroma::new();
     model

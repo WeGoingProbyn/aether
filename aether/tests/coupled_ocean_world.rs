@@ -83,7 +83,6 @@ fn coupled_ocean_world_runs_and_water_cycle_is_active() -> AetherResult<()> {
   // Models.
   let atmosphere_model = AtmosphereModel::new(MeshKey::ATMOSPHERE)
     .with_cfl(0.25)
-    .with_current_state_background_correction()
     .with_radiative_heating()
     .with_rotation();
   let atmosphere_fields = atmosphere_model.fields();

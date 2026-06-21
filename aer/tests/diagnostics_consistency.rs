@@ -41,9 +41,7 @@ fn diagnostics_recover_reference_temperature_and_pressure_at_surface() {
   let mesh_dyn: Arc<dyn Mesh<3>> = mesh.clone();
   tessera.register_mesh(MeshKey::ATMOSPHERE, mesh_dyn);
 
-  let model = AtmosphereModel::new(MeshKey::ATMOSPHERE)
-    .with_cfl(0.25)
-    .with_current_state_background_correction();
+  let model = AtmosphereModel::new(MeshKey::ATMOSPHERE).with_cfl(0.25);
   let fields = model.fields();
 
   let mut pleroma = Pleroma::new();

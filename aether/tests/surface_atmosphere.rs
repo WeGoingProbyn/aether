@@ -67,9 +67,8 @@ fn surface_atmosphere_world_ticks_with_coupled_models() -> AetherResult<()> {
     .with_initial_temperature(reference_temperature)
     .with_heat_capacity_per_area(1.0e7);
   let surface_fields = surface_model.fields();
-  let atmosphere_model = AtmosphereModel::new(MeshKey::ATMOSPHERE)
-    .with_cfl(0.25)
-    .with_current_state_background_correction();
+  let atmosphere_model =
+    AtmosphereModel::new(MeshKey::ATMOSPHERE).with_cfl(0.25);
   let atmosphere_fields = atmosphere_model.fields();
 
   surface_model
