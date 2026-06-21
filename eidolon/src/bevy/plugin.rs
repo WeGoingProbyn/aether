@@ -60,10 +60,12 @@ impl Plugin for AetherBevyPlugin {
       .insert_resource(UpdateReceiverResource::new(receiver))
       .init_resource::<RenderRegistry>()
       .init_resource::<FrameInterpolatorResource>()
+      .init_resource::<super::sun::SunDirection>()
       .add_systems(PreUpdate, apply_updates_system)
       .add_systems(
         Update,
         (advance_playback_system, paint_layers_system).chain(),
-      );
+      )
+      .add_systems(Update, super::sun::orient_sun_light_system);
   }
 }

@@ -231,9 +231,9 @@ pub fn build_ocean_world_configured(
     .with_cfl(0.25)
     .with_radiative_heating()
     .with_rotation()
-    // Vertically-implicit dynamics: large stable steps on the thin shell,
-    // one per-panel HEVI solver under nexus' partitioned dispatch.
-    .with_hevi();
+    // Chosen scheme (the live demo / default uses HEVI: large stable steps on
+    // the thin shell, one per-panel solver under nexus' partitioned dispatch).
+    .with_scheme(scheme);
   let atmosphere_fields = atmosphere_model.fields();
 
   let ocean_model = OceanModel::new(

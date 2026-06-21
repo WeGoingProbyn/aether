@@ -13,7 +13,7 @@ use bevy::prelude::*;
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
 
 use eidolon::{
-  bevy::{AetherBevyPlugin, RenderRegistry},
+  bevy::{AetherBevyPlugin, RenderRegistry, SunLight},
   extract::FrameProducer,
   ir::{LayerHandle, LayerId, MeshRepresentation, RenderMeshId},
   runtime::{render_channel, spawn_runner},
@@ -133,7 +133,10 @@ fn spawn_camera_and_light(mut commands: Commands) {
       shadows_enabled: false,
       ..default()
     },
+    // Initial orientation; the eidolon backend re-aims this each frame from the
+    // simulation's (orbiting) sun direction.
     Transform::from_xyz(1.0, 0.4, 0.0).looking_at(Vec3::ZERO, Vec3::Y),
+    SunLight,
   ));
 }
 

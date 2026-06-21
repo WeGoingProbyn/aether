@@ -29,6 +29,7 @@ pub fn apply_updates_system(
   mut meshes: ResMut<Assets<Mesh>>,
   mut materials: ResMut<Assets<StandardMaterial>>,
   mut interp: ResMut<FrameInterpolatorResource>,
+  mut sun: ResMut<super::sun::SunDirection>,
 ) {
   let Some(batch) = pull_batch(&receiver) else {
     return;
@@ -41,6 +42,15 @@ pub fn apply_updates_system(
     if let Update::SetSimTime { sim_time, .. } = &update {
       let frame = snapshot_sample_frame(&registry, *sim_time);
       interp.0.push(frame);
+    }
+    // Record the sun direction so `orient_sun_light_system` can aim the
+    // directional light from it (shading tracks the orbiting sun).
+    if let Update::UpdateSunDirection { direction, .. } = &update {
+      sun.direction = Some(Vec3::new(
+        direction[0] as f32,
+        direction[1] as f32,
+        direction[2] as f32,
+      ));
     }
     apply_one(
       update,
@@ -254,10 +264,8 @@ fn apply_one(
     }
 
     Update::UpdateSunDirection { .. } => {
-      // Sun handling currently lives in `super::sun`; the apply system
-      // doesn't need to touch ECS for it. Leaving the no-op here so a
-      // future revision can update a directional light without
-      // changing the wire protocol.
+      // Handled in `apply_updates_system` (it owns the `SunDirection`
+      // resource); the sun direction does not touch the registry/ECS here.
     }
     Update::SetSimTime { .. } => {
       // Wall-clock progression is the driver's concern, not the

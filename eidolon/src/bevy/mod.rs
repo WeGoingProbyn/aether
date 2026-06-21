@@ -20,3 +20,4 @@ pub mod transform;
 pub use camera::spawn_orbit_camera;
 pub use plugin::{AetherBevyPlugin, UpdateReceiverResource};
 pub use registry::{LayerEntry, MeshEntry, RenderRegistry, WorldEntry};
+pub use sun::{SunDirection, SunLight, orient_sun_light_system};
