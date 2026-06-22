@@ -398,7 +398,7 @@ fn build_mesh(
   render_mesh
 }
 
-fn read_scalar_component(
+pub(crate) fn read_scalar_component(
   pleroma: &Pleroma,
   field: FieldKey,
   component: usize,

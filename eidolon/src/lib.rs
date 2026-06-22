@@ -13,5 +13,6 @@ pub mod export;
 pub mod extract;
 pub mod ir;
 pub mod playback;
+pub mod query;
 pub mod registry;
 pub mod runtime;

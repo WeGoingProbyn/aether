@@ -27,12 +27,32 @@ use crate::ir::LayerHandle;
 /// EMA weight for the delivered-sim-rate estimate (per frame push).
 const RATE_SMOOTHING: f64 = 0.3;
 
-/// One completed frame's interpolatable field data: a simulation timestamp and
-/// the per-cell scalar samples of each active layer.
+/// A per-cell quantity channel carried in the snapshot for the semantic query
+/// API (distinct from render [`LayerHandle`]s). Vector quantities such as wind
+/// are stored as separate world-frame component channels and recombined at
+/// query time; the mesh is part of the key so multi-mesh worlds stay
+/// unambiguous.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MeshChannel {
+  AtmosphereTemperature,
+  AtmospherePressure,
+  AtmosphereHumidity,
+  /// World-frame air-velocity components (m/s).
+  AtmosphereWindX,
+  AtmosphereWindY,
+  AtmosphereWindZ,
+  /// Sea-surface temperature on the ocean mesh (K).
+  SeaSurfaceTemperature,
+}
+
+/// One completed frame's interpolatable field data: a simulation timestamp,
+/// the per-cell scalar samples of each active render layer, and the per-cell
+/// quantity channels the semantic query API reads.
 #[derive(Clone, Debug, Default)]
 pub struct SampleFrame {
   pub sim_time: f64,
   pub layers: HashMap<LayerHandle, Vec<f64>>,
+  pub quantities: HashMap<MeshChannel, Vec<f64>>,
 }
 
 impl SampleFrame {
@@ -40,11 +60,17 @@ impl SampleFrame {
     Self {
       sim_time,
       layers: HashMap::new(),
+      quantities: HashMap::new(),
     }
   }
 
   pub fn insert(&mut self, layer: LayerHandle, samples: Vec<f64>) {
     self.layers.insert(layer, samples);
+  }
+
+  /// Attach a per-cell quantity channel used by the semantic query API.
+  pub fn insert_quantity(&mut self, channel: MeshChannel, samples: Vec<f64>) {
+    self.quantities.insert(channel, samples);
   }
 }
 
@@ -165,6 +191,33 @@ impl FrameInterpolator {
           .collect(),
       ),
       _ => Some(next.clone()),
+    }
+  }
+
+  /// Per-cell values for a quantity channel, linearly interpolated at the
+  /// current clock. Mirrors [`Self::samples`] but for the query-API channels.
+  pub fn quantity(&self, channel: MeshChannel) -> Option<Vec<f64>> {
+    let next = self.next.as_ref()?.quantities.get(&channel)?;
+    let alpha = self.alpha();
+    match self.prev.as_ref().and_then(|p| p.quantities.get(&channel)) {
+      Some(prev) if prev.len() == next.len() && alpha < 1.0 => Some(
+        prev
+          .iter()
+          .zip(next)
+          .map(|(a, b)| a + (b - a) * alpha)
+          .collect(),
+      ),
+      _ => Some(next.clone()),
+    }
+  }
+
+  /// Whether the interpolator is genuinely blending two distinct frames (as
+  /// opposed to snapping to a single newest frame). Query results served while
+  /// this is false are flagged [`crate::query::Sample::Stale`].
+  pub fn is_interpolating(&self) -> bool {
+    match (&self.prev, &self.next) {
+      (Some(p), Some(n)) => (n.sim_time - p.sim_time).abs() > 1e-12,
+      _ => false,
     }
   }
 }

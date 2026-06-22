@@ -9,6 +9,7 @@ pub mod frame;
 pub mod layer;
 pub mod mesh;
 pub mod producer;
+pub mod query_extract;
 pub mod snapshot_adapter;
 
 pub use coupler_debug::*;
@@ -17,5 +18,8 @@ pub use layer::*;
 pub use mesh::*;
 pub use producer::{
   ExtractConfig, FrameProducer, MeshConfig, ScalarLayerConfig,
+};
+pub use query_extract::{
+  QuantityChannel, default_atmosphere_quantities, extract_quantity_frame,
 };
 pub use snapshot_adapter::{frame_to_initial_batch, frame_to_replace_batch};
