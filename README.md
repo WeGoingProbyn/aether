@@ -33,8 +33,9 @@ monolithic engine.
 - `nexus`: dependency-aware stage scheduler and execution engine
 - `continuum`: domain-neutral numerical methods and solver utilities
 - `tempus`: generic time-integration kernels
-- `aer`: atmospheric models and stages
-- `terra`: surface/geophysical models and stages
+- `aer`: atmospheric models and stages (compressible Euler, moisture, HEVI)
+- `terra`: surface thermal slab and inert terrain (elevation, land/ocean/ice)
+- `thalassa`: thermodynamic ocean column on a cube-sphere shell
 - `gravitas`: orbital and n-body gravity stages
 - `lumen`: radiative transfer stages
 - `syzygy`: coupling semantics between physics modules
@@ -65,9 +66,9 @@ monolithic engine.
  │  │  nexus  │◀───┐                │
  │  └─────────┘    │                │
  │      ┌──────────┤                ▼
- │  ┌───┴─────┐ ┌──┴───┬───────┬──────────┬────────────────┐
- │  │ syzygy  │ │ aer  │ terra │ gravitas │ future physics │
- │  └─────────┘ └──┬───┴───────┴──────────┴────────────────┘
+ │  ┌───┴─────┐ ┌──┴───┬───────┬──────────┬───────┬───────┬────────┐
+ │  │ syzygy  │ │ aer  │ terra │ thalassa │ lumen │gravitas│ future │
+ │  └─────────┘ └──┬───┴───────┴──────────┴───────┴───────┴────────┘
  │                 │
  │                 │
  │                 │
@@ -99,6 +100,30 @@ configuration, meshes, state, and registered physics stages:
 
 The main architectural rule is that physics modules do not own global state or
 geometry. They operate on borrowed state provided by the scheduler.
+
+## Current Capabilities
+
+The reference world is a coupled planetary atmosphere–ocean on a cube-sphere:
+
+- **Well-balanced compressible atmosphere.** The finite-volume scheme
+  reconstructs each cell's state to shared faces along the local hydrostatic
+  profile, so a fluid at rest holds `∇p = ρg` to machine precision instead of
+  drifting. Gravity is an analytic radial geopotential supplied by the kernel.
+- **HEVI time stepping.** Horizontally-explicit / vertically-implicit
+  integration removes the vertical acoustic CFL limit that dominates thin
+  shells, running through the same partitioned nexus path as the explicit
+  solver (per-panel dispatch, radial columns).
+- **Conservative air–sea coupling.** Evaporation, saturation, radiation, and
+  sea-surface temperature exchange close the moist energy budget across meshes
+  (`syzygy` interface fluxes), so the demo is stable end-to-end.
+- **Geographic query layer.** `eidolon` exposes a read-only, thread-safe
+  `Quantity` API (`sample_scalar` / `sample_wind` / `reduce_scalar`) over an
+  interpolated snapshot, addressed in lat/lon via `tessera`'s geographic index.
+- **First-class terrain.** Inert surface elevation and a land/ocean/ice mask,
+  with orographic lift as the first terrain → atmosphere coupling.
+- **Pluggable backends.** Explicit, implicit (matrix-free GMRES), IMEX, and
+  hybrid solvers sit behind one `FvmBackend` trait; parallelism lives in nexus
+  (N serial solvers over N partitions), not inside a backend.
 
 ## Development
 
