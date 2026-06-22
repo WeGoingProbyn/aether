@@ -43,6 +43,10 @@ pub enum MeshChannel {
   AtmosphereWindZ,
   /// Sea-surface temperature on the ocean mesh (K).
   SeaSurfaceTemperature,
+  /// Static surface elevation (m) relative to the mean surface radius.
+  SurfaceElevation,
+  /// Static categorical surface-type code (see `utility::domain::SurfaceClass`).
+  SurfaceType,
 }
 
 /// One completed frame's interpolatable field data: a simulation timestamp,

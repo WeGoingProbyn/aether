@@ -93,3 +93,22 @@ pub fn default_atmosphere_quantities() -> Vec<QuantityChannel> {
     ),
   ]
 }
+
+/// The inert terrain quantity channels on the surface mesh: static elevation
+/// and the categorical surface-type code. Read once (they do not evolve), but
+/// flow through the same snapshot path so the query API treats them uniformly.
+pub fn default_surface_terrain_quantities() -> Vec<QuantityChannel> {
+  let surface = MeshKey::SURFACE;
+  vec![
+    QuantityChannel::new(
+      MeshChannel::SurfaceElevation,
+      FieldKey::new(surface, FieldName::SurfaceElevation),
+      0,
+    ),
+    QuantityChannel::new(
+      MeshChannel::SurfaceType,
+      FieldKey::new(surface, FieldName::SurfaceType),
+      0,
+    ),
+  ]
+}

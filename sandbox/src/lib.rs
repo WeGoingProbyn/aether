@@ -9,7 +9,8 @@ use std::collections::HashMap;
 
 use aer::{
   AtmosphereModel, AtmosphereShellLayout, EvaporationStep,
-  LATENT_HEAT_VAPORISATION, SaturationAdjustmentStep, ShellColumns,
+  LATENT_HEAT_VAPORISATION, LiftSite, OrographicLiftStage,
+  SaturationAdjustmentStep, ShellColumns, build_lift_sites,
 };
 use aether::{
   core::{Aether, System},
@@ -24,12 +25,12 @@ use eidolon::ir::{
   LayerId, MeshRepresentation, Palette, RenderFrame, RenderLayer, RenderMeshId,
 };
 use lumen::{DiurnalSunStep, RadiationCoefficients, RadiationModel};
-use nexus::{MeshKey, SoaField, SubsystemId, WorldId};
-use syzygy::{ScalarInterfaceDeposition, ScalarRelaxation};
-use terra::SurfaceThermalModel;
+use nexus::{FieldStorage, MeshKey, SoaField, SubsystemId, WorldId};
+use syzygy::{CouplingStencil, ScalarInterfaceDeposition, ScalarRelaxation};
+use terra::{SurfaceThermalModel, TerrainModel, earthlike_terrain};
 use tessera::cube_sphere::CubeSphereShellSpec;
 use thalassa::{OceanColumnLayout, OceanModel};
-use utility::domain::{FieldKey, FieldName, SystemId};
+use utility::domain::{CellId, FieldKey, FieldName, SystemId};
 use utility::error::AetherResult;
 use utility::profile;
 use utility::thread::pool::Pool;
@@ -143,6 +144,120 @@ pub fn build_demo_aether() -> AetherResult<(Aether, AtmosphereShellLayout)> {
   systems.insert(system_id, System::single(system_id, world));
 
   Ok((Aether::new(systems, Pool::default()), shell_layout))
+}
+
+/// Build a minimal terrain world: a dry atmosphere over a surface carrying an
+/// inert heightfield, coupled by **orographic lift** (wind forced up/down the
+/// terrain slope). No radiation or ocean — this isolates the terrain↔atmosphere
+/// coupling so it can be exercised headlessly. Returns the assembled world, the
+/// shell layout, and the lift sites (so a test can inspect the coupling).
+pub fn build_terrain_world()
+-> AetherResult<(Aether, AtmosphereShellLayout, Vec<LiftSite>)> {
+  build_terrain_world_configured(0.2, earthlike_terrain)
+}
+
+/// As [`build_terrain_world`], but with an explicit orographic relaxation rate
+/// and terrain generator. `relaxation = 0.0` disables the lift forcing entirely
+/// (the lift sites are still returned), which lets a test run an identical world
+/// with and without the coupling to isolate its effect; a custom generator lets
+/// it impose, say, a steep ridge.
+#[profile]
+pub fn build_terrain_world_configured<G>(
+  relaxation: f64,
+  generator: G,
+) -> AetherResult<(Aether, AtmosphereShellLayout, Vec<LiftSite>)>
+where
+  G: Fn(tessera::geo::GeoCoord) -> terra::TerrainSample,
+{
+  let angular_dims = [12, 12];
+  let surface_radial_layers = 1;
+  let atmosphere_radial_layers = 6;
+  let atmosphere_height = 20_000.0;
+  let surface_depth = 10_000.0;
+
+  let mut factory = WorldFactory::new(SANDBOX_WORLD_ID, cosmo_factory::earth())
+    .with_primary(cosmo_factory::sun());
+  let constants = factory.constants();
+  let shell_layout =
+    AtmosphereShellLayout::new(&constants, atmosphere_height, surface_depth)?;
+  let surface_radius = shell_layout.reference_radius();
+
+  factory = factory.cube_sphere_surface(
+    shell_layout.surface_shell_spec(angular_dims, surface_radial_layers),
+  );
+  factory = factory.cube_sphere_atmosphere(
+    shell_layout.atmosphere_shell_spec(angular_dims, atmosphere_radial_layers),
+  );
+  let coupler_index =
+    factory.add_radial_stack_coupler(MeshKey::SURFACE, MeshKey::ATMOSPHERE)?;
+
+  let surface_mesh = factory.tessera().mesh(MeshKey::SURFACE).unwrap().clone();
+  let atmosphere_mesh =
+    factory.tessera().mesh(MeshKey::ATMOSPHERE).unwrap().clone();
+
+  // Inert terrain on the surface.
+  let terrain = TerrainModel::new(MeshKey::SURFACE, surface_radius);
+  terrain.register_fields(
+    factory.pleroma_mut(),
+    surface_mesh.as_ref(),
+    generator,
+  )?;
+
+  // Dry atmosphere physics.
+  let atmosphere_model =
+    AtmosphereModel::new(MeshKey::ATMOSPHERE).with_cfl(0.25);
+  atmosphere_model.register_fields(
+    factory.pleroma_mut(),
+    atmosphere_mesh.as_ref(),
+    &constants,
+    surface_radius,
+  )?;
+  let atmosphere_stages = atmosphere_model.add_stages(factory.nexus_mut())?;
+
+  // Assemble orographic lift sites from terrain + the radial coupler pairing.
+  let elevation: Vec<f64> = {
+    let field = factory
+      .pleroma_mut()
+      .read::<SoaField<1>>(terrain.fields().elevation)
+      .expect("elevation field registered");
+    (0..surface_mesh.cell_count())
+      .map(|i| field.state(CellId::from(i))[0])
+      .collect()
+  };
+  let stencil = CouplingStencil::from_tessera_coupler(
+    factory.tessera(),
+    coupler_index,
+    MeshKey::SURFACE,
+    MeshKey::ATMOSPHERE,
+  )?;
+  let pairings: Vec<(CellId, CellId)> = stencil
+    .entries()
+    .iter()
+    .map(|e| (e.source_cell, e.target_cell))
+    .collect();
+  let sites = build_lift_sites(
+    atmosphere_mesh.as_ref(),
+    surface_mesh.as_ref(),
+    &elevation,
+    surface_radius,
+    &pairings,
+  );
+
+  let state_key = FieldKey::new(MeshKey::ATMOSPHERE, FieldName::EulerState);
+  let lift_id = factory.add_stage(OrographicLiftStage::new(
+    state_key,
+    sites.clone(),
+    relaxation,
+    20.0,
+  ));
+  // Apply the lift forcing after each atmosphere dynamics step.
+  factory.before(atmosphere_stages.dynamics, lift_id);
+
+  let world = factory.build()?;
+  let system_id = SystemId(0);
+  let mut systems = HashMap::new();
+  systems.insert(system_id, System::single(system_id, world));
+  Ok((Aether::new(systems, Pool::default()), shell_layout, sites))
 }
 
 /// Build the fully-coupled ocean world: a moist, rotating atmosphere

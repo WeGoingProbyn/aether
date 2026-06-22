@@ -8,6 +8,7 @@ pub mod flux;
 pub mod init;
 pub mod microphysics;
 pub mod model;
+pub mod orographic;
 pub mod radiation;
 pub mod shell;
 pub mod thermal;
@@ -25,6 +26,10 @@ pub use microphysics::{
   saturation_specific_humidity, saturation_vapour_pressure,
 };
 pub use model::{AtmosphereFields, AtmosphereModel, AtmosphereStageIds};
+pub use orographic::{
+  LiftSite, OrographicLiftStage, apply_orographic_lift, build_lift_sites,
+  compute_enu_gradient,
+};
 pub use shell::AtmosphereShellLayout;
 pub use thermal::TemperatureTendencyToEulerEnergyStep;
 pub use tracers::{EvaporationStep, ShellColumns};

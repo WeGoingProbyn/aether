@@ -20,6 +20,7 @@ pub use producer::{
   ExtractConfig, FrameProducer, MeshConfig, ScalarLayerConfig,
 };
 pub use query_extract::{
-  QuantityChannel, default_atmosphere_quantities, extract_quantity_frame,
+  QuantityChannel, default_atmosphere_quantities,
+  default_surface_terrain_quantities, extract_quantity_frame,
 };
 pub use snapshot_adapter::{frame_to_initial_batch, frame_to_replace_batch};

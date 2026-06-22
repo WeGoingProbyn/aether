@@ -83,6 +83,45 @@ pub enum FieldName {
   /// ocean's top layer, so the air–sea evaporation flux can read it as a
   /// field on its own mesh.
   SeaSurfaceTemperature,
+  /// Static surface elevation (m) relative to the body's mean surface radius:
+  /// positive is land above the datum, negative is ocean floor / basin depth.
+  /// Inert terrain data — set once at world setup, not evolved by physics.
+  SurfaceElevation,
+  /// Static categorical surface classification (ocean / land / ice), stored as
+  /// a numeric code (see `terra::SurfaceClass`). Inert terrain data.
+  SurfaceType,
+}
+
+/// Categorical surface classification — the semantic meaning of the numeric
+/// codes stored in the [`FieldName::SurfaceType`] field. Lives here in the
+/// shared vocabulary so both the producer (terra) and consumers (the query
+/// API) agree on the encoding without depending on each other.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub enum SurfaceClass {
+  Ocean,
+  Land,
+  Ice,
+}
+
+impl SurfaceClass {
+  /// The numeric code stored in the `SurfaceType` field.
+  pub fn code(self) -> f64 {
+    match self {
+      SurfaceClass::Ocean => 0.0,
+      SurfaceClass::Land => 1.0,
+      SurfaceClass::Ice => 2.0,
+    }
+  }
+
+  /// Recover a class from a stored (possibly interpolated) code. Values round
+  /// to the nearest class; anything unrecognised falls back to Ocean.
+  pub fn from_code(code: f64) -> Self {
+    match code.round() as i64 {
+      1 => SurfaceClass::Land,
+      2 => SurfaceClass::Ice,
+      _ => SurfaceClass::Ocean,
+    }
+  }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]

@@ -17,6 +17,12 @@ use utility::{
   error::{AetherError, AetherResult, ErrorDomain},
 };
 
+pub mod terrain;
+pub use terrain::{
+  TerrainFields, TerrainModel, TerrainSample, earthlike_terrain,
+};
+pub use utility::domain::SurfaceClass;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SurfaceFields {
   pub temperature: FieldKey,

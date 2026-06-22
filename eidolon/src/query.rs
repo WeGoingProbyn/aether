@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use tessera::geo::GeoCoord;
 use tessera::spatial::{GeoBounds, GeoIndex};
 use tessera::world_mesh::Tessera;
-use utility::domain::{CellId, MeshType};
+use utility::domain::{CellId, MeshType, SurfaceClass};
 use utility::maths::vector::Vector;
 
 /// Outcome of a world query. The value is always present except for
@@ -83,6 +83,8 @@ pub enum ScalarQuantity {
   Humidity,
   /// Sea-surface temperature (K).
   SeaSurfaceTemperature,
+  /// Static surface elevation (m) relative to the mean surface radius.
+  SurfaceElevation,
 }
 
 /// Vector physical quantities. Returned in a local east-north-up (ENU) frame at
@@ -116,6 +118,9 @@ impl ScalarQuantity {
       }
       ScalarQuantity::SeaSurfaceTemperature => {
         (MeshType::Ocean, MeshChannel::SeaSurfaceTemperature)
+      }
+      ScalarQuantity::SurfaceElevation => {
+        (MeshType::Surface, MeshChannel::SurfaceElevation)
       }
     }
   }
@@ -211,6 +216,38 @@ impl WorldQuery {
       Sample::Ok(enu)
     } else {
       Sample::Stale(enu)
+    }
+  }
+
+  /// The categorical surface classification (land / ocean / ice) at a
+  /// geographic coordinate. Returns the decoded [`SurfaceClass`]; quality
+  /// follows the same rules as the scalar queries (terrain is static, so in
+  /// practice this is `Stale` or `Ok`, never `Degraded`).
+  pub fn surface_class(
+    &self,
+    snapshot: &FrameInterpolator,
+    at: GeoCoord,
+  ) -> Sample<SurfaceClass> {
+    let Some(index) = self.indices.get(&MeshType::Surface) else {
+      return Sample::Unavailable;
+    };
+    let Some(cell) = index.locate(&at) else {
+      return Sample::Unavailable;
+    };
+    let Some(values) = snapshot.quantity(MeshChannel::SurfaceType) else {
+      return Sample::Unavailable;
+    };
+    match values.get(cell.index()) {
+      Some(&code) if code.is_finite() => {
+        let class = SurfaceClass::from_code(code);
+        if snapshot.is_interpolating() {
+          Sample::Ok(class)
+        } else {
+          Sample::Stale(class)
+        }
+      }
+      Some(_) => Sample::Unavailable,
+      None => Sample::Unavailable,
     }
   }
 
@@ -421,6 +458,71 @@ mod tests {
       wind[1]
     );
     assert!((wind[2] - 10.0 * phi.sin()).abs() < 1e-9, "up {}", wind[2]);
+  }
+
+  #[test]
+  fn terrain_elevation_and_surface_class_query() {
+    let mesh = Arc::new(CubeSphere::new([12, 12, 1], R_INNER, R_OUTER));
+    let mut tessera = Tessera::new();
+    tessera.register_mesh(MeshKey::SURFACE, mesh.clone() as Arc<dyn Mesh<3>>);
+    let query = WorldQuery::new(&tessera, SURFACE);
+
+    let n = mesh.cell_count();
+    let mut elevation = vec![0.0; n];
+    let mut surface_type = vec![0.0; n];
+    for i in 0..n {
+      let g = GeoCoord::from_world(
+        &mesh.cell_world_centroid(CellId::from(i)),
+        SURFACE,
+      );
+      // Elevation encodes latitude-deg so the result is predictable; northern
+      // hemisphere is land, southern is ocean.
+      elevation[i] = g.latitude_deg();
+      surface_type[i] = if g.lat > 0.0 {
+        SurfaceClass::Land.code()
+      } else {
+        SurfaceClass::Ocean.code()
+      };
+    }
+    let mut frame = SampleFrame::new(0.0);
+    frame.insert_quantity(MeshChannel::SurfaceElevation, elevation);
+    frame.insert_quantity(MeshChannel::SurfaceType, surface_type);
+    let mut fi = FrameInterpolator::new();
+    fi.push(frame);
+
+    let north = GeoCoord::from_degrees(40.0, 10.0, 0.0);
+    let elev = query
+      .sample_scalar(&fi, ScalarQuantity::SurfaceElevation, north)
+      .value()
+      .unwrap();
+    let cell = query.locate(MeshType::Surface, north).unwrap();
+    let truth = GeoCoord::from_world(&mesh.cell_world_centroid(cell), SURFACE)
+      .latitude_deg();
+    assert!((elev - truth).abs() < 1e-9, "elevation {elev} vs {truth}");
+    assert_eq!(
+      query.surface_class(&fi, north).value().unwrap(),
+      SurfaceClass::Land
+    );
+
+    let south = GeoCoord::from_degrees(-40.0, 10.0, 0.0);
+    assert_eq!(
+      query.surface_class(&fi, south).value().unwrap(),
+      SurfaceClass::Ocean
+    );
+
+    // No surface mesh ⇒ unavailable, not a panic.
+    let no_surface = WorldQuery::new(&Tessera::new(), SURFACE);
+    assert!(query_is_unavailable(&no_surface, &fi, north));
+  }
+
+  fn query_is_unavailable(
+    q: &WorldQuery,
+    fi: &FrameInterpolator,
+    at: GeoCoord,
+  ) -> bool {
+    q.sample_scalar(fi, ScalarQuantity::SurfaceElevation, at)
+      .is_unavailable()
+      && q.surface_class(fi, at).is_unavailable()
   }
 
   #[test]
