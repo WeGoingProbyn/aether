@@ -65,6 +65,9 @@ pub struct RadiationModel {
   surface_mesh: MeshKey,
   fields: RadiationFields,
   params: RadiationParameters,
+  /// Optional per-cell surface albedo field (on the surface mesh). When set,
+  /// the transfer stage reads it instead of the scalar `params.surface_albedo`.
+  surface_albedo: Option<FieldKey>,
 }
 
 impl RadiationModel {
@@ -74,6 +77,7 @@ impl RadiationModel {
       surface_mesh,
       fields: RadiationFields::for_meshes(atm_mesh, surface_mesh),
       params: RadiationParameters::default(),
+      surface_albedo: None,
     }
   }
 
@@ -94,11 +98,20 @@ impl RadiationModel {
       surface_mesh,
       fields: RadiationFields::for_meshes(atm_mesh, surface_mesh),
       params,
+      surface_albedo: None,
     })
   }
 
   pub fn with_fields(mut self, fields: RadiationFields) -> Self {
     self.fields = fields;
+    self
+  }
+
+  /// Read short-wave albedo from a per-cell field on the surface mesh instead
+  /// of the scalar parameter — the consumer side of the surface-albedo
+  /// contract (terrain base albedo, ice / snow on top).
+  pub fn with_surface_albedo_field(mut self, field: FieldKey) -> Self {
+    self.surface_albedo = Some(field);
     self
   }
 
@@ -175,7 +188,7 @@ impl RadiationModel {
     nexus: &mut Nexus,
   ) -> AetherResult<RadiationStageIds> {
     self.validate()?;
-    let transfer = nexus.add(RadiativeTransferStep::new(
+    let mut step = RadiativeTransferStep::new(
       self.atm_mesh,
       self.surface_mesh,
       self.fields.atm_temperature,
@@ -183,7 +196,11 @@ impl RadiationModel {
       self.fields.heating_tendency,
       self.fields.net_surface_flux,
       self.params,
-    )?);
+    )?;
+    if let Some(field) = self.surface_albedo {
+      step = step.with_surface_albedo_field(field)?;
+    }
+    let transfer = nexus.add(step);
     Ok(RadiationStageIds { transfer })
   }
 

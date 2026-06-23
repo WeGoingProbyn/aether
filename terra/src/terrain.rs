@@ -11,13 +11,18 @@
 //! drainage) are wired in later, one at a time, so any terrain-induced solver
 //! instability stays isolated.
 
-use nexus::{FieldKey, FieldName, MeshKey, Pleroma, SoaField};
+use nexus::{
+  FieldKey, FieldName, FieldStorage, MeshKey, Nexus, Pleroma, SoaField, Stage,
+  StageContext, StageId,
+};
 use tessera::geo::GeoCoord;
 use tessera::mesh::Mesh;
 use utility::{
   domain::{CellId, SurfaceClass},
-  error::AetherResult,
+  error::{AetherError, AetherResult},
 };
+
+use crate::TerraError;
 
 /// One cell's terrain: elevation in metres relative to the mean surface radius
 /// (positive = land above datum, negative = basin/ocean depth) and its class.
@@ -32,6 +37,7 @@ pub struct TerrainSample {
 pub struct TerrainFields {
   pub elevation: FieldKey,
   pub surface_type: FieldKey,
+  pub albedo: FieldKey,
 }
 
 impl TerrainFields {
@@ -39,15 +45,50 @@ impl TerrainFields {
     Self {
       elevation: FieldKey::new(mesh, FieldName::SurfaceElevation),
       surface_type: FieldKey::new(mesh, FieldName::SurfaceType),
+      albedo: FieldKey::new(mesh, FieldName::SurfaceAlbedo),
     }
   }
 }
 
-/// Registers and initialises the inert terrain fields on a surface mesh.
+/// Per-class short-wave albedo — the *base layer* of the composable
+/// surface-albedo contract. Radiation never reads this directly; it reads the
+/// per-cell `SurfaceAlbedo` field, which a producer fills from this table (and
+/// which a future ice / snow model blends on top of).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AlbedoTable {
+  pub ocean: f64,
+  pub land: f64,
+  pub ice: f64,
+}
+
+impl Default for AlbedoTable {
+  fn default() -> Self {
+    // Earth-ish: open ocean is dark, vegetated/bare land mid, ice bright.
+    Self {
+      ocean: 0.06,
+      land: 0.30,
+      ice: 0.60,
+    }
+  }
+}
+
+impl AlbedoTable {
+  pub fn albedo_for(&self, class: SurfaceClass) -> f64 {
+    match class {
+      SurfaceClass::Ocean => self.ocean,
+      SurfaceClass::Land => self.land,
+      SurfaceClass::Ice => self.ice,
+    }
+  }
+}
+
+/// Registers and initialises the inert terrain fields on a surface mesh,
+/// including the base per-cell surface albedo.
 pub struct TerrainModel {
   mesh: MeshKey,
   fields: TerrainFields,
   surface_radius: f64,
+  albedo_table: AlbedoTable,
 }
 
 impl TerrainModel {
@@ -59,7 +100,13 @@ impl TerrainModel {
       mesh,
       fields: TerrainFields::for_mesh(mesh),
       surface_radius,
+      albedo_table: AlbedoTable::default(),
     }
+  }
+
+  pub fn with_albedo_table(mut self, table: AlbedoTable) -> Self {
+    self.albedo_table = table;
+    self
   }
 
   pub fn mesh(&self) -> MeshKey {
@@ -70,8 +117,16 @@ impl TerrainModel {
     self.fields
   }
 
-  /// Populate elevation and surface-type from a geographic generator and
-  /// register them in pleroma. No stages are added — terrain is static.
+  pub fn albedo_table(&self) -> AlbedoTable {
+    self.albedo_table
+  }
+
+  /// Populate elevation, surface-type, and the base surface albedo from a
+  /// geographic generator and register them in pleroma. The albedo is
+  /// initialised here (from the surface class) so it is immediately valid as
+  /// inert data; for a *dynamic* surface (sea ice that forms and melts) add
+  /// [`TerrainModel::add_stages`] so the base is re-derived each tick before a
+  /// future ice producer blends on top.
   pub fn register_fields<M, G>(
     &self,
     pleroma: &mut Pleroma,
@@ -95,8 +150,86 @@ impl TerrainModel {
       SoaField::<1>::from_fn(n, |i| [samples[i.index()].elevation]);
     let surface_type =
       SoaField::<1>::from_fn(n, |i| [samples[i.index()].class.code()]);
+    let albedo = SoaField::<1>::from_fn(n, |i| {
+      [self.albedo_table.albedo_for(samples[i.index()].class)]
+    });
     pleroma.register_field(self.fields.elevation, elevation);
     pleroma.register_field(self.fields.surface_type, surface_type);
+    pleroma.register_field(self.fields.albedo, albedo);
+    Ok(())
+  }
+
+  /// Add the composable base-albedo producer: a stage that re-derives the
+  /// per-cell `SurfaceAlbedo` from the (possibly changing) `SurfaceType` each
+  /// tick. Optional for a purely static terrain — the field is already set by
+  /// [`TerrainModel::register_fields`] — but it is the seam dynamic producers
+  /// build on (ice / snow blend after it).
+  pub fn add_stages(&self, nexus: &mut Nexus) -> StageId {
+    nexus.add(SurfaceAlbedoStep::new(self.mesh, self.albedo_table))
+  }
+}
+
+/// Composable base-albedo producer: writes the per-cell `SurfaceAlbedo` from the
+/// categorical `SurfaceType` via an [`AlbedoTable`]. It overwrites (establishes
+/// the base layer); later producers in the DAG blend ice / snow on top.
+pub struct SurfaceAlbedoStep {
+  surface_type: FieldKey,
+  albedo: FieldKey,
+  table: AlbedoTable,
+  reads: [FieldKey; 1],
+  writes: [FieldKey; 1],
+}
+
+impl SurfaceAlbedoStep {
+  pub fn new(mesh: MeshKey, table: AlbedoTable) -> Self {
+    let surface_type = FieldKey::new(mesh, FieldName::SurfaceType);
+    let albedo = FieldKey::new(mesh, FieldName::SurfaceAlbedo);
+    Self {
+      surface_type,
+      albedo,
+      table,
+      reads: [surface_type],
+      writes: [albedo],
+    }
+  }
+}
+
+impl Stage for SurfaceAlbedoStep {
+  fn name(&self) -> &'static str {
+    "terra_surface_albedo"
+  }
+
+  fn reads(&self) -> &[FieldKey] {
+    &self.reads
+  }
+
+  fn writes(&self) -> &[FieldKey] {
+    &self.writes
+  }
+
+  fn run(&mut self, mut ctx: StageContext<'_>) -> AetherResult<()> {
+    let values: Vec<f64> = {
+      let surface_type: &SoaField<1> =
+        ctx.world.fields.read(self.surface_type).ok_or_else(|| {
+          AetherError::new(TerraError::MissingReadField)
+            .context(format!("{:?}", self.surface_type))
+        })?;
+      (0..surface_type.len())
+        .map(|i| {
+          let code = surface_type.state(CellId::from(i))[0];
+          self.table.albedo_for(SurfaceClass::from_code(code))
+        })
+        .collect()
+    };
+
+    let albedo: &mut SoaField<1> =
+      ctx.world.fields.write(self.albedo).ok_or_else(|| {
+        AetherError::new(TerraError::MissingWriteField)
+          .context(format!("{:?}", self.albedo))
+      })?;
+    for (i, &a) in values.iter().enumerate() {
+      albedo.write(CellId::from(i), &[a]);
+    }
     Ok(())
   }
 }
@@ -178,6 +311,37 @@ mod tests {
       saw_land && saw_ocean,
       "generator should produce land and ocean"
     );
+  }
+
+  #[test]
+  fn register_fields_sets_base_albedo_from_class() {
+    let mesh = Arc::new(CubeSphere::new([12, 12, 1], R_INNER, R_OUTER));
+    let mut pleroma = Pleroma::new();
+    let table = AlbedoTable::default();
+    let model = TerrainModel::new(MeshKey::SURFACE, R_INNER);
+    model
+      .register_fields(&mut pleroma, mesh.as_ref(), earthlike_terrain)
+      .unwrap();
+
+    let surface_type: &SoaField<1> =
+      pleroma.read(model.fields().surface_type).unwrap();
+    let albedo: &SoaField<1> = pleroma.read(model.fields().albedo).unwrap();
+    for i in 0..mesh.cell_count() {
+      let cell = CellId::from(i);
+      let class = SurfaceClass::from_code(surface_type.state(cell)[0]);
+      let a = albedo.state(cell)[0];
+      assert!((a - table.albedo_for(class)).abs() < 1e-12);
+      assert!((0.0..=1.0).contains(&a), "albedo {a} out of range");
+    }
+  }
+
+  #[test]
+  fn albedo_table_orders_ocean_land_ice() {
+    let t = AlbedoTable::default();
+    assert!(
+      t.albedo_for(SurfaceClass::Ocean) < t.albedo_for(SurfaceClass::Land)
+    );
+    assert!(t.albedo_for(SurfaceClass::Land) < t.albedo_for(SurfaceClass::Ice));
   }
 
   #[test]

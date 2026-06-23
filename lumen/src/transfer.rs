@@ -184,8 +184,12 @@ pub struct RadiativeTransferStep {
   surface_temperature: FieldKey,
   heating_tendency: FieldKey,
   net_surface_flux: FieldKey,
+  /// Optional per-cell short-wave albedo on the surface mesh. When set (and
+  /// present in pleroma) it overrides the scalar `params.surface_albedo`,
+  /// letting terrain / ice vary surface brightness cell by cell.
+  surface_albedo: Option<FieldKey>,
   params: RadiationParameters,
-  reads: [FieldKey; 2],
+  reads: Vec<FieldKey>,
   writes: [FieldKey; 2],
   resource_reads: [ResourceKey; 1],
 }
@@ -228,11 +232,32 @@ impl RadiativeTransferStep {
       surface_temperature,
       heating_tendency,
       net_surface_flux,
+      surface_albedo: None,
       params,
-      reads: [atm_temperature, surface_temperature],
+      reads: vec![atm_temperature, surface_temperature],
       writes: [heating_tendency, net_surface_flux],
       resource_reads: [ResourceKey::SunPosition],
     })
+  }
+
+  /// Read short-wave albedo per surface cell from `field` (on the surface mesh)
+  /// instead of the scalar parameter. Declared as a read so the scheduler
+  /// orders any albedo producer before this stage.
+  pub fn with_surface_albedo_field(
+    mut self,
+    field: FieldKey,
+  ) -> AetherResult<Self> {
+    if field.mesh() != self.surface_mesh {
+      return Err(AetherError::new(LumenError::FieldMeshMismatch).context(
+        format!(
+          "surface_albedo {:?} not on surface mesh {:?}",
+          field, self.surface_mesh
+        ),
+      ));
+    }
+    self.surface_albedo = Some(field);
+    self.reads.push(field);
+    Ok(self)
   }
 
   pub fn atm_mesh(&self) -> MeshKey {
@@ -383,13 +408,37 @@ impl Stage for RadiativeTransferStep {
       field.component(0).as_ref().to_vec()
     };
 
+    // Per-cell albedo if a field is wired and present; otherwise the scalar
+    // parameter for every cell (backward-compatible).
+    let surface_albedo: Vec<f64> = match self.surface_albedo {
+      Some(key) => {
+        let field: &SoaField<1> =
+          ctx.world.fields.read(key).ok_or_else(|| {
+            AetherError::new(LumenError::MissingReadField)
+              .context(format!("{:?}", key))
+          })?;
+        if field.len() != surface_cell_count {
+          return Err(
+            AetherError::new(LumenError::FieldLengthMismatch).context(format!(
+              "surface_albedo len {}, surface cell count {}",
+              field.len(),
+              surface_cell_count
+            )),
+          );
+        }
+        field.component(0).as_ref().to_vec()
+      }
+      None => vec![p.surface_albedo; surface_cell_count],
+    };
+
     let net_flux: Vec<f64> = surface_mu
       .iter()
       .zip(surface_temperatures.iter())
-      .map(|(mu, t_s)| {
+      .zip(surface_albedo.iter())
+      .map(|((mu, t_s), albedo)| {
         let incoming_sw =
           (1.0 - p.atmospheric_absorption) * p.solar_constant * *mu;
-        let absorbed_sw = (1.0 - p.surface_albedo) * incoming_sw;
+        let absorbed_sw = (1.0 - albedo) * incoming_sw;
         let outgoing_lw = p.surface_emissivity * STEFAN_BOLTZMANN * t_s.powi(4);
         absorbed_sw - (1.0 - p.greenhouse_factor) * outgoing_lw
       })

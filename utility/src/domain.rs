@@ -90,6 +90,10 @@ pub enum FieldName {
   /// Static categorical surface classification (ocean / land / ice), stored as
   /// a numeric code (see `terra::SurfaceClass`). Inert terrain data.
   SurfaceType,
+  /// Per-cell short-wave surface albedo (0..1). The reusable contract for
+  /// surface brightness: derived from the surface type / coverage by one or
+  /// more producers (terrain base, then ice / snow), and read by radiation.
+  SurfaceAlbedo,
 }
 
 /// Categorical surface classification — the semantic meaning of the numeric

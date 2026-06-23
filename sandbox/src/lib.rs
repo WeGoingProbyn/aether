@@ -260,6 +260,94 @@ where
   Ok((Aether::new(systems, Pool::default()), shell_layout, sites))
 }
 
+/// Build a surface+atmosphere world driven by gray radiation, where the surface
+/// short-wave albedo is a **per-cell field derived from terrain** (the reusable
+/// surface-albedo contract: a future ice / snow producer blends into the same
+/// field). Used to verify that brighter surfaces absorb less shortwave.
+#[profile]
+pub fn build_albedo_world<G>(
+  generator: G,
+) -> AetherResult<(Aether, AtmosphereShellLayout)>
+where
+  G: Fn(tessera::geo::GeoCoord) -> terra::TerrainSample,
+{
+  let angular_dims = [16, 16];
+  let atmosphere_height = 20_000.0;
+  let surface_depth = 10_000.0;
+
+  let mut factory = WorldFactory::new(SANDBOX_WORLD_ID, cosmo_factory::earth())
+    .with_primary(cosmo_factory::sun());
+  let constants = factory.constants();
+  let shell_layout =
+    AtmosphereShellLayout::new(&constants, atmosphere_height, surface_depth)?;
+  let surface_radius = shell_layout.reference_radius();
+
+  factory = factory
+    .cube_sphere_surface(shell_layout.surface_shell_spec(angular_dims, 1));
+  factory = factory.cube_sphere_atmosphere(
+    shell_layout.atmosphere_shell_spec(angular_dims, 6),
+  );
+  factory.add_radial_stack_coupler(MeshKey::SURFACE, MeshKey::ATMOSPHERE)?;
+
+  let surface_mesh = factory.tessera().mesh(MeshKey::SURFACE).unwrap().clone();
+  let atmosphere_mesh =
+    factory.tessera().mesh(MeshKey::ATMOSPHERE).unwrap().clone();
+
+  // Terrain with per-cell base albedo.
+  let terrain = TerrainModel::new(MeshKey::SURFACE, surface_radius);
+  terrain.register_fields(
+    factory.pleroma_mut(),
+    surface_mesh.as_ref(),
+    generator,
+  )?;
+
+  // Surface temperature (radiation's long-wave term reads it).
+  let surface_model = SurfaceThermalModel::new(MeshKey::SURFACE)
+    .with_initial_temperature(288.0)
+    .with_heat_capacity_per_area(1.0e7);
+  surface_model
+    .register_fields(factory.pleroma_mut(), surface_mesh.as_ref())?;
+
+  // Atmosphere fields (radiation reads atmosphere temperature).
+  let atmosphere_model =
+    AtmosphereModel::new(MeshKey::ATMOSPHERE).with_cfl(0.25);
+  atmosphere_model.register_fields(
+    factory.pleroma_mut(),
+    atmosphere_mesh.as_ref(),
+    &constants,
+    surface_radius,
+  )?;
+
+  // Radiation consumes the per-cell surface albedo.
+  let radiation = RadiationModel::from_world_constants(
+    MeshKey::ATMOSPHERE,
+    MeshKey::SURFACE,
+    &constants,
+    RadiationCoefficients::default(),
+  )?
+  .with_surface_albedo_field(terrain.fields().albedo);
+  radiation.register_fields(
+    factory.pleroma_mut(),
+    atmosphere_mesh.as_ref(),
+    surface_mesh.as_ref(),
+  )?;
+  radiation
+    .register_default_sun_position(factory.pleroma_mut(), [1.0, 0.0, 0.0]);
+
+  // Re-derive the base albedo each tick (the composable producer), then run
+  // radiation. The read-after-write on SurfaceAlbedo also orders them, but make
+  // it explicit.
+  let albedo_id = terrain.add_stages(factory.nexus_mut());
+  let radiation_ids = radiation.add_stages(factory.nexus_mut())?;
+  factory.before(albedo_id, radiation_ids.transfer);
+
+  let world = factory.build()?;
+  let system_id = SystemId(0);
+  let mut systems = HashMap::new();
+  systems.insert(system_id, System::single(system_id, world));
+  Ok((Aether::new(systems, Pool::default()), shell_layout))
+}
+
 /// Build the fully-coupled ocean world: a moist, rotating atmosphere
 /// (aer) over a thermodynamic ocean (thalassa), driven by gray radiation
 /// (lumen), a closed air–sea water cycle (evaporation + microphysics) and

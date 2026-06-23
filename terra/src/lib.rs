@@ -19,7 +19,8 @@ use utility::{
 
 pub mod terrain;
 pub use terrain::{
-  TerrainFields, TerrainModel, TerrainSample, earthlike_terrain,
+  AlbedoTable, SurfaceAlbedoStep, TerrainFields, TerrainModel, TerrainSample,
+  earthlike_terrain,
 };
 pub use utility::domain::SurfaceClass;
 
