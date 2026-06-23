@@ -967,9 +967,11 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
 /// Producer config for the showcase world. Provides a consumer everything it
 /// needs to render a game world, art-free: the surface mesh with an elevation
 /// *data* layer (displace it) and a categorical land/ocean/ice layer (assign
-/// your own materials), the ocean mesh (SST), and the atmosphere shell as a
-/// translucent overlay with debugging scalar fields. The palettes attached here
-/// are only the reference renderer's debug colours — a consumer ignores them.
+/// your own materials), and the atmosphere shell as a translucent overlay with
+/// debugging scalar fields. The ocean physics mesh shares the surface radius, so
+/// it is not rendered here (it would z-fight); the surface's land/ocean/ice
+/// classification is how a consumer distinguishes water from terrain. The
+/// palettes attached here are only the reference renderer's debug colours.
 pub fn showcase_extract_config() -> ExtractConfig {
   let scalar = |id: &'static str,
                 mesh: MeshKey,
@@ -987,15 +989,14 @@ pub fn showcase_extract_config() -> ExtractConfig {
     world_label: "showcase world".into(),
     world_scale: 1.0,
     meshes: vec![
+      // The surface is the single unified ground: it carries the land / ocean /
+      // ice classification, so a consumer renders water vs terrain from it. The
+      // ocean *physics* mesh shares its radius, so rendering both would z-fight;
+      // the ocean stays physics-only (its SST is still queryable).
       MeshConfig {
         mesh_key: MeshKey::SURFACE,
         representation: MeshRepresentation::BoundaryFaces,
         label: "surface".into(),
-      },
-      MeshConfig {
-        mesh_key: MeshKey::OCEAN,
-        representation: MeshRepresentation::BoundaryFaces,
-        label: "ocean".into(),
       },
       MeshConfig {
         mesh_key: MeshKey::ATMOSPHERE,
@@ -1017,13 +1018,6 @@ pub fn showcase_extract_config() -> ExtractConfig {
         MeshKey::SURFACE,
         FieldName::SurfaceAlbedo,
         Palette::diagnostic(),
-      ),
-      // Sea-surface temperature on the ocean.
-      scalar(
-        "ocean_temperature",
-        MeshKey::OCEAN,
-        FieldName::Temperature,
-        Palette::thermal(),
       ),
       // Atmosphere debug fields (default binding = temperature).
       scalar(

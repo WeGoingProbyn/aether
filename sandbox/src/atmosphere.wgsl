@@ -18,7 +18,7 @@ struct AtmosphereParams {
   params: vec4<f32>,
 }
 
-@group(2) @binding(0) var<uniform> material: AtmosphereParams;
+@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> material: AtmosphereParams;
 
 @fragment
 fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {

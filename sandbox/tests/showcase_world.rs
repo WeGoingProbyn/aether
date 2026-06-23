@@ -131,9 +131,9 @@ fn showcase_producer_emits_terrain_and_atmosphere_layers() {
       )
     })
     .count();
-  // elevation + albedo + ocean SST + atmosphere temp/humidity/pressure.
+  // elevation + albedo + atmosphere temp/humidity/pressure.
   assert!(
-    scalar_layers >= 6,
+    scalar_layers >= 5,
     "expected the terrain + atmosphere scalar layers, got {scalar_layers}"
   );
 }
