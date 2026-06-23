@@ -41,6 +41,10 @@ const OCEAN_SUBSYSTEM: SubsystemId = SubsystemId(1);
 
 pub const SANDBOX_WORLD_ID: WorldId = WorldId(0);
 
+/// Consumer-side artistic rendering (atmospheric scattering, render-mode
+/// toggle). Kept out of aether/eidolon — the look is the consumer's decision.
+pub mod atmosphere;
+
 /// Build the demo Aether (Earth + Sun, surface+atmosphere shells,
 /// radiation + heat-flux + surface thermal stages registered).
 ///

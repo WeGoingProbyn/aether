@@ -25,7 +25,8 @@ use eidolon::{
   runtime::{render_channel, spawn_runner},
 };
 use sandbox::{
-  SANDBOX_WORLD_ID, build_showcase_world, showcase_extract_config,
+  SANDBOX_WORLD_ID, atmosphere::ShowcaseRenderPlugin, build_showcase_world,
+  showcase_extract_config,
 };
 use utility::domain::MeshKey;
 use utility::error::AetherResult;
@@ -86,13 +87,14 @@ fn main() -> AetherResult<()> {
 
   info!(
     "sandbox showcase: terrain + ocean + moist atmosphere. \
-     keys 1/2/3 swap atmosphere temp/humidity/pressure; 4/5 swap surface \
-     elevation/albedo"
+     Tab toggles debug/rendered; 1/2/3 swap atmosphere temp/humidity/pressure; \
+     4/5 swap surface elevation/albedo"
   );
   App::new()
     .add_plugins(DefaultPlugins)
     .add_plugins(PanOrbitCameraPlugin)
     .add_plugins(AetherBevyPlugin::new(rx))
+    .add_plugins(ShowcaseRenderPlugin)
     .add_systems(Startup, spawn_camera_and_light)
     .add_systems(Update, layer_toggle_input)
     .run();
