@@ -18,15 +18,18 @@ use std::collections::{HashMap, HashSet};
 
 use pleroma::{Pleroma, core::storage::FieldStorage};
 use tessera::world_mesh::Tessera;
-use utility::domain::{FieldKey, MeshKey, ResourceKey, WorldId};
+use utility::domain::{
+  FieldKey, FieldName, MeshKey, ResourceKey, SurfaceClass, WorldId,
+};
 use utility::profile;
 
 use crate::{
   extract::mesh::{boundary_surface_triangles, cell_centroid_points},
   ir::{
-    LayerHandle, LayerId, LayerKind, LayerSamples, LayerSource, MeshHandle,
-    MeshRepresentation, Palette, PaletteHandle, RenderGeometry, RenderMesh,
-    RenderMeshId, ScalarSamples, Transform, Update, UpdateBatch, WorldHandle,
+    CategoricalSamples, ClassInfo, ClassSet, LayerHandle, LayerId, LayerKind,
+    LayerSamples, LayerSource, MeshHandle, MeshRepresentation, Palette,
+    PaletteHandle, RenderGeometry, RenderMesh, RenderMeshId, ScalarSamples,
+    Transform, Update, UpdateBatch, WorldHandle,
   },
 };
 
@@ -41,6 +44,9 @@ pub struct ExtractConfig {
   pub world_scale: f64,
   pub meshes: Vec<MeshConfig>,
   pub layers: Vec<ScalarLayerConfig>,
+  /// Art-free categorical layers (e.g. surface type). Carry per-cell class ids
+  /// plus the class vocabulary; the consumer maps classes to appearance.
+  pub categorical_layers: Vec<CategoricalLayerConfig>,
   /// Whether to emit `UpdateSunDirection` from `ResourceKey::SunPosition`.
   pub track_sun_direction: bool,
 }
@@ -61,6 +67,48 @@ pub struct ScalarLayerConfig {
   pub field: FieldKey,
   pub component: usize,
   pub palette: Palette,
+}
+
+/// A categorical layer to emit: a per-cell field whose (rounded) values are
+/// class ids, plus the [`ClassSet`] naming those ids. No palette — categorical
+/// data is art-free.
+#[derive(Clone, Debug)]
+pub struct CategoricalLayerConfig {
+  pub id: LayerId,
+  pub label: String,
+  pub target_mesh: MeshKey,
+  pub target_representation: MeshRepresentation,
+  pub field: FieldKey,
+  pub classes: ClassSet,
+}
+
+/// The class vocabulary for the standard land / ocean / ice surface type,
+/// matching the `utility::domain::SurfaceClass` codes that terra writes.
+pub fn surface_class_set() -> ClassSet {
+  ClassSet::new(vec![
+    ClassInfo::new(SurfaceClass::Ocean.code() as u32, "Ocean"),
+    ClassInfo::new(SurfaceClass::Land.code() as u32, "Land"),
+    ClassInfo::new(SurfaceClass::Ice.code() as u32, "Ice"),
+  ])
+}
+
+/// A categorical render layer for the surface type (ocean / land / ice) on a
+/// surface mesh. Pairs with the surface mesh geometry + a `SurfaceElevation`
+/// scalar layer to give a consumer everything needed to build a terrain look.
+pub fn surface_type_categorical_layer(
+  id: LayerId,
+  label: impl Into<String>,
+  target_mesh: MeshKey,
+  target_representation: MeshRepresentation,
+) -> CategoricalLayerConfig {
+  CategoricalLayerConfig {
+    id,
+    label: label.into(),
+    target_mesh,
+    target_representation,
+    field: FieldKey::new(target_mesh, FieldName::SurfaceType),
+    classes: surface_class_set(),
+  }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -125,6 +173,7 @@ impl FrameProducer {
     self.emit_world(world_id, body_position, &mut updates);
     self.emit_meshes(world_id, tessera, &mut updates);
     self.emit_layers(world_id, pleroma, &mut updates);
+    self.emit_categorical_layers(world_id, pleroma, &mut updates);
     self.emit_sun_direction(world_id, pleroma, &mut updates);
 
     updates.push(Update::SetSimTime { sim_time, frame });
@@ -342,6 +391,71 @@ impl FrameProducer {
         updates.push(Update::UpdateLayerSamples {
           handle,
           samples: LayerSamples::Scalar(ScalarSamples::PerCell(samples)),
+          epoch,
+        });
+        self.cache.layer_sample_hashes.insert(handle, samples_hash);
+      }
+    }
+  }
+
+  fn emit_categorical_layers(
+    &mut self,
+    world_id: WorldId,
+    pleroma: &Pleroma,
+    updates: &mut Vec<Update>,
+  ) {
+    for cfg in &self.config.categorical_layers {
+      let target = RenderMeshId {
+        world: world_id,
+        mesh: cfg.target_mesh,
+        representation: cfg.target_representation,
+      }
+      .handle();
+      if !self.cache.registered_meshes.contains(&target) {
+        continue;
+      }
+      let handle = LayerHandle::for_target(cfg.id, target);
+
+      // Class codes are stored as scalars; round to class ids.
+      let Some(codes) = read_scalar_component(pleroma, cfg.field, 0) else {
+        continue;
+      };
+      let ids: Vec<u32> =
+        codes.iter().map(|&c| c.round().max(0.0) as u32).collect();
+      let samples_hash = hash_f64_slice(&codes);
+
+      if self.cache.registered_layers.insert(handle) {
+        self.cache.layer_sample_epochs.insert(handle, 1);
+        updates.push(Update::RegisterLayer {
+          handle,
+          id: cfg.id,
+          label: cfg.label.clone(),
+          target,
+          source: LayerSource::Field(cfg.field),
+          kind: LayerKind::Categorical {
+            classes: cfg.classes.clone(),
+          },
+        });
+        updates.push(Update::UpdateLayerSamples {
+          handle,
+          samples: LayerSamples::Categorical(CategoricalSamples::PerCell(ids)),
+          epoch: 1,
+        });
+        self.cache.layer_sample_hashes.insert(handle, samples_hash);
+      } else if self.cache.layer_sample_hashes.get(&handle)
+        != Some(&samples_hash)
+      {
+        let epoch = self
+          .cache
+          .layer_sample_epochs
+          .get(&handle)
+          .copied()
+          .unwrap_or(0)
+          .wrapping_add(1);
+        self.cache.layer_sample_epochs.insert(handle, epoch);
+        updates.push(Update::UpdateLayerSamples {
+          handle,
+          samples: LayerSamples::Categorical(CategoricalSamples::PerCell(ids)),
           epoch,
         });
         self.cache.layer_sample_hashes.insert(handle, samples_hash);

@@ -55,6 +55,7 @@ fn config() -> ExtractConfig {
       component: 0,
       palette: Palette::diagnostic(),
     }],
+    categorical_layers: vec![],
     track_sun_direction: false,
   }
 }

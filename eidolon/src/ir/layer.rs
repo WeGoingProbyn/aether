@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::ir::{
-  DebugLayer, LayerId, LayerSource, MaskSamples, Palette, RenderMeshId,
-  ScalarRange, ScalarSamples, VectorSamples,
+  CategoricalSamples, ClassSet, DebugLayer, LayerId, LayerSource, MaskSamples,
+  Palette, RenderMeshId, ScalarRange, ScalarSamples, VectorSamples,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -11,6 +11,7 @@ pub enum RenderLayer {
   Scalar(ScalarLayer),
   Vector(VectorLayer),
   Mask(MaskLayer),
+  Categorical(CategoricalLayer),
   Debug(DebugLayer),
 }
 
@@ -68,4 +69,17 @@ pub struct MaskLayer {
   pub target: RenderMeshId,
   pub source: LayerSource,
   pub samples: MaskSamples,
+}
+
+/// A per-element categorical field (e.g. surface type). Carries the class id of
+/// each element plus the [`ClassSet`] describing what those ids mean. Art-free:
+/// the consumer chooses how each class looks.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CategoricalLayer {
+  pub id: LayerId,
+  pub label: String,
+  pub target: RenderMeshId,
+  pub source: LayerSource,
+  pub samples: CategoricalSamples,
+  pub classes: ClassSet,
 }

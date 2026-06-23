@@ -629,6 +629,7 @@ pub fn ocean_world_extract_config() -> ExtractConfig {
         Palette::thermal(),
       ),
     ],
+    categorical_layers: Vec::new(),
     track_sun_direction: true,
   }
 }
@@ -682,6 +683,7 @@ pub fn demo_extract_config() -> ExtractConfig {
         palette: Palette::thermal(),
       },
     ],
+    categorical_layers: Vec::new(),
     track_sun_direction: true,
   }
 }

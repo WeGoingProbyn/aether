@@ -44,3 +44,24 @@ pub enum MaskSamples {
   SparseCells(Vec<CellId>),
   SparseFaces(Vec<FaceId>),
 }
+
+/// Per-element categorical class ids (e.g. ocean / land / ice). The meaning of
+/// each id is carried out-of-band by the layer's [`crate::ir::ClassSet`]; the
+/// samples themselves are pure data, with no colour or material baked in.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CategoricalSamples {
+  PerCell(Vec<u32>),
+  PerFace(Vec<u32>),
+}
+
+impl CategoricalSamples {
+  pub fn len(&self) -> usize {
+    match self {
+      Self::PerCell(v) | Self::PerFace(v) => v.len(),
+    }
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.len() == 0
+  }
+}

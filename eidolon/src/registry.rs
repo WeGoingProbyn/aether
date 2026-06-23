@@ -20,12 +20,12 @@ use std::collections::HashMap;
 use utility::domain::WorldId;
 
 use crate::ir::{
-  LayerHandle, LayerId, LayerKind, LayerSamples, LayerSource, MaskLayer,
-  MaskSamples as IrMaskSamples, MeshHandle, MeshSource, Palette, PaletteHandle,
-  RenderFrame, RenderGeometry, RenderLayer, RenderMesh, RenderMeshId,
-  RenderWorld, ScalarLayer, ScalarRange, ScalarSamples as IrScalarSamples,
-  Transform, Update, UpdateBatch, VectorGlyph, VectorLayer,
-  VectorSamples as IrVectorSamples, WorldHandle,
+  CategoricalLayer, LayerHandle, LayerId, LayerKind, LayerSamples, LayerSource,
+  MaskLayer, MaskSamples as IrMaskSamples, MeshHandle, MeshSource, Palette,
+  PaletteHandle, RenderFrame, RenderGeometry, RenderLayer, RenderMesh,
+  RenderMeshId, RenderWorld, ScalarLayer, ScalarRange,
+  ScalarSamples as IrScalarSamples, Transform, Update, UpdateBatch,
+  VectorGlyph, VectorLayer, VectorSamples as IrVectorSamples, WorldHandle,
 };
 
 /// Errors the registry surfaces back to its caller. None of these are
@@ -494,6 +494,17 @@ impl BackendRegistry {
           samples: samples.clone(),
         }))
       }
+      (
+        LayerKind::Categorical { classes },
+        Some(LayerSamples::Categorical(samples)),
+      ) => Some(RenderLayer::Categorical(CategoricalLayer {
+        id: entry.id,
+        label: entry.label.clone(),
+        target,
+        source: entry.source,
+        samples: samples.clone(),
+        classes: classes.clone(),
+      })),
       _ => None,
     }
   }

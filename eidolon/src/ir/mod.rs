@@ -1,3 +1,4 @@
+pub mod categorical;
 pub mod colour;
 pub mod debug;
 pub mod diagnostics;
@@ -9,6 +10,7 @@ pub mod samples;
 pub mod transform;
 pub mod update;
 
+pub use categorical::*;
 pub use colour::*;
 pub use debug::*;
 pub use diagnostics::*;

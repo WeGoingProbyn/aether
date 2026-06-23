@@ -69,6 +69,10 @@ impl From<&LayerKind> for LayerKindCache {
       },
       LayerKind::Vector { .. } => LayerKindCache::Vector,
       LayerKind::Mask => LayerKindCache::Mask,
+      // The reference renderer has no categorical material mapping yet (that is
+      // a consumer / visual-verification concern); cache it like a mask so the
+      // layer is tracked without inventing colours.
+      LayerKind::Categorical { .. } => LayerKindCache::Mask,
       LayerKind::Debug => LayerKindCache::Mask,
     }
   }

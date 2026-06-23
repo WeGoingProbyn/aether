@@ -21,9 +21,10 @@
 use utility::domain::WorldId;
 
 use crate::ir::{
-  LayerHandle, LayerId, LayerSource, MaskSamples, MeshHandle, MeshSource,
-  Palette, PaletteHandle, RenderGeometry, RenderMeshId, ScalarRange,
-  ScalarSamples, Transform, VectorGlyph, VectorSamples, WorldHandle,
+  CategoricalSamples, ClassSet, LayerHandle, LayerId, LayerSource, MaskSamples,
+  MeshHandle, MeshSource, Palette, PaletteHandle, RenderGeometry, RenderMeshId,
+  ScalarRange, ScalarSamples, Transform, VectorGlyph, VectorSamples,
+  WorldHandle,
 };
 
 /// One batch of Updates emitted by the producer for a single sim tick.
@@ -148,6 +149,11 @@ pub enum LayerKind {
     glyph: VectorGlyph,
   },
   Mask,
+  /// A categorical field; `classes` names the class ids carried in the
+  /// samples. Art-free — the consumer maps class → appearance.
+  Categorical {
+    classes: ClassSet,
+  },
   /// Debug overlays (lines, points, highlights). Not yet routed
   /// through this protocol — debug items still ride on `RenderLayer`
   /// in the snapshot. Reserved for v0.2+.
@@ -161,6 +167,7 @@ pub enum LayerSamples {
   Scalar(ScalarSamples),
   Vector(VectorSamples),
   Mask(MaskSamples),
+  Categorical(CategoricalSamples),
 }
 
 impl LayerSamples {
@@ -170,6 +177,7 @@ impl LayerSamples {
       (LayerSamples::Scalar(_), LayerKind::Scalar { .. })
         | (LayerSamples::Vector(_), LayerKind::Vector { .. })
         | (LayerSamples::Mask(_), LayerKind::Mask)
+        | (LayerSamples::Categorical(_), LayerKind::Categorical { .. })
     )
   }
 }

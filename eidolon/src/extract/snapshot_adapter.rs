@@ -177,6 +177,25 @@ fn register_layer(layer: &RenderLayer, updates: &mut Vec<Update>) {
         epoch: 0,
       });
     }
+    RenderLayer::Categorical(categorical) => {
+      let target: MeshHandle = categorical.target.handle();
+      let handle = LayerHandle::for_target(categorical.id, target);
+      updates.push(Update::RegisterLayer {
+        handle,
+        id: categorical.id,
+        label: categorical.label.clone(),
+        target,
+        source: categorical.source,
+        kind: LayerKind::Categorical {
+          classes: categorical.classes.clone(),
+        },
+      });
+      updates.push(Update::UpdateLayerSamples {
+        handle,
+        samples: LayerSamples::Categorical(categorical.samples.clone()),
+        epoch: 0,
+      });
+    }
     RenderLayer::Debug(_) => {
       // Debug layers don't have a wire form yet (see LayerKind::Debug
       // doc). Skip them in the dumb adapter; the snapshot path keeps
