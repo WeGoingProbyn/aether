@@ -128,10 +128,16 @@ fn atmosphere_mesh_handle() -> eidolon::ir::MeshHandle {
 fn apply_render_mode(
   mode: Res<RenderMode>,
   mut applied: ResMut<AppliedRenderMode>,
-  registry: Res<RenderRegistry>,
+  mut registry: ResMut<RenderRegistry>,
   assets: Option<Res<AtmosphereAssets>>,
   mut commands: Commands,
 ) {
+  // Terrain relief is part of the artistic "rendered" look; the debug field
+  // view stays flat so colours read cleanly. Drive this every frame (it's a
+  // cheap no-op when unchanged) and independently of the atmosphere mesh, so
+  // the default debug view flattens immediately on startup.
+  registry.set_displacement_enabled(matches!(*mode, RenderMode::Rendered));
+
   let Some(assets) = assets else {
     return;
   };

@@ -15,4 +15,5 @@ pub mod ir;
 pub mod playback;
 pub mod query;
 pub mod registry;
+pub mod render_ops;
 pub mod runtime;

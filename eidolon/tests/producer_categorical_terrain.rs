@@ -60,6 +60,7 @@ fn config() -> ExtractConfig {
       mesh_key: MeshKey::SURFACE,
       representation: MeshRepresentation::BoundaryFaces,
       label: "surface".into(),
+      cell_filter: None,
     }],
     layers: vec![ScalarLayerConfig {
       id: LayerId::from_static("surface_elevation"),
@@ -69,6 +70,7 @@ fn config() -> ExtractConfig {
       field: FieldKey::new(MeshKey::SURFACE, FieldName::SurfaceElevation),
       component: 0,
       palette: Palette::diagnostic(),
+      displacement: None,
     }],
     categorical_layers: vec![surface_type_categorical_layer(
       LayerId::from_static("surface_type"),

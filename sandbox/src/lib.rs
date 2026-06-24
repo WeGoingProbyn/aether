@@ -18,8 +18,8 @@ use aether::{
 };
 use cosmo::factory as cosmo_factory;
 use eidolon::extract::{
-  ExtractConfig, MeshConfig, ScalarLayerConfig, scalar_component_layer,
-  surface_type_categorical_layer, tessera_debug_frame,
+  CellFilter, ExtractConfig, MeshConfig, ScalarLayerConfig,
+  scalar_component_layer, surface_type_categorical_layer, tessera_debug_frame,
 };
 use eidolon::ir::{
   LayerId, MeshRepresentation, Palette, RenderFrame, RenderLayer, RenderMeshId,
@@ -585,6 +585,7 @@ pub fn ocean_world_extract_config() -> ExtractConfig {
     field: FieldKey::new(mesh, field),
     component: 0,
     palette,
+    displacement: None,
   };
   ExtractConfig {
     world_label: "ocean world".into(),
@@ -594,11 +595,13 @@ pub fn ocean_world_extract_config() -> ExtractConfig {
         mesh_key: MeshKey::OCEAN,
         representation: MeshRepresentation::BoundaryFaces,
         label: "ocean".into(),
+        cell_filter: None,
       },
       MeshConfig {
         mesh_key: MeshKey::ATMOSPHERE,
         representation: MeshRepresentation::BoundaryFaces,
         label: "atmosphere".into(),
+        cell_filter: None,
       },
     ],
     layers: vec![
@@ -651,11 +654,13 @@ pub fn demo_extract_config() -> ExtractConfig {
         mesh_key: MeshKey::SURFACE,
         representation: MeshRepresentation::BoundaryFaces,
         label: "earth surface".into(),
+        cell_filter: None,
       },
       MeshConfig {
         mesh_key: MeshKey::ATMOSPHERE,
         representation: MeshRepresentation::BoundaryFaces,
         label: "atmosphere shell".into(),
+        cell_filter: None,
       },
     ],
     layers: vec![
@@ -667,6 +672,7 @@ pub fn demo_extract_config() -> ExtractConfig {
         field: FieldKey::new(MeshKey::SURFACE, FieldName::Temperature),
         component: 0,
         palette: Palette::thermal(),
+        displacement: None,
       },
       ScalarLayerConfig {
         id: LayerId::from_static("atmosphere_temperature"),
@@ -676,6 +682,7 @@ pub fn demo_extract_config() -> ExtractConfig {
         field: FieldKey::new(MeshKey::ATMOSPHERE, FieldName::Temperature),
         component: 0,
         palette: Palette::thermal(),
+        displacement: None,
       },
       ScalarLayerConfig {
         id: LayerId::from_static("atmosphere_pressure"),
@@ -685,6 +692,7 @@ pub fn demo_extract_config() -> ExtractConfig {
         field: FieldKey::new(MeshKey::ATMOSPHERE, FieldName::Pressure),
         component: 0,
         palette: Palette::thermal(),
+        displacement: None,
       },
     ],
     categorical_layers: Vec::new(),
@@ -766,7 +774,7 @@ pub fn debug_render_frame(
 /// increment; today land and ocean differ in albedo, orography and rendering.)
 #[profile]
 pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
-  let angular_dims = [16, 16];
+  let angular_dims = [64, 64];
   let atmosphere_layers = 6;
   let ocean_layers = 2;
   let atmosphere_height = 20_000.0;
@@ -965,13 +973,17 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
 }
 
 /// Producer config for the showcase world. Provides a consumer everything it
-/// needs to render a game world, art-free: the surface mesh with an elevation
-/// *data* layer (displace it) and a categorical land/ocean/ice layer (assign
-/// your own materials), and the atmosphere shell as a translucent overlay with
-/// debugging scalar fields. The ocean physics mesh shares the surface radius, so
-/// it is not rendered here (it would z-fight); the surface's land/ocean/ice
-/// classification is how a consumer distinguishes water from terrain. The
-/// palettes attached here are only the reference renderer's debug colours.
+/// needs to render a game world, art-free: a land surface mesh (rendered only on
+/// terrain cells, with elevation + albedo + a categorical land/ice layer), an
+/// ocean shell (rendered only on sea cells, showing SST), and the atmosphere as
+/// a translucent overlay. The surface and ocean are filtered by terrain sign so
+/// they tile disjointly and never z-fight. The palettes attached here are only
+/// the reference renderer's debug colours — a consumer ignores them.
+/// Vertical exaggeration the showcase renderer applies to terrain elevation.
+/// Land tops out around 2 km on a ~6371 km planet, so true relief is ~3e-4 of
+/// the radius — invisible. This lifts it into a readable few-percent bump.
+const SHOWCASE_TERRAIN_EXAGGERATION: f32 = 1000.0;
+
 pub fn showcase_extract_config() -> ExtractConfig {
   let scalar = |id: &'static str,
                 mesh: MeshKey,
@@ -984,40 +996,65 @@ pub fn showcase_extract_config() -> ExtractConfig {
     field: FieldKey::new(mesh, field),
     component: 0,
     palette,
+    displacement: None,
   };
   ExtractConfig {
     world_label: "showcase world".into(),
     world_scale: 1.0,
     meshes: vec![
-      // The surface is the single unified ground: it carries the land / ocean /
-      // ice classification, so a consumer renders water vs terrain from it. The
-      // ocean *physics* mesh shares its radius, so rendering both would z-fight;
-      // the ocean stays physics-only (its SST is still queryable).
-      MeshConfig {
-        mesh_key: MeshKey::SURFACE,
-        representation: MeshRepresentation::BoundaryFaces,
-        label: "surface".into(),
-      },
-      MeshConfig {
-        mesh_key: MeshKey::ATMOSPHERE,
-        representation: MeshRepresentation::BoundaryFaces,
-        label: "atmosphere".into(),
-      },
+      // Land/sea selection by terrain sign: the surface shell renders only on
+      // land cells (elevation >= 0) and the ocean shell only on sea cells
+      // (elevation < 0). They tile the globe disjointly, so the two coincident
+      // shells never z-fight — and you see terrain on land, water on sea.
+      MeshConfig::new(
+        MeshKey::SURFACE,
+        MeshRepresentation::BoundaryFaces,
+        "surface",
+      )
+      .with_cell_filter(CellFilter::at_or_above(
+        FieldKey::new(MeshKey::SURFACE, FieldName::SurfaceElevation),
+        0.0,
+      )),
+      MeshConfig::new(
+        MeshKey::OCEAN,
+        MeshRepresentation::BoundaryFaces,
+        "ocean",
+      )
+      .with_cell_filter(CellFilter::below(
+        FieldKey::new(MeshKey::OCEAN, FieldName::SurfaceElevation),
+        0.0,
+      )),
+      MeshConfig::new(
+        MeshKey::ATMOSPHERE,
+        MeshRepresentation::BoundaryFaces,
+        "atmosphere",
+      ),
     ],
     layers: vec![
-      // Terrain height — a data layer the consumer displaces by.
+      // Terrain height. Doubles as the displacement driver: the reference
+      // renderer raises land vertices by elevation × exaggeration. The
+      // exaggeration is the consumer's art choice (relief on a planet-scale
+      // radius is otherwise imperceptible); the IR geometry stays flat data.
       scalar(
         "surface_elevation",
         MeshKey::SURFACE,
         FieldName::SurfaceElevation,
         Palette::diagnostic(),
-      ),
+      )
+      .with_displacement(SHOWCASE_TERRAIN_EXAGGERATION),
       // Debug: terrain albedo on the surface.
       scalar(
         "surface_albedo",
         MeshKey::SURFACE,
         FieldName::SurfaceAlbedo,
         Palette::diagnostic(),
+      ),
+      // Sea-surface temperature on the (now sea-only) ocean shell.
+      scalar(
+        "ocean_temperature",
+        MeshKey::OCEAN,
+        FieldName::Temperature,
+        Palette::thermal(),
       ),
       // Atmosphere debug fields (default binding = temperature).
       scalar(

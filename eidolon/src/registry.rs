@@ -360,6 +360,11 @@ impl BackendRegistry {
         self.bindings.retain(|_, layer| layer != handle);
       }
 
+      Update::SetMeshDisplacement { .. } => {
+        // A live-render hint only. The snapshot/VTK path reconstructs the
+        // undisplaced IR geometry, so there is nothing to apply here.
+      }
+
       Update::UpdateSunDirection { world, direction } => {
         let entry = self
           .worlds

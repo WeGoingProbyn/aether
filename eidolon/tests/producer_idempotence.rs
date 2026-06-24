@@ -46,6 +46,7 @@ fn config() -> ExtractConfig {
       mesh_key: MeshKey::SURFACE,
       representation: MeshRepresentation::BoundaryFaces,
       label: "earth surface".into(),
+      cell_filter: None,
     }],
     layers: vec![ScalarLayerConfig {
       id: eidolon::ir::LayerId::from_static("surface_temperature"),
@@ -55,6 +56,7 @@ fn config() -> ExtractConfig {
       field: FieldKey::new(MeshKey::SURFACE, FieldName::Temperature),
       component: 0,
       palette: Palette::diagnostic(),
+      displacement: None,
     }],
     categorical_layers: vec![],
     track_sun_direction: false,

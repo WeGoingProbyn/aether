@@ -16,7 +16,8 @@ use super::{
   playback::{FrameInterpolatorResource, snapshot_sample_frame},
   plugin::UpdateReceiverResource,
   registry::{
-    LayerEntry, LayerKindCache, MeshEntry, RenderRegistry, WorldEntry,
+    DisplacementBinding, LayerEntry, LayerKindCache, MeshEntry, RenderRegistry,
+    WorldEntry,
   },
   transform::to_bevy_transform,
 };
@@ -141,6 +142,7 @@ fn apply_one(
       let bevy_mesh = build_bevy_mesh(&geometry);
       let vertex_count = bevy_mesh.count_vertices();
       let vertex_to_cell = vertex_to_cell_for(&geometry);
+      let base_positions = base_positions_for(&geometry);
       let mesh_handle = meshes.add(bevy_mesh);
       let material_handle = materials.add(StandardMaterial {
         base_color: Color::WHITE,
@@ -171,6 +173,7 @@ fn apply_one(
           render_id: id,
           vertex_count,
           vertex_to_cell,
+          base_positions,
         },
       );
     }
@@ -183,10 +186,15 @@ fn apply_one(
         let bevy_mesh = build_bevy_mesh(&geometry);
         entry.vertex_count = bevy_mesh.count_vertices();
         entry.vertex_to_cell = vertex_to_cell_for(&geometry);
+        entry.base_positions = base_positions_for(&geometry);
         if let Some(asset) = meshes.get_mut(&entry.mesh_handle) {
           *asset = bevy_mesh;
         }
         registry.dirty_meshes.insert(handle);
+        // New base geometry invalidates any prior displacement.
+        if registry.displacements.contains_key(&handle) {
+          registry.dirty_displacements.insert(handle);
+        }
       }
     }
     Update::UpdateMeshTransform {
@@ -235,6 +243,7 @@ fn apply_one(
         entry.samples = Some(samples);
       }
       registry.mark_layer_dirty(handle);
+      registry.mark_displacement_dirty(handle);
     }
     Update::UpdateLayerPalette { handle, palette } => {
       if let Some(entry) = registry.layers.get_mut(&handle) {
@@ -259,8 +268,17 @@ fn apply_one(
       if let Some(entry) = registry.layers.remove(&handle) {
         // Drop bindings pointing at the freed layer.
         registry.bindings.retain(|_, l| *l != handle);
+        registry.displacements.retain(|_, d| d.layer != handle);
         registry.dirty_meshes.insert(entry.target);
       }
+    }
+
+    Update::SetMeshDisplacement { mesh, layer, scale } => {
+      registry
+        .displacements
+        .insert(mesh, DisplacementBinding { layer, scale });
+      // Apply now (the driving layer's samples may already be present).
+      registry.dirty_displacements.insert(mesh);
     }
 
     Update::UpdateSunDirection { .. } => {
@@ -349,6 +367,16 @@ fn build_bevy_mesh(geometry: &RenderGeometry) -> Mesh {
         RenderAssetUsages::default(),
       )
     }
+  }
+}
+
+/// Capture the undisplaced vertex positions of a triangle mesh so the displace
+/// system can recompute relief from a stable base. Non-triangle geometry isn't
+/// displaceable, so it returns empty.
+fn base_positions_for(geometry: &RenderGeometry) -> Vec<[f32; 3]> {
+  match geometry {
+    RenderGeometry::Triangles(tri) => tri.positions.clone(),
+    _ => Vec::new(),
   }
 }
 

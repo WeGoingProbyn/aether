@@ -17,7 +17,7 @@ pub use frame::*;
 pub use layer::*;
 pub use mesh::*;
 pub use producer::{
-  CategoricalLayerConfig, ExtractConfig, FrameProducer, MeshConfig,
+  CategoricalLayerConfig, CellFilter, ExtractConfig, FrameProducer, MeshConfig,
   ScalarLayerConfig, surface_class_set, surface_type_categorical_layer,
 };
 pub use query_extract::{

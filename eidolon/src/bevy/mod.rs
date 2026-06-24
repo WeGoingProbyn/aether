@@ -9,6 +9,7 @@
 
 pub mod apply;
 pub mod camera;
+pub mod displace;
 pub mod paint;
 pub mod palette;
 pub mod playback;

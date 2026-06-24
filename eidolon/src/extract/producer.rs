@@ -24,7 +24,10 @@ use utility::domain::{
 use utility::profile;
 
 use crate::{
-  extract::mesh::{boundary_surface_triangles, cell_centroid_points},
+  extract::mesh::{
+    boundary_surface_triangles, boundary_surface_triangles_masked,
+    cell_centroid_points,
+  },
   ir::{
     CategoricalSamples, ClassInfo, ClassSet, LayerHandle, LayerId, LayerKind,
     LayerSamples, LayerSource, MeshHandle, MeshRepresentation, Palette,
@@ -56,6 +59,59 @@ pub struct MeshConfig {
   pub mesh_key: MeshKey,
   pub representation: MeshRepresentation,
   pub label: String,
+  /// Optional per-cell mask: render the mesh only on cells passing the filter.
+  /// `None` renders the whole mesh.
+  pub cell_filter: Option<CellFilter>,
+}
+
+impl MeshConfig {
+  /// A whole-mesh config (no cell mask).
+  pub fn new(
+    mesh_key: MeshKey,
+    representation: MeshRepresentation,
+    label: impl Into<String>,
+  ) -> Self {
+    Self {
+      mesh_key,
+      representation,
+      label: label.into(),
+      cell_filter: None,
+    }
+  }
+
+  pub fn with_cell_filter(mut self, filter: CellFilter) -> Self {
+    self.cell_filter = Some(filter);
+    self
+  }
+}
+
+/// Renders a mesh only on the cells whose `field` value compares as requested
+/// against `threshold` — e.g. keep land (`SurfaceElevation >= 0`) on the
+/// surface and sea (`< 0`) on the ocean shell.
+#[derive(Clone, Copy, Debug)]
+pub struct CellFilter {
+  pub field: FieldKey,
+  pub threshold: f64,
+  /// `true` keeps cells with value `>= threshold`; `false` keeps `< threshold`.
+  pub keep_at_or_above: bool,
+}
+
+impl CellFilter {
+  pub fn at_or_above(field: FieldKey, threshold: f64) -> Self {
+    Self {
+      field,
+      threshold,
+      keep_at_or_above: true,
+    }
+  }
+
+  pub fn below(field: FieldKey, threshold: f64) -> Self {
+    Self {
+      field,
+      threshold,
+      keep_at_or_above: false,
+    }
+  }
 }
 
 #[derive(Clone, Debug)]
@@ -67,6 +123,21 @@ pub struct ScalarLayerConfig {
   pub field: FieldKey,
   pub component: usize,
   pub palette: Palette,
+  /// When `Some(scale)`, this layer also drives radial displacement of its
+  /// target mesh — a reference renderer offsets each vertex by
+  /// `sample * scale` (e.g. terrain elevation → relief). `None` paints only.
+  /// Art-free: the IR geometry stays undisplaced; `scale` is consumer styling.
+  pub displacement: Option<f32>,
+}
+
+impl ScalarLayerConfig {
+  /// Flag this layer as a displacement driver: a reference renderer offsets
+  /// its target mesh's vertices radially by `sample * scale`. `scale` is the
+  /// consumer's vertical exaggeration.
+  pub fn with_displacement(mut self, scale: f32) -> Self {
+    self.displacement = Some(scale);
+    self
+  }
 }
 
 /// A categorical layer to emit: a per-cell field whose (rounded) values are
@@ -171,7 +242,7 @@ impl FrameProducer {
 
     self.emit_palettes(&mut updates);
     self.emit_world(world_id, body_position, &mut updates);
-    self.emit_meshes(world_id, tessera, &mut updates);
+    self.emit_meshes(world_id, tessera, pleroma, &mut updates);
     self.emit_layers(world_id, pleroma, &mut updates);
     self.emit_categorical_layers(world_id, pleroma, &mut updates);
     self.emit_sun_direction(world_id, pleroma, &mut updates);
@@ -247,6 +318,7 @@ impl FrameProducer {
     &mut self,
     world_id: WorldId,
     tessera: &Tessera,
+    pleroma: &Pleroma,
     updates: &mut Vec<Update>,
   ) {
     let world_handle = WorldHandle::from_world_id(world_id);
@@ -254,7 +326,7 @@ impl FrameProducer {
       let Some(mesh) = tessera.mesh(mesh_cfg.mesh_key) else {
         continue;
       };
-      let render_mesh = build_mesh(world_id, mesh_cfg, mesh.as_ref());
+      let render_mesh = build_mesh(world_id, mesh_cfg, mesh.as_ref(), pleroma);
       let handle = render_mesh.id.handle();
       let geometry_hash = hash_geometry(&render_mesh.geometry);
       let transform_hash = hash_transform(&render_mesh.transform);
@@ -376,6 +448,14 @@ impl FrameProducer {
           samples: LayerSamples::Scalar(ScalarSamples::PerCell(samples)),
           epoch: 1,
         });
+        // Declare displacement once, right after the driving layer exists.
+        if let Some(scale) = layer_cfg.displacement {
+          updates.push(Update::SetMeshDisplacement {
+            mesh: target,
+            layer: handle,
+            scale,
+          });
+        }
         self.cache.layer_sample_hashes.insert(handle, samples_hash);
       } else if self.cache.layer_sample_hashes.get(&handle)
         != Some(&samples_hash)
@@ -493,11 +573,35 @@ fn build_mesh(
   world_id: WorldId,
   cfg: &MeshConfig,
   mesh: &dyn tessera::mesh::Mesh<3>,
+  pleroma: &Pleroma,
 ) -> RenderMesh {
+  // A cell mask (only valid for boundary-face meshes) keeps cells whose field
+  // value passes the filter — e.g. land vs sea by SurfaceElevation sign.
+  let mask: Option<Vec<bool>> = cfg.cell_filter.and_then(|f| {
+    read_scalar_component(pleroma, f.field, 0).map(|values| {
+      values
+        .into_iter()
+        .map(|v| {
+          if f.keep_at_or_above {
+            v >= f.threshold
+          } else {
+            v < f.threshold
+          }
+        })
+        .collect()
+    })
+  });
+
   let mut render_mesh = match cfg.representation {
-    MeshRepresentation::BoundaryFaces => {
-      boundary_surface_triangles(world_id, cfg.mesh_key, mesh)
-    }
+    MeshRepresentation::BoundaryFaces => match &mask {
+      Some(mask) => boundary_surface_triangles_masked(
+        world_id,
+        cfg.mesh_key,
+        mesh,
+        |cell| mask.get(cell.index()).copied().unwrap_or(false),
+      ),
+      None => boundary_surface_triangles(world_id, cfg.mesh_key, mesh),
+    },
     MeshRepresentation::Cells => {
       cell_centroid_points(world_id, cfg.mesh_key, mesh)
     }

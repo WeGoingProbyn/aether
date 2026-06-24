@@ -117,6 +117,36 @@ pub fn boundary_surface_triangles(
   )
 }
 
+/// Boundary surface, but only for cells where `keep(cell)` is true. Lets a
+/// consumer render a mesh on a *subset* of the globe — e.g. the land surface on
+/// terrain cells and the ocean shell on sea cells, which tile without
+/// overlapping so two coincident shells never z-fight.
+pub fn boundary_surface_triangles_masked(
+  world: WorldId,
+  mesh_key: MeshKey,
+  mesh: &dyn Mesh<3>,
+  keep: impl Fn(CellId) -> bool,
+) -> RenderMesh {
+  let faces = mesh
+    .boundary_tags()
+    .flat_map(|tag| {
+      mesh
+        .boundary_faces(tag)
+        .iter()
+        .map(|(face, owner)| (*face, *owner))
+    })
+    .filter(|(_, owner)| keep(*owner))
+    .collect::<Vec<_>>();
+
+  boundary_surface_triangles_from_faces(
+    world,
+    mesh_key,
+    mesh,
+    "boundary surface (masked)",
+    faces,
+  )
+}
+
 pub fn boundary_surface_triangles_for_tag(
   world: WorldId,
   mesh_key: MeshKey,
@@ -265,5 +295,38 @@ mod tests {
     assert_eq!(triangles.positions.len(), 2 * 6 * 2 * 2 * 4);
     assert_eq!(triangles.triangle_count(), 2 * 6 * 2 * 2 * 2);
     assert_eq!(triangles.face_ids.len(), triangles.triangle_count());
+  }
+
+  #[test]
+  fn masked_boundary_surface_is_a_disjoint_partition_of_the_full_mesh() {
+    let mesh = CubeSphere::new([3, 3, 1], 1.0, 2.0);
+    let full =
+      match boundary_surface_triangles(WorldId(0), MeshKey::SURFACE, &mesh)
+        .geometry
+      {
+        RenderGeometry::Triangles(t) => t.triangle_count(),
+        _ => panic!("expected triangles"),
+      };
+
+    // Partition cells by index parity; the two masks must tile the full mesh.
+    let even = |c: CellId| c.index() % 2 == 0;
+    let count =
+      |keep: &dyn Fn(CellId) -> bool| match boundary_surface_triangles_masked(
+        WorldId(0),
+        MeshKey::SURFACE,
+        &mesh,
+        keep,
+      )
+      .geometry
+      {
+        RenderGeometry::Triangles(t) => t.triangle_count(),
+        _ => panic!("expected triangles"),
+      };
+
+    let evens = count(&even);
+    let odds = count(&|c| !even(c));
+    assert!(evens > 0 && odds > 0, "both masks should keep some cells");
+    assert!(evens < full, "masking should drop faces");
+    assert_eq!(evens + odds, full, "masks must tile the full mesh exactly");
   }
 }

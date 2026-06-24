@@ -119,6 +119,17 @@ pub enum Update {
     handle: LayerHandle,
   },
 
+  /// Reference-renderer hint: displace `mesh`'s vertices radially using the
+  /// per-cell samples of `layer`, scaled by `scale` (vertical exaggeration).
+  /// The IR mesh geometry stays undisplaced *data* — only the live renderer
+  /// offsets vertices, so a non-displacing backend (the VTK snapshot path)
+  /// safely ignores this.
+  SetMeshDisplacement {
+    mesh: MeshHandle,
+    layer: LayerHandle,
+    scale: f32,
+  },
+
   // ---- World-scoped scalars ----
   /// Where the sun appears to be from this world's centre, in world
   /// coordinates. Backends draw a marker / set a directional light.
