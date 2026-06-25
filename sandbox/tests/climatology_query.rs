@@ -99,12 +99,14 @@ fn showcase_world_exposes_climatology_means() {
     .expect("mean humidity should be available");
   assert!(mean_q.is_finite(), "mean humidity {mean_q} not finite");
 
-  // A quantity with no climatology source (SST climatology is not wired in this
-  // world) reports Unavailable rather than fabricating a value.
+  // Sea-surface-temperature climatology is aggregated on the ocean mesh from the
+  // ocean's prognostic temperature, so it resolves to a finite, plausible value.
+  let mean_sst = query
+    .sample_scalar(&snapshot, ScalarQuantity::MeanSeaSurfaceTemperature, at)
+    .value()
+    .expect("mean SST should be available");
   assert!(
-    query
-      .sample_scalar(&snapshot, ScalarQuantity::MeanSeaSurfaceTemperature, at)
-      .is_unavailable(),
-    "unwired climatology quantity should be Unavailable"
+    mean_sst.is_finite() && mean_sst > 150.0 && mean_sst < 400.0,
+    "mean SST {mean_sst} K out of plausible range"
   );
 }

@@ -860,6 +860,11 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
       ClimateQuantity::Humidity,
     ])
     .with_subsystem(CLIMATE_SUBSYSTEM);
+  // Sea-surface temperature climatology lives on the ocean mesh, aggregating the
+  // ocean's prognostic temperature so a consumer can read a settled SST.
+  let ocean_climatology = ClimatologyModel::new(MeshKey::OCEAN)
+    .with_quantity(ClimateQuantity::SeaSurfaceTemperature)
+    .with_subsystem(CLIMATE_SUBSYSTEM);
 
   let sst =
     FieldKey::new(MeshKey::ATMOSPHERE, FieldName::SeaSurfaceTemperature);
@@ -878,6 +883,7 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
   ocean_model.register_fields(factory.pleroma_mut(), ocean_mesh.as_ref())?;
   // Climatology means seed from the just-registered live diagnostics.
   climatology.register_fields(factory.pleroma_mut())?;
+  ocean_climatology.register_fields(factory.pleroma_mut())?;
   surface_terrain.register_fields(
     factory.pleroma_mut(),
     surface_mesh.as_ref(),
@@ -987,6 +993,7 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
   // Climatology accumulators on their own slow subsystem (run after the
   // atmosphere diagnostics each outer tick via ascending-subsystem split).
   climatology.add_stages(factory.nexus_mut())?;
+  ocean_climatology.add_stages(factory.nexus_mut())?;
 
   let world = factory.build()?;
   let system_id = SystemId(0);

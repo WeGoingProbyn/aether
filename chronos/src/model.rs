@@ -27,6 +27,12 @@ pub enum ClimateQuantity {
   Temperature,
   Pressure,
   Humidity,
+  /// Sea-surface temperature climatology. Built on the ocean mesh, where the
+  /// prognostic sea-water temperature is [`FieldName::Temperature`] — so this
+  /// sources that field (the ocean's own temperature), not the atmosphere-side
+  /// `SeaSurfaceTemperature` mapping. Its mean is read back through
+  /// `eidolon::query::ScalarQuantity::MeanSeaSurfaceTemperature`, which is bound
+  /// to the ocean mesh, keeping producer and consumer on the same mesh.
   SeaSurfaceTemperature,
 }
 
@@ -37,9 +43,9 @@ impl ClimateQuantity {
       ClimateQuantity::Temperature => FieldName::Temperature,
       ClimateQuantity::Pressure => FieldName::Pressure,
       ClimateQuantity::Humidity => FieldName::Humidity,
-      ClimateQuantity::SeaSurfaceTemperature => {
-        FieldName::SeaSurfaceTemperature
-      }
+      // The ocean's prognostic temperature is the SST source (see the variant
+      // docs); the mean lands in `MeanSeaSurfaceTemperature` on the same mesh.
+      ClimateQuantity::SeaSurfaceTemperature => FieldName::Temperature,
     }
   }
 
