@@ -4,6 +4,9 @@
 //! Shared world-build logic for the sandbox demo and its VTK
 //! regression test. Keeps the physics setup in one place so the
 //! bevy demo and the headless regression test never drift.
+//!
+//! See `sandbox/docs/overview.md` for what the rig demonstrates and how to read
+//! it as the reference for assembling a world.
 
 use std::collections::HashMap;
 

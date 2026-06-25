@@ -14,6 +14,8 @@
 //! Same-mesh dependencies (lumen heating tendency → aer energy update
 //! on the atm mesh) are plain nexus DAG edges; the cross-mesh hop
 //! (atm-bottom radiance ↔ surface) goes through syzygy.
+//!
+//! See `lumen/docs/overview.md` for the radiation stages and the albedo seam.
 
 pub mod diurnal;
 pub mod error;

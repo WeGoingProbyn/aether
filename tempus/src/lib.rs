@@ -6,6 +6,8 @@
 //! `tempus` deliberately has no dependency on Nexus, Pleroma, Tessera, or any
 //! physics crate. Physics crates own their state layout and call these kernels
 //! from their own stages/models.
+//!
+//! See `tempus/docs/overview.md` for how it fits.
 
 pub mod integrator;
 pub mod ode;

@@ -6,6 +6,8 @@
 //! Body state lives in pleroma as `ResourceKey::Bodies` (a `BodyState<D>`);
 //! `KeplerStage` is the integration stage that pulls it via `WorldAccess`
 //! and steps it forward with `tempus::VelocityVerlet`.
+//!
+//! See `gravitas/docs/overview.md` for how it fits the runtime.
 
 use nexus::{FieldKey, ResourceKey, Stage, StageContext};
 use tempus::integrator::VelocityVerlet;

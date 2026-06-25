@@ -21,6 +21,8 @@
 //!
 //! Out of scope (deferred with AMR per the roadmap): fidelity-LOD /
 //! multi-resolution region wake.
+//!
+//! See `chronos/docs/overview.md` and `docs/physics.md` for the full narrative.
 
 pub mod accumulator;
 pub mod convergence;

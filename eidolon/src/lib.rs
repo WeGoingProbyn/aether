@@ -6,6 +6,9 @@
 //! Eidolon observes simulation state and emits owned render/diagnostic data.
 //! Backends such as Bevy should consume this crate; simulation crates should
 //! not depend on concrete engine types.
+//!
+//! See `eidolon/docs/overview.md` for the render IR, playback, and query API,
+//! and `docs/rendering.md` for the consumer's guide.
 
 pub mod backend;
 pub mod bevy;

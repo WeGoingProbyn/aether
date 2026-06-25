@@ -3,6 +3,8 @@
 
 //! Syzygy owns coupling semantics between physics modules. It consumes
 //! read-only mesh/coupler geometry from Tessera and field access from Nexus.
+//!
+//! See `syzygy/docs/overview.md` for the stencil/flux/relaxation vocabulary.
 
 pub mod error;
 pub mod flux;

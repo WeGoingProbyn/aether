@@ -1,6 +1,13 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
+//! Shared foundation for the workspace: math types, a work-stealing thread
+//! pool, profiler, logger, serialization, and the shared ID vocabulary
+//! (`domain`) every other crate agrees on. No aether-specific concepts of its
+//! own — it is the bedrock everything else builds on.
+//!
+//! See `utility/docs/overview.md` for the module map and how it fits.
+
 pub mod collections;
 pub mod constants;
 pub mod diagnostics;

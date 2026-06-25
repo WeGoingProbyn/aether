@@ -1,6 +1,13 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
+//! Compressible-Euler atmosphere on the cube-sphere shell: well-balanced
+//! hydrostatic reconstruction, HEVI time stepping, moisture/microphysics,
+//! rotation, and terrain coupling. Owns the *logic* of the step; all state lives
+//! in `pleroma`, driven through `continuum`.
+//!
+//! See `aer/docs/overview.md` for the stage map and the key numerics.
+
 pub mod diagnostics;
 pub mod dynamics;
 pub mod error;

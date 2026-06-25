@@ -5,7 +5,10 @@
 //! surface temperature field forward under a net radiative flux supplied
 //! by lumen on the same surface mesh. All field storage lives in
 //! pleroma — terra only registers the temperature field at world setup
-//! and names the flux field it consumes.
+//! and names the flux field it consumes. It also owns first-class terrain:
+//! elevation, a land/ocean/ice mask, and a per-cell albedo field.
+//!
+//! See `terra/docs/overview.md` for the terrain fields and the albedo seam.
 
 use nexus::{
   FieldKey, FieldName, FieldStorage, MeshKey, Nexus, Pleroma, SoaField, Stage,

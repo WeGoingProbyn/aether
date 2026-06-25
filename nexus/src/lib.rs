@@ -5,6 +5,9 @@
 //! their state-access vocabulary; the relevant pleroma items are re-exported
 //! here so a typical `aer::Cargo.toml` lists `nexus + tessera + continuum +
 //! utility` and never `pleroma` directly.
+//!
+//! See `nexus/docs/overview.md` for the `Stage` contract, scheduling, and
+//! multi-rate execution.
 
 pub mod constants;
 pub mod schedule;

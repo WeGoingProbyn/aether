@@ -19,6 +19,8 @@
 //! Horizontal currents (a `continuum` ocean conservation law) are a later
 //! deepening; the column model already closes the air–sea heat budget and
 //! supplies the sea-surface temperature that drives evaporation.
+//!
+//! See `thalassa/docs/overview.md` for how it fits the coupled budget.
 
 pub mod error;
 pub mod model;
