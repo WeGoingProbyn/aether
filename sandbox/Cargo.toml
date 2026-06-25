@@ -16,6 +16,7 @@ eidolon = { path = "../eidolon", features = ["bevy"] }
 terra = { path = "../terra" }
 lumen = { path = "../lumen" }
 thalassa = { path = "../thalassa" }
+chronos = { path = "../chronos" }
 syzygy = { path = "../syzygy" }
 bevy = "0.18.1"
 bevy_panorbit_camera = "0.34.0"

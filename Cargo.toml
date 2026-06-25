@@ -16,6 +16,7 @@ members = [
   "tessera",
   "syzygy",
   "thalassa",
+  "chronos",
   "aether",
 ]
 

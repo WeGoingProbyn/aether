@@ -47,6 +47,14 @@ pub enum MeshChannel {
   SurfaceElevation,
   /// Static categorical surface-type code (see `utility::domain::SurfaceClass`).
   SurfaceType,
+  /// Slowly-varying time-mean (climatology) channels produced by chronos. A
+  /// slow consumer reads these instead of the instantaneous fields while
+  /// game-time advances by holding the live state.
+  MeanAtmosphereTemperature,
+  MeanAtmospherePressure,
+  MeanAtmosphereHumidity,
+  /// Climatology of sea-surface temperature on the ocean mesh (K).
+  MeanSeaSurfaceTemperature,
 }
 
 /// One completed frame's interpolatable field data: a simulation timestamp,

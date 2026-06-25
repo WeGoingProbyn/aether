@@ -18,9 +18,11 @@ use bevy::prelude::*;
 use bevy::render::render_resource::AsBindGroup;
 use bevy::shader::ShaderRef;
 
-use eidolon::bevy::{RenderRegistry, SunDirection};
-use eidolon::ir::{MeshRepresentation, RenderMeshId};
-use utility::domain::MeshKey;
+use eidolon::bevy::{CategoricalStyle, RenderRegistry, SunDirection};
+use eidolon::ir::{
+  LayerHandle, LayerId, MeshRepresentation, RenderMeshId, Rgba,
+};
+use utility::domain::{MeshKey, SurfaceClass};
 
 use crate::SANDBOX_WORLD_ID;
 
@@ -79,12 +81,31 @@ impl Plugin for ShowcaseRenderPlugin {
       .add_plugins(MaterialPlugin::<AtmosphereMaterial>::default())
       .init_resource::<RenderMode>()
       .init_resource::<AppliedRenderMode>()
+      .insert_resource(surface_class_style())
       .add_systems(Startup, setup_atmosphere_material)
       .add_systems(
         Update,
         (toggle_render_mode, apply_render_mode, drive_sun_direction),
       );
   }
+}
+
+/// The rendered-look palette for the land / ocean / ice surface classes. This
+/// is the consumer's art choice; eidolon only applies it.
+fn surface_class_style() -> CategoricalStyle {
+  CategoricalStyle::new()
+    .with_class(
+      SurfaceClass::Ocean.code() as u32,
+      Rgba::new(0.04, 0.18, 0.45, 1.0),
+    )
+    .with_class(
+      SurfaceClass::Land.code() as u32,
+      Rgba::new(0.24, 0.46, 0.18, 1.0),
+    )
+    .with_class(
+      SurfaceClass::Ice.code() as u32,
+      Rgba::new(0.90, 0.94, 0.98, 1.0),
+    )
 }
 
 fn setup_atmosphere_material(
@@ -148,20 +169,50 @@ fn apply_render_mode(
     return;
   }
 
-  let mut entity = commands.entity(entry.entity);
+  let atmosphere_entity = entry.entity;
+  let atmosphere_material = entry.material_handle.clone();
   match *mode {
     RenderMode::Rendered => {
-      entity
+      commands
+        .entity(atmosphere_entity)
         .remove::<MeshMaterial3d<StandardMaterial>>()
         .insert(MeshMaterial3d(assets.material.clone()));
+      // Paint the surface and ocean shells by surface class (land/ocean/ice)
+      // instead of a debug field — the "rendered" look.
+      rebind_to_class(&mut registry, MeshKey::SURFACE, "surface_type");
+      rebind_to_class(&mut registry, MeshKey::OCEAN, "ocean_surface_type");
     }
     RenderMode::Debug => {
-      entity
+      commands
+        .entity(atmosphere_entity)
         .remove::<MeshMaterial3d<AtmosphereMaterial>>()
-        .insert(MeshMaterial3d(entry.material_handle.clone()));
+        .insert(MeshMaterial3d(atmosphere_material));
+      // Back to debug field views (the default scalar binding per mesh).
+      rebind_to_class(&mut registry, MeshKey::SURFACE, "surface_elevation");
+      rebind_to_class(&mut registry, MeshKey::OCEAN, "ocean_temperature");
     }
   }
   applied.0 = Some(*mode);
+}
+
+/// Rebind a mesh to the layer with `layer_name` so the paint system colours it
+/// from that layer (a categorical class layer for the rendered look, or a
+/// scalar field for the debug look).
+fn rebind_to_class(
+  registry: &mut RenderRegistry,
+  mesh: MeshKey,
+  layer_name: &'static str,
+) {
+  let mesh_handle = RenderMeshId {
+    world: SANDBOX_WORLD_ID,
+    mesh,
+    representation: MeshRepresentation::BoundaryFaces,
+  }
+  .handle();
+  let layer =
+    LayerHandle::for_target(LayerId::from_static(layer_name), mesh_handle);
+  registry.bindings.insert(mesh_handle, layer);
+  registry.dirty_meshes.insert(mesh_handle);
 }
 
 /// Feed eidolon's (orbiting) sun direction into the scattering shader so the

@@ -94,6 +94,16 @@ pub enum FieldName {
   /// surface brightness: derived from the surface type / coverage by one or
   /// more producers (terrain base, then ice / snow), and read by radiation.
   SurfaceAlbedo,
+  /// Slowly-varying time-mean (climatology) of air temperature (K). Written by
+  /// the chronos climatology accumulator, not by physics — the aggregate field
+  /// a slow consumer reads while game-time advances by holding the live state.
+  MeanTemperature,
+  /// Slowly-varying time-mean (climatology) of air pressure (Pa).
+  MeanPressure,
+  /// Slowly-varying time-mean (climatology) of specific humidity (kg/kg).
+  MeanHumidity,
+  /// Slowly-varying time-mean (climatology) of sea-surface temperature (K).
+  MeanSeaSurfaceTemperature,
 }
 
 /// Categorical surface classification — the semantic meaning of the numeric
@@ -165,6 +175,11 @@ pub enum ResourceKey {
   Bodies,
   SunPosition,
   PlanetSpin,
+  /// Climatology-regime transition state read by the chronos nudge stage: the
+  /// current relaxation fraction (0 = inert) pulling live fields toward their
+  /// climatology means during a live↔climatology handoff. Absent means no
+  /// transition is in progress (the nudge is a no-op).
+  ClimateRegime,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]

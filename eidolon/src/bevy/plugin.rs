@@ -61,6 +61,7 @@ impl Plugin for AetherBevyPlugin {
       .insert_resource(UpdateReceiverResource::new(receiver))
       .init_resource::<RenderRegistry>()
       .init_resource::<FrameInterpolatorResource>()
+      .init_resource::<super::categorical::CategoricalStyle>()
       .init_resource::<super::sun::SunDirection>()
       .add_systems(PreUpdate, apply_updates_system)
       .add_systems(

@@ -94,6 +94,37 @@ pub fn default_atmosphere_quantities() -> Vec<QuantityChannel> {
   ]
 }
 
+/// The standard climatology quantity channels: the slowly-varying time-means
+/// produced by chronos on the atmosphere and ocean meshes. A channel whose mean
+/// field is absent (the world has no climatology aggregation) is omitted, so the
+/// query API reports `Unavailable` rather than fabricating data.
+pub fn default_climatology_quantities() -> Vec<QuantityChannel> {
+  let atm = MeshKey::ATMOSPHERE;
+  let ocean = MeshKey::OCEAN;
+  vec![
+    QuantityChannel::new(
+      MeshChannel::MeanAtmosphereTemperature,
+      FieldKey::new(atm, FieldName::MeanTemperature),
+      0,
+    ),
+    QuantityChannel::new(
+      MeshChannel::MeanAtmospherePressure,
+      FieldKey::new(atm, FieldName::MeanPressure),
+      0,
+    ),
+    QuantityChannel::new(
+      MeshChannel::MeanAtmosphereHumidity,
+      FieldKey::new(atm, FieldName::MeanHumidity),
+      0,
+    ),
+    QuantityChannel::new(
+      MeshChannel::MeanSeaSurfaceTemperature,
+      FieldKey::new(ocean, FieldName::MeanSeaSurfaceTemperature),
+      0,
+    ),
+  ]
+}
+
 /// The inert terrain quantity channels on the surface mesh: static elevation
 /// and the categorical surface-type code. Read once (they do not evolve), but
 /// flow through the same snapshot path so the query API treats them uniformly.

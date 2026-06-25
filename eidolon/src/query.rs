@@ -85,6 +85,14 @@ pub enum ScalarQuantity {
   SeaSurfaceTemperature,
   /// Static surface elevation (m) relative to the mean surface radius.
   SurfaceElevation,
+  /// Slowly-varying climatology (time-mean) of air temperature (K).
+  MeanTemperature,
+  /// Slowly-varying climatology (time-mean) of air pressure (Pa).
+  MeanPressure,
+  /// Slowly-varying climatology (time-mean) of specific humidity (kg/kg).
+  MeanHumidity,
+  /// Slowly-varying climatology (time-mean) of sea-surface temperature (K).
+  MeanSeaSurfaceTemperature,
 }
 
 /// Vector physical quantities. Returned in a local east-north-up (ENU) frame at
@@ -121,6 +129,18 @@ impl ScalarQuantity {
       }
       ScalarQuantity::SurfaceElevation => {
         (MeshType::Surface, MeshChannel::SurfaceElevation)
+      }
+      ScalarQuantity::MeanTemperature => {
+        (MeshType::Atmosphere, MeshChannel::MeanAtmosphereTemperature)
+      }
+      ScalarQuantity::MeanPressure => {
+        (MeshType::Atmosphere, MeshChannel::MeanAtmospherePressure)
+      }
+      ScalarQuantity::MeanHumidity => {
+        (MeshType::Atmosphere, MeshChannel::MeanAtmosphereHumidity)
+      }
+      ScalarQuantity::MeanSeaSurfaceTemperature => {
+        (MeshType::Ocean, MeshChannel::MeanSeaSurfaceTemperature)
       }
     }
   }

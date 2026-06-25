@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
+use chronos::{Regime, RegimeConfig, TransitionState};
 use cosmo::kind::{BodyKind, CelestialBody};
 use nexus::{
-  AtmosphereConstants, CompiledNexus, RadiationConstants, ScheduledStageTask,
-  StageTask, WorldConstants, WorldId,
+  AtmosphereConstants, CompiledNexus, RadiationConstants, ResourceKey,
+  ScheduledStageTask, StageTask, WorldConstants, WorldId,
 };
 use pleroma::Pleroma;
 use tessera::world_mesh::Tessera;
@@ -39,6 +40,22 @@ pub struct World {
   /// origin. The eidolon producer uses this hint to read the world's
   /// centre per-tick.
   body_index: Option<usize>,
+  /// Time-advance regime (live vs climatology burst-then-hold). Defaults to
+  /// [`Regime::Live`], which reproduces the original `step`-driven behaviour.
+  regime: Regime,
+  /// Parameters for the climatology regime's burst-then-hold advance.
+  regime_config: RegimeConfig,
+  /// Game time advanced so far (s). In the live regime this equals `sim_time`;
+  /// in the climatology regime it runs ahead, since held spans advance the game
+  /// clock without integrating the solver.
+  game_clock: f64,
+  /// Simulation time actually integrated by the solver so far (s).
+  sim_time: f64,
+  /// An in-progress live↔climatology handoff, if any. While set, each
+  /// integrated tick publishes the transition's relaxation fraction to
+  /// `ResourceKey::ClimateRegime` so a chronos nudge stage can spin the live
+  /// state up from / down to the climatology smoothly. Cleared when complete.
+  transition: Option<TransitionState>,
 }
 
 impl World {
@@ -73,6 +90,11 @@ impl World {
       nexus,
       partition_count: 1,
       body_index,
+      regime: Regime::default(),
+      regime_config: RegimeConfig::default(),
+      game_clock: 0.0,
+      sim_time: 0.0,
+      transition: None,
     }
   }
 
@@ -135,6 +157,76 @@ impl World {
     self.nexus.is_multirate()
   }
 
+  /// Current time-advance regime.
+  pub fn regime(&self) -> Regime {
+    self.regime
+  }
+
+  pub fn set_regime(&mut self, regime: Regime) {
+    self.regime = regime;
+  }
+
+  pub fn regime_config(&self) -> RegimeConfig {
+    self.regime_config
+  }
+
+  pub fn set_regime_config(&mut self, config: RegimeConfig) {
+    self.regime_config = config;
+  }
+
+  /// Game time advanced so far (s). Runs ahead of [`World::sim_time`] in the
+  /// climatology regime, where held spans advance the clock without integrating.
+  pub fn game_clock(&self) -> f64 {
+    self.game_clock
+  }
+
+  /// Simulation time actually integrated by the solver so far (s).
+  pub fn sim_time(&self) -> f64 {
+    self.sim_time
+  }
+
+  /// Advance both clocks by `dt` without ticking — used by the fused step path,
+  /// which integrates the solver via `build_tick_tasks` rather than `tick`.
+  pub(crate) fn advance_clocks(&mut self, dt: f64) {
+    self.sim_time += dt;
+    self.game_clock += dt;
+  }
+
+  /// The live↔climatology handoff in progress, if any.
+  pub fn transition(&self) -> Option<TransitionState> {
+    self.transition
+  }
+
+  /// Begin a live↔climatology handoff. While it runs, integrated ticks publish
+  /// its relaxation fraction to `ResourceKey::ClimateRegime` so a chronos nudge
+  /// stage (if the world has one) blends the live state across the switch.
+  pub fn begin_transition(&mut self, transition: TransitionState) {
+    self.transition = Some(transition);
+  }
+
+  /// Integrate one tick of `dt`, publishing the current transition relaxation
+  /// fraction beforehand and advancing the transition afterwards. Worlds with
+  /// no transition and no `ClimateRegime` resource behave exactly like `tick`.
+  fn tick_in_transition(&mut self, pool: &Pool, dt: f64) -> AetherResult<()> {
+    // Publish the current relaxation fraction (0 when no transition is active,
+    // so the nudge is inert once a handoff completes). Worlds without the
+    // resource simply skip this.
+    let fraction = self.transition.map(|t| t.nudge_fraction()).unwrap_or(0.0);
+    if let Some(slot) = self
+      .pleroma
+      .write_resource::<f64>(ResourceKey::ClimateRegime)
+    {
+      *slot = fraction;
+    }
+    self.tick(pool, dt)?;
+    if let Some(transition) = self.transition.as_mut() {
+      if transition.advance(dt) {
+        self.transition = None;
+      }
+    }
+    Ok(())
+  }
+
   pub fn tick(&mut self, pool: &Pool, dt: f64) -> AetherResult<()> {
     self.nexus.tick_with_partition_count(
       self.id,
@@ -144,7 +236,44 @@ impl World {
       pool,
       dt,
       self.partition_count,
-    )
+    )?;
+    self.sim_time += dt;
+    self.game_clock += dt;
+    Ok(())
+  }
+
+  /// Advance game-time by `game_dt`, honouring the world's [`Regime`].
+  ///
+  /// In [`Regime::Live`] this integrates the world by `game_dt` (one outer
+  /// tick, internally subcycled by the multirate driver). In
+  /// [`Regime::Climatology`] it runs `burst_steps` short live steps to refresh
+  /// the climatology aggregates, then advances the game clock by the remainder
+  /// of `game_dt` while *holding* the Euler state — so a large `game_dt` costs
+  /// only the burst, not a full integration. The game clock and integrated sim
+  /// time diverge by design in the climatology regime; that is the cost saving.
+  pub fn advance(&mut self, pool: &Pool, game_dt: f64) -> AetherResult<()> {
+    match self.regime {
+      Regime::Live => self.tick_in_transition(pool, game_dt),
+      Regime::Climatology => {
+        let cfg = self.regime_config;
+        let mut integrated = 0.0;
+        for _ in 0..cfg.burst_steps {
+          // The burst integrates the solver (advancing both clocks); cap it at
+          // game_dt so a burst never overshoots the requested span.
+          if integrated >= game_dt {
+            break;
+          }
+          let dt = cfg.burst_dt.min(game_dt - integrated);
+          self.tick_in_transition(pool, dt)?;
+          integrated += dt;
+        }
+        // Hold: advance the game clock over the remaining span without
+        // integrating the Euler state. Consumers read the climatology here.
+        let held = (game_dt - integrated).max(0.0);
+        self.game_clock += held;
+        Ok(())
+      }
+    }
   }
 
   pub fn build_tick_tasks<'a>(
@@ -358,7 +487,30 @@ impl Aether {
       }
     }
 
-    pool.execute_scoped(graph)
+    pool.execute_scoped(graph)?;
+    // The fused path bypasses `World::tick`, so advance the clocks here to keep
+    // `sim_time` / `game_clock` consistent across both step paths.
+    for system in self.systems.values_mut() {
+      for world in system.worlds_mut() {
+        world.advance_clocks(dt);
+      }
+    }
+    Ok(())
+  }
+
+  /// Advance game-time by `game_dt`, honouring each world's [`Regime`]. Live
+  /// worlds integrate by `game_dt`; climatology worlds burst-then-hold (see
+  /// [`World::advance`]). Unlike [`Aether::step`] this drives worlds
+  /// individually rather than fusing them into one cross-world graph, since the
+  /// per-world burst-then-hold cadence is not a single shared dt.
+  pub fn advance(&mut self, game_dt: f64) -> AetherResult<()> {
+    let pool = &self.pool;
+    for system in self.systems.values_mut() {
+      for world in system.worlds_mut() {
+        world.advance(pool, game_dt)?;
+      }
+    }
+    Ok(())
   }
 
   pub fn system(&self, id: SystemId) -> Option<&System> {

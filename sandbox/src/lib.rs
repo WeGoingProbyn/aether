@@ -16,6 +16,7 @@ use aether::{
   core::{Aether, System},
   factory::WorldFactory,
 };
+use chronos::{ClimateQuantity, ClimatologyModel};
 use cosmo::factory as cosmo_factory;
 use eidolon::extract::{
   CellFilter, ExtractConfig, MeshConfig, ScalarLayerConfig,
@@ -38,6 +39,11 @@ use utility::thread::pool::Pool;
 /// Subsystem clock the ocean advances on — slower than the (default,
 /// CFL-limited) atmosphere subsystem.
 const OCEAN_SUBSYSTEM: SubsystemId = SubsystemId(1);
+
+/// Subsystem clock the climatology accumulators advance on. Operator-split runs
+/// subsystems in ascending id order, so this (id 2) runs after the atmosphere
+/// (default, id 0) has refreshed its diagnostic fields each outer tick.
+const CLIMATE_SUBSYSTEM: SubsystemId = SubsystemId(2);
 
 pub const SANDBOX_WORLD_ID: WorldId = WorldId(0);
 
@@ -774,7 +780,7 @@ pub fn debug_render_frame(
 /// increment; today land and ocean differ in albedo, orography and rendering.)
 #[profile]
 pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
-  let angular_dims = [64, 64];
+  let angular_dims = [16, 16];
   let atmosphere_layers = 6;
   let ocean_layers = 2;
   let atmosphere_height = 20_000.0;
@@ -843,6 +849,18 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
   )?
   .with_surface_albedo_field(ocean_terrain.fields().albedo);
 
+  // Slowly-varying climatology of the atmosphere primitives (chronos). These
+  // EMA-aggregate the live diagnostics on their own slow subsystem so a
+  // days–centuries consumer can read settled means instead of instantaneous
+  // weather. Inert: they read diagnostics and write mean fields, nothing else.
+  let climatology = ClimatologyModel::new(MeshKey::ATMOSPHERE)
+    .with_quantities([
+      ClimateQuantity::Temperature,
+      ClimateQuantity::Pressure,
+      ClimateQuantity::Humidity,
+    ])
+    .with_subsystem(CLIMATE_SUBSYSTEM);
+
   let sst =
     FieldKey::new(MeshKey::ATMOSPHERE, FieldName::SeaSurfaceTemperature);
   let evaporation =
@@ -858,6 +876,8 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
     reference_radius,
   )?;
   ocean_model.register_fields(factory.pleroma_mut(), ocean_mesh.as_ref())?;
+  // Climatology means seed from the just-registered live diagnostics.
+  climatology.register_fields(factory.pleroma_mut())?;
   surface_terrain.register_fields(
     factory.pleroma_mut(),
     surface_mesh.as_ref(),
@@ -964,6 +984,9 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
   factory.add_stage(latent_sink);
   factory.add_stage(DiurnalSunStep::new(angular_velocity));
   ocean_model.add_stages(factory.nexus_mut())?;
+  // Climatology accumulators on their own slow subsystem (run after the
+  // atmosphere diagnostics each outer tick via ascending-subsystem split).
+  climatology.add_stages(factory.nexus_mut())?;
 
   let world = factory.build()?;
   let system_id = SystemId(0);
@@ -982,7 +1005,7 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
 /// Vertical exaggeration the showcase renderer applies to terrain elevation.
 /// Land tops out around 2 km on a ~6371 km planet, so true relief is ~3e-4 of
 /// the radius — invisible. This lifts it into a readable few-percent bump.
-const SHOWCASE_TERRAIN_EXAGGERATION: f32 = 1000.0;
+const SHOWCASE_TERRAIN_EXAGGERATION: f32 = 200.0;
 
 pub fn showcase_extract_config() -> ExtractConfig {
   let scalar = |id: &'static str,
@@ -1075,13 +1098,46 @@ pub fn showcase_extract_config() -> ExtractConfig {
         FieldName::Pressure,
         Palette::thermal(),
       ),
+      // Climatology (slowly-varying time-means) of the same atmosphere
+      // primitives, produced by chronos. Bound to the atmosphere mesh with keys
+      // 6/7/8 so the demo can flip between the live field and its climatology and
+      // see the aggregate smooth out the instantaneous weather.
+      scalar(
+        "atmosphere_mean_temperature",
+        MeshKey::ATMOSPHERE,
+        FieldName::MeanTemperature,
+        Palette::thermal(),
+      ),
+      scalar(
+        "atmosphere_mean_humidity",
+        MeshKey::ATMOSPHERE,
+        FieldName::MeanHumidity,
+        Palette::thermal(),
+      ),
+      scalar(
+        "atmosphere_mean_pressure",
+        MeshKey::ATMOSPHERE,
+        FieldName::MeanPressure,
+        Palette::thermal(),
+      ),
     ],
-    categorical_layers: vec![surface_type_categorical_layer(
-      LayerId::from_static("surface_type"),
-      "surface_type",
-      MeshKey::SURFACE,
-      MeshRepresentation::BoundaryFaces,
-    )],
+    categorical_layers: vec![
+      // Surface type per cell (ocean / land / ice). The rendered look paints
+      // the surface and ocean shells by these classes; emitted on both meshes
+      // so each shell can colour its own cells.
+      surface_type_categorical_layer(
+        LayerId::from_static("surface_type"),
+        "surface_type",
+        MeshKey::SURFACE,
+        MeshRepresentation::BoundaryFaces,
+      ),
+      surface_type_categorical_layer(
+        LayerId::from_static("ocean_surface_type"),
+        "ocean_surface_type",
+        MeshKey::OCEAN,
+        MeshRepresentation::BoundaryFaces,
+      ),
+    ],
     track_sun_direction: true,
   }
 }

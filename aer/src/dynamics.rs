@@ -554,7 +554,7 @@ impl<'a> nexus::StageProgram<'a> for EulerPartitionProgram<'a> {
       substeps += 1;
     }
     end_profile!("aer.EulerAtmosphereStep.partition_loop");
-    debug!("atmosphere substeps: {}", substeps);
+    //debug!("atmosphere substeps: {}", substeps);
 
     stage.last_dt = Some(total_advanced);
     stage.last_substeps = substeps;
