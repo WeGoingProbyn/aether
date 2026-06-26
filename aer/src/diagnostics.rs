@@ -1,11 +1,19 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
+use std::marker::PhantomData;
+
+use continuum::diagnostics::{count_non_finite, integrate_conserved};
+use continuum::model::MoistEuler3D;
 use nexus::{
   FieldKey, FieldStorage, MeshKey, SoaField, Stage, StageContext, WorldAccess,
 };
+use tessera::mesh::Mesh;
 use utility::{
-  domain::CellId,
+  diagnostics::{
+    ConservationQuantities, DiagnosticsPolicy, FieldReport, WorldDiagnostics,
+  },
+  domain::{CellId, ResourceKey},
   error::{AetherError, AetherResult},
 };
 
@@ -284,6 +292,226 @@ fn validate_mesh_fields(
     )
   }
 }
+
+/// Default conservation-drift tolerance (relative) before [`Warn`] logs. A
+/// well-balanced atmosphere should hold its conserved totals to far tighter
+/// than this over a run; the value is exposed on the builder so it is never a
+/// hidden magic constant.
+///
+/// [`Warn`]: DiagnosticsPolicy::Warn
+pub const DEFAULT_DRIFT_THRESHOLD: f64 = 1.0e-2;
+
+/// In-DAG runtime health monitor for a conserved-law field.
+///
+/// Each tick it sweeps the field for non-finite (NaN/Inf) cells and
+/// volume-integrates the law's declared conserved totals, tracking their drift
+/// away from a settled-state baseline. Findings are merged into the
+/// [`WorldDiagnostics`] held in [`ResourceKey::Diagnostics`]; the active
+/// [`DiagnosticsPolicy`] (read from that same resource) decides whether to
+/// merely observe, `warn!`, or fail the tick.
+///
+/// Generic over the state size `N` and the law type `L` (which contributes
+/// only its associated `CONSERVED_QUANTITIES` — no instance is constructed).
+/// The atmosphere binds it via [`AtmosphereConservationMonitor`].
+///
+/// **Scheduling.** The monitor must observe the *post-step* state, so it
+/// declares a read on the state `FieldKey` (`reads = [state]`). nexus orders a
+/// reader after every writer of the same field, which is what places this
+/// stage after the dynamics solver — the dependency is on the field, not on
+/// the shared `Diagnostics` resource.
+///
+/// **Fail semantics.** By the time the monitor runs, the solver has already
+/// mutated the state in place. A `Fail` therefore does not roll back: it
+/// surfaces the blow-up on the exact tick that produced it by returning `Err`.
+/// `World::tick` advances its clocks only after a successful tick, so on `Err`
+/// the clocks stay frozen at the last good tick while the field holds the bad
+/// values. True freeze-at-last-good would need a state checkpoint and is out of
+/// scope here.
+pub struct ConservationMonitorStage<const N: usize, L> {
+  mesh: MeshKey,
+  state: FieldKey,
+  /// Settled-state conserved totals captured after warm-up; `None` until then.
+  baseline: Option<Vec<f64>>,
+  ticks_seen: u64,
+  warmup_ticks: u64,
+  drift_threshold: f64,
+  reads: [FieldKey; 1],
+  resource_writes: [ResourceKey; 1],
+  /// `fn() -> L` so the marker is unconditionally `Send + Sync` regardless of
+  /// `L`; the law is only ever used at the type level.
+  _law: PhantomData<fn() -> L>,
+}
+
+impl<const N: usize, L> ConservationMonitorStage<N, L>
+where
+  L: ConservationQuantities<N>,
+{
+  /// Monitor `state` (living on `mesh`) with the default drift threshold and a
+  /// one-tick warm-up before the baseline is captured.
+  pub fn new(mesh: MeshKey, state: FieldKey) -> Self {
+    Self {
+      mesh,
+      state,
+      baseline: None,
+      ticks_seen: 0,
+      warmup_ticks: 1,
+      drift_threshold: DEFAULT_DRIFT_THRESHOLD,
+      reads: [state],
+      resource_writes: [ResourceKey::Diagnostics],
+      _law: PhantomData,
+    }
+  }
+
+  /// Set the relative conservation-drift tolerance.
+  pub fn with_drift_threshold(mut self, threshold: f64) -> Self {
+    self.drift_threshold = threshold;
+    self
+  }
+
+  /// Set how many ticks to skip before capturing the conservation baseline, so
+  /// the reference is a settled state rather than an initial-condition
+  /// transient.
+  pub fn with_warmup_ticks(mut self, warmup_ticks: u64) -> Self {
+    self.warmup_ticks = warmup_ticks;
+    self
+  }
+}
+
+impl<const N: usize, L> Stage for ConservationMonitorStage<N, L>
+where
+  L: ConservationQuantities<N> + Send + Sync + 'static,
+{
+  fn name(&self) -> &'static str {
+    "aer_conservation_monitor"
+  }
+
+  fn reads(&self) -> &[FieldKey] {
+    &self.reads
+  }
+
+  fn writes(&self) -> &[FieldKey] {
+    &[]
+  }
+
+  fn resource_writes(&self) -> &[ResourceKey] {
+    &self.resource_writes
+  }
+
+  fn run(&mut self, mut ctx: StageContext<'_>) -> AetherResult<()> {
+    // Read the policy once, up front: a single read means a mid-tick policy
+    // change (under any future parallel scheduling) can't be observed
+    // inconsistently within this stage.
+    let policy = ctx
+      .world
+      .fields
+      .resource::<WorldDiagnostics>(ResourceKey::Diagnostics)
+      .map(|d| d.policy)
+      .unwrap_or_default();
+    if policy == DiagnosticsPolicy::Off {
+      return Ok(());
+    }
+
+    let mesh: &dyn Mesh<3> = ctx
+      .world
+      .tessera
+      .mesh(self.mesh)
+      .ok_or_else(|| {
+        AetherError::new(AerError::MissingMesh)
+          .context(format!("{:?}", self.mesh))
+      })?
+      .as_ref();
+
+    let field: &SoaField<N> =
+      ctx.world.fields.read(self.state).ok_or_else(|| {
+        AetherError::new(AerError::MissingReadField)
+          .context(format!("{:?}", self.state))
+      })?;
+
+    let non_finite = count_non_finite(field);
+    let totals = integrate_conserved::<N, _, _, L>(mesh, field);
+
+    // Baseline / drift. Capture the reference only once we are past warm-up and
+    // the state is finite, so it is never a transient or a born-NaN tick.
+    self.ticks_seen += 1;
+    let mut max_relative_drift = 0.0_f64;
+    match &self.baseline {
+      Some(baseline) => {
+        // Relative drift is only meaningful for conserved quantities with a
+        // non-trivial total. Some (e.g. momentum of an atmosphere starting
+        // from rest) baseline to ~0, where relative drift against zero is
+        // ill-defined and would dominate spuriously — skip those, judged
+        // against the largest baseline magnitude as the system scale.
+        let scale = baseline.iter().fold(0.0_f64, |m, b| m.max(b.abs()));
+        let floor = 1.0e-9 * scale;
+        for ((_, total), base) in totals.iter().zip(baseline.iter()) {
+          if base.abs() <= floor {
+            continue;
+          }
+          let drift = (total - base).abs() / base.abs();
+          max_relative_drift = max_relative_drift.max(drift);
+        }
+      }
+      None if self.ticks_seen > self.warmup_ticks && non_finite == 0 => {
+        self.baseline = Some(totals.iter().map(|(_, t)| *t).collect());
+      }
+      None => {}
+    }
+    let drift_exceeded =
+      self.baseline.is_some() && max_relative_drift > self.drift_threshold;
+
+    let report = FieldReport {
+      non_finite_cells: non_finite,
+      conserved: totals,
+      max_relative_drift,
+    };
+
+    // Publish into the shared report (keyed by this field, so independent
+    // monitors coexist). The immutable `field` borrow has ended above.
+    if let Some(diagnostics) = ctx
+      .world
+      .fields
+      .resource_mut::<WorldDiagnostics>(ResourceKey::Diagnostics)
+    {
+      diagnostics.merge_field(self.state, report);
+    }
+
+    // Enforce the policy. `Fail` only fails on non-finite state (a hard
+    // blow-up); drift is a softer signal that warns but never fails.
+    if non_finite > 0 {
+      match policy {
+        DiagnosticsPolicy::Fail => {
+          return Err(AetherError::new(AerError::NonFiniteState).context(
+            format!("{:?}: {} non-finite cells", self.state, non_finite),
+          ));
+        }
+        DiagnosticsPolicy::Warn => {
+          utility::warn!(
+            "conservation monitor: {} non-finite cells in {:?}",
+            non_finite,
+            self.state
+          );
+        }
+        _ => {}
+      }
+    } else if drift_exceeded
+      && matches!(policy, DiagnosticsPolicy::Warn | DiagnosticsPolicy::Fail)
+    {
+      utility::warn!(
+        "conservation monitor: {:?} drift {:.3e} exceeds threshold {:.3e}",
+        self.state,
+        max_relative_drift,
+        self.drift_threshold
+      );
+    }
+
+    Ok(())
+  }
+}
+
+/// The atmosphere binding of [`ConservationMonitorStage`]: the moist-Euler
+/// state (`N = 6`, [`MoistEuler3D`]'s six conserved components).
+pub type AtmosphereConservationMonitor =
+  ConservationMonitorStage<6, MoistEuler3D>;
 
 #[cfg(test)]
 mod tests {

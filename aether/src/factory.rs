@@ -18,7 +18,11 @@ use tessera::{
   radial_stack::RadialStackCoupler,
   world_mesh::{DecompositionKey, Tessera},
 };
-use utility::error::{AetherError, AetherResult, ErrorDomain};
+use utility::{
+  diagnostics::{DiagnosticsPolicy, WorldDiagnostics},
+  domain::ResourceKey,
+  error::{AetherError, AetherResult, ErrorDomain},
+};
 
 use crate::core::{World, world_constants_from_seed};
 
@@ -37,6 +41,8 @@ pub struct WorldFactory {
   cube_sphere_shells: HashMap<MeshKey, CubeSphereShellSpec>,
   body_index: Option<usize>,
   partition_count: usize,
+  /// Initial runtime-diagnostics policy seeded into the `Diagnostics` resource.
+  diagnostics_policy: DiagnosticsPolicy,
 }
 
 impl WorldFactory {
@@ -51,7 +57,16 @@ impl WorldFactory {
       cube_sphere_shells: HashMap::new(),
       body_index: None,
       partition_count: 1,
+      diagnostics_policy: DiagnosticsPolicy::default(),
     }
+  }
+
+  /// Set the initial runtime-diagnostics enforcement policy for the world.
+  /// Seeds the `Diagnostics` resource that monitor stages read; can be changed
+  /// later via [`World::set_diagnostics_policy`].
+  pub fn with_diagnostics_policy(mut self, policy: DiagnosticsPolicy) -> Self {
+    self.diagnostics_policy = policy;
+    self
   }
 
   /// Hint that this world's centre is tracked by index `index` in the
@@ -280,7 +295,13 @@ impl WorldFactory {
     self.nexus.before(a, b);
   }
 
-  pub fn build(self) -> AetherResult<World> {
+  pub fn build(mut self) -> AetherResult<World> {
+    // Always present so `World::diagnostics` works even with no monitor stage;
+    // monitor stages merge into this aggregate report and read its policy.
+    self.pleroma.register_resource(
+      ResourceKey::Diagnostics,
+      WorldDiagnostics::with_policy(self.diagnostics_policy),
+    );
     let compiled_nexus = self.nexus.build(&self.pleroma)?;
     let mut world = World::with_body_index(
       self.world_id,

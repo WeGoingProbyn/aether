@@ -669,6 +669,25 @@ impl LawFieldSchema<3, 5> for Euler3D {
 ///
 /// Implemented by composition over [`Euler3D`] so the gravity / energy /
 /// positivity logic is shared rather than duplicated.
+///
+/// The `#[diagnostics(...)]` block declares its six conserved components
+/// (mirroring [`MoistEuler3D::conserved_field_names`]) so the runtime health
+/// monitor can volume-integrate them via
+/// `continuum::diagnostics::integrate_conserved`. Only `components` +
+/// `conserved` are declared (no `extras`), since the derived quantities need
+/// no per-cell closures here and `MoistEuler3D`'s fields are private.
+#[derive(StateDiagnostics)]
+#[diagnostics(
+  components("rho", "rho_u", "rho_v", "rho_w", "energy", "rho_q"),
+  conserved(
+    ("mass", 0),
+    ("momentum_x", 1),
+    ("momentum_y", 2),
+    ("momentum_z", 3),
+    ("total_energy", 4),
+    ("water", 5),
+  ),
+)]
 pub struct MoistEuler3D {
   dry: Euler3D,
   /// Planetary rotation vector Ω (rad/s) in the world frame. Drives the

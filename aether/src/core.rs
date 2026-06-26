@@ -10,6 +10,7 @@ use pleroma::Pleroma;
 use tessera::world_mesh::Tessera;
 use utility::{
   constants::solar_flux,
+  diagnostics::{DiagnosticsPolicy, WorldDiagnostics},
   domain::SystemId,
   error::AetherResult,
   profile,
@@ -148,6 +149,27 @@ impl World {
 
   pub fn runtime_parts_mut(&mut self) -> (&Tessera, &mut Pleroma) {
     (&self.tessera, &mut self.pleroma)
+  }
+
+  /// The latest aggregate runtime-diagnostics report (per-field finiteness and
+  /// conservation drift) published by in-DAG monitor stages. Present for worlds
+  /// built via `WorldFactory`; `None` if no `Diagnostics` resource was
+  /// registered.
+  pub fn diagnostics(&self) -> Option<&WorldDiagnostics> {
+    self
+      .pleroma
+      .read_resource::<WorldDiagnostics>(ResourceKey::Diagnostics)
+  }
+
+  /// Change the runtime-diagnostics enforcement policy. Takes effect on the
+  /// next tick; a no-op if the world has no `Diagnostics` resource.
+  pub fn set_diagnostics_policy(&mut self, policy: DiagnosticsPolicy) {
+    if let Some(diagnostics) = self
+      .pleroma
+      .write_resource::<WorldDiagnostics>(ResourceKey::Diagnostics)
+    {
+      diagnostics.policy = policy;
+    }
   }
 
   /// Whether this world's nexus advances more than one subsystem clock —

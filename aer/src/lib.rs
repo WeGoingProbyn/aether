@@ -21,7 +21,10 @@ pub mod shell;
 pub mod thermal;
 pub mod tracers;
 
-pub use diagnostics::EulerDiagnosticsStep;
+pub use diagnostics::{
+  AtmosphereConservationMonitor, ConservationMonitorStage,
+  DEFAULT_DRIFT_THRESHOLD, EulerDiagnosticsStep,
+};
 pub use dynamics::{
   AtmosphereScheme, EulerAtmosphereStep, GravityMode, RotationMode,
 };

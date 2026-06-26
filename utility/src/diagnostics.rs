@@ -65,3 +65,106 @@ pub struct ConservedQuantity<const N: usize> {
 pub trait ConservationQuantities<const N: usize> {
   const CONSERVED_QUANTITIES: &'static [ConservedQuantity<N>];
 }
+
+// ---------------------------------------------------------------------------
+// Runtime health reporting
+//
+// Law-agnostic types describing the *result* of a health check, as opposed to
+// the trait surface above which describes how to *extract* quantities from a
+// state vector. These live here (rather than in a physics crate) so that the
+// physics producers and the aether consumer share one vocabulary without
+// depending on each other — the report is keyed by `FieldKey` and carries only
+// `f64`s and names, never a concrete law type.
+// ---------------------------------------------------------------------------
+
+use std::collections::HashMap;
+
+use crate::domain::FieldKey;
+
+/// What the runtime should do when a monitor stage finds a problem.
+///
+/// Stored on [`WorldDiagnostics`] (and thus the `Diagnostics` resource) so the
+/// policy can be changed between ticks and every monitor stage observes the
+/// same setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DiagnosticsPolicy {
+  /// Monitor stages do nothing — no sweep, no report, no logging.
+  Off,
+  /// Compute and publish the report, but never log or fail. Consumers poll
+  /// [`crate::domain::ResourceKey::Diagnostics`] when they want it.
+  Observe,
+  /// Publish the report and emit a `warn!` when a field is unhealthy
+  /// (non-finite cells, or conservation drift past the configured threshold).
+  /// The default — visible but non-fatal.
+  #[default]
+  Warn,
+  /// As `Warn`, but additionally fail the tick (return `Err`) when a field
+  /// holds non-finite state, so a silent NaN blow-up surfaces as an error on
+  /// the exact tick that produced it.
+  Fail,
+}
+
+/// Health findings for a single field at the most recent monitored tick.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FieldReport {
+  /// Number of cells with at least one non-finite (NaN/Inf) component.
+  pub non_finite_cells: usize,
+  /// Volume-integrated conserved totals, `(name, total)`, in the order the
+  /// law declares them. Empty for fields with no declared conserved quantities.
+  pub conserved: Vec<(&'static str, f64)>,
+  /// Largest relative drift of any conserved total away from its baseline
+  /// (settled-state reference). `0.0` until a baseline has been captured.
+  pub max_relative_drift: f64,
+}
+
+impl FieldReport {
+  /// A field is healthy when it has no non-finite cells. (Drift on its own is
+  /// reported and may warn, but is not treated as ill-health here — that
+  /// distinction is the policy/threshold's job at the call site.)
+  pub fn is_healthy(&self) -> bool {
+    self.non_finite_cells == 0
+  }
+}
+
+/// Aggregate runtime health report for one world: the active policy plus the
+/// latest per-field findings. Published to the `Diagnostics` resource by
+/// monitor stages and read back via `World::diagnostics`.
+///
+/// The `fields` map is keyed by [`FieldKey`], so independent monitor stages
+/// (e.g. one per physics module) merge into distinct entries rather than
+/// overwriting a single shared slot.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WorldDiagnostics {
+  pub policy: DiagnosticsPolicy,
+  pub fields: HashMap<FieldKey, FieldReport>,
+}
+
+impl WorldDiagnostics {
+  /// Build an empty report with a chosen policy.
+  pub fn with_policy(policy: DiagnosticsPolicy) -> Self {
+    Self {
+      policy,
+      fields: HashMap::new(),
+    }
+  }
+
+  /// Insert or replace the report for one field. Distinct fields coexist; a
+  /// stage only ever touches its own key.
+  pub fn merge_field(&mut self, field: FieldKey, report: FieldReport) {
+    self.fields.insert(field, report);
+  }
+
+  /// Whether any monitored field currently holds non-finite state.
+  pub fn has_non_finite(&self) -> bool {
+    self.fields.values().any(|r| r.non_finite_cells > 0)
+  }
+
+  /// The largest conservation drift across all monitored fields.
+  pub fn worst_drift(&self) -> f64 {
+    self
+      .fields
+      .values()
+      .map(|r| r.max_relative_drift)
+      .fold(0.0, f64::max)
+  }
+}

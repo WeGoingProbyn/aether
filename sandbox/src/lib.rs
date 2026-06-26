@@ -61,7 +61,7 @@ pub mod atmosphere;
 /// shells — the bevy demo uses `reference_radius()` for the camera.
 #[profile]
 pub fn build_demo_aether() -> AetherResult<(Aether, AtmosphereShellLayout)> {
-  let angular_dims = [128, 128];
+  let angular_dims = [16, 16];
   let surface_radial_layers = 10;
   let atmosphere_radial_layers = 30;
   let atmosphere_height = 20_000.0;
@@ -826,7 +826,12 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
     .with_cfl(0.25)
     .with_radiative_heating()
     .with_rotation()
-    .with_scheme(aer::AtmosphereScheme::Hevi);
+    .with_scheme(aer::AtmosphereScheme::Hevi)
+    // Runtime health monitor: each tick sweeps the Euler state for non-finite
+    // cells and tracks conservation drift. The world's DiagnosticsPolicy
+    // (default Warn) decides whether a finding warns or fails the tick; the
+    // runner prints the report periodically.
+    .with_conservation_monitor(aer::DEFAULT_DRIFT_THRESHOLD);
   let atmosphere_fields = atmosphere_model.fields();
 
   let ocean_model = OceanModel::new(

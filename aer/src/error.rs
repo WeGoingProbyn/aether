@@ -14,6 +14,7 @@ pub enum AerError {
   FieldMeshMismatch,
   FieldLengthMismatch,
   InvalidTimeStep,
+  NonFiniteState,
 }
 
 impl ErrorDomain for AerError {
@@ -51,6 +52,9 @@ impl std::fmt::Display for AerError {
       }
       AerError::InvalidTimeStep => {
         write!(f, "solver produced an invalid time step")
+      }
+      AerError::NonFiniteState => {
+        write!(f, "atmosphere state contains non-finite values")
       }
     }
   }

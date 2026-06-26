@@ -180,6 +180,11 @@ pub enum ResourceKey {
   /// climatology means during a live↔climatology handoff. Absent means no
   /// transition is in progress (the nudge is a no-op).
   ClimateRegime,
+  /// Aggregate runtime health report (`WorldDiagnostics`): per-field finiteness
+  /// and conservation-drift findings published by in-DAG monitor stages and
+  /// read at the `World` level. Also carries the active `DiagnosticsPolicy` so
+  /// monitor stages know whether to merely observe, warn, or fail the tick.
+  Diagnostics,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]

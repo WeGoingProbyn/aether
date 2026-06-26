@@ -9,12 +9,22 @@ use tessera::mesh::Mesh;
 use utility::error::{AetherError, AetherResult};
 
 use crate::{
-  diagnostics::EulerDiagnosticsStep,
+  diagnostics::{
+    AtmosphereConservationMonitor, DEFAULT_DRIFT_THRESHOLD,
+    EulerDiagnosticsStep,
+  },
   dynamics::{AtmosphereScheme, EulerAtmosphereStep, RotationMode},
   error::AerError,
   init::AtmosphereSpec,
   thermal::TemperatureTendencyToEulerEnergyStep,
 };
+
+/// Opt-in configuration for the in-DAG conservation/health monitor stage.
+#[derive(Clone, Copy, Debug)]
+struct ConservationMonitorConfig {
+  drift_threshold: f64,
+  warmup_ticks: u64,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AtmosphereFields {
@@ -63,6 +73,9 @@ pub struct AtmosphereStageIds {
   pub tendency_to_energy: StageId,
   pub dynamics: StageId,
   pub diagnostics: StageId,
+  /// The conservation/health monitor, present only when the model was built
+  /// with [`AtmosphereModel::with_conservation_monitor`].
+  pub conservation_monitor: Option<StageId>,
 }
 
 #[derive(Clone, Debug)]
@@ -77,6 +90,9 @@ pub struct AtmosphereModel {
   /// energy update on top of `fields.temperature_tendency`. Lumen's
   /// `RadiativeHeatingTendency` is the typical first entry.
   extra_tendencies: Vec<FieldKey>,
+  /// When set, `add_stages` appends a conservation/health monitor over the
+  /// Euler state. Off by default so existing callers are unaffected.
+  conservation_monitor: Option<ConservationMonitorConfig>,
 }
 
 impl AtmosphereModel {
@@ -89,7 +105,36 @@ impl AtmosphereModel {
       scheme: AtmosphereScheme::Explicit,
       max_substeps: 10_000,
       extra_tendencies: Vec::new(),
+      conservation_monitor: None,
     }
+  }
+
+  /// Enable the in-DAG conservation/health monitor over the Euler state with
+  /// the given relative drift tolerance (see [`DEFAULT_DRIFT_THRESHOLD`]) and a
+  /// one-tick baseline warm-up. The monitor's behaviour on a finding is
+  /// governed by the world's [`DiagnosticsPolicy`].
+  ///
+  /// [`DiagnosticsPolicy`]: utility::diagnostics::DiagnosticsPolicy
+  pub fn with_conservation_monitor(mut self, drift_threshold: f64) -> Self {
+    self.conservation_monitor = Some(ConservationMonitorConfig {
+      drift_threshold,
+      warmup_ticks: 1,
+    });
+    self
+  }
+
+  /// Enable the conservation monitor (if not already) and set how many ticks to
+  /// skip before capturing the conservation baseline.
+  pub fn with_conservation_monitor_warmup(mut self, warmup_ticks: u64) -> Self {
+    let config =
+      self
+        .conservation_monitor
+        .get_or_insert(ConservationMonitorConfig {
+          drift_threshold: DEFAULT_DRIFT_THRESHOLD,
+          warmup_ticks,
+        });
+    config.warmup_ticks = warmup_ticks;
+    self
   }
 
   /// Cap the number of inner CFL sub-steps the dynamics may take per outer
@@ -235,10 +280,22 @@ impl AtmosphereModel {
       self.fields.humidity,
     )?);
 
+    // The monitor declares `reads = [euler_state]`, so nexus orders it after
+    // both Euler-state writers (`tendency_to_energy`, `dynamics`) and it sees
+    // the post-step state.
+    let conservation_monitor = self.conservation_monitor.map(|config| {
+      nexus.add(
+        AtmosphereConservationMonitor::new(self.mesh, self.fields.euler_state)
+          .with_drift_threshold(config.drift_threshold)
+          .with_warmup_ticks(config.warmup_ticks),
+      )
+    });
+
     Ok(AtmosphereStageIds {
       tendency_to_energy,
       dynamics,
       diagnostics,
+      conservation_monitor,
     })
   }
 

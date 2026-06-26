@@ -13,6 +13,7 @@ use nexus::{FieldStorage, SoaField};
 use sandbox::{
   SANDBOX_WORLD_ID, build_showcase_world, showcase_extract_config,
 };
+use utility::diagnostics::DiagnosticsPolicy;
 use utility::domain::{CellId, FieldKey, FieldName, MeshKey};
 
 fn all_finite_scalar(
@@ -83,6 +84,37 @@ fn showcase_world_is_stable_over_many_steps() {
     MeshKey::ATMOSPHERE,
     FieldName::Humidity
   ));
+}
+
+/// The showcase enables the in-DAG conservation monitor, so after stepping the
+/// world publishes a health report (what the demo runner prints periodically):
+/// a finite-state, finite-conserved-totals report for the atmosphere Euler
+/// state under the default Warn policy.
+#[test]
+fn showcase_world_publishes_runtime_diagnostics() {
+  let (mut aether, _layout) = build_showcase_world().unwrap();
+  for _ in 0..5 {
+    aether.step(20.0).unwrap();
+  }
+
+  let world = aether.world(SANDBOX_WORLD_ID).unwrap();
+  let diagnostics = world
+    .diagnostics()
+    .expect("showcase world registers the Diagnostics resource");
+  assert_eq!(diagnostics.policy, DiagnosticsPolicy::Warn);
+  assert!(
+    !diagnostics.has_non_finite(),
+    "stable showcase has no NaN/Inf"
+  );
+
+  let euler_state = FieldKey::new(MeshKey::ATMOSPHERE, FieldName::EulerState);
+  let report = diagnostics
+    .fields
+    .get(&euler_state)
+    .expect("monitor published the atmosphere Euler-state report");
+  assert_eq!(report.non_finite_cells, 0);
+  assert_eq!(report.conserved.len(), 6);
+  assert!(report.conserved.iter().all(|(_, total)| total.is_finite()));
 }
 
 /// The render config gives a consumer the art-free terrain data it needs: a

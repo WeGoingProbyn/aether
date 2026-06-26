@@ -26,9 +26,8 @@ fn integrates_each_conserved_component_with_volume_weighting() {
     .map(|i| mesh.cell_volume(CellId::from(i)))
     .sum();
 
-  let law = Euler3D::new(1.4);
   let totals: std::collections::HashMap<&'static str, f64> =
-    integrate_conserved(&law, &mesh, &field)
+    integrate_conserved::<5, _, _, Euler3D>(&mesh, &field)
       .into_iter()
       .collect();
 
@@ -58,11 +57,11 @@ fn returns_totals_in_declared_order() {
   let n_cells = mesh.cell_count();
   let field = SoaField::<5>::from_fn(n_cells, |_| [1.0, 0.0, 0.0, 0.0, 0.0]);
 
-  let law = Euler3D::new(1.4);
-  let totals: Vec<&'static str> = integrate_conserved(&law, &mesh, &field)
-    .into_iter()
-    .map(|(name, _)| name)
-    .collect();
+  let totals: Vec<&'static str> =
+    integrate_conserved::<5, _, _, Euler3D>(&mesh, &field)
+      .into_iter()
+      .map(|(name, _)| name)
+      .collect();
   assert_eq!(
     totals,
     vec![

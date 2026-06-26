@@ -128,6 +128,25 @@ fn main() -> AetherResult<()> {
         world.game_clock(),
         sim_time
       );
+      // Runtime health: per-field non-finite count, conservation drift, and the
+      // volume-integrated conserved totals published by the in-DAG monitor.
+      if let Some(diagnostics) = world.diagnostics() {
+        for (field, report) in &diagnostics.fields {
+          let conserved: Vec<String> = report
+            .conserved
+            .iter()
+            .map(|(name, total)| format!("{name}={total:.3e}"))
+            .collect();
+          info!(
+            "diagnostics {:?} [{:?}]: {} non-finite, drift {:.2e} | {}",
+            field,
+            diagnostics.policy,
+            report.non_finite_cells,
+            report.max_relative_drift,
+            conserved.join(" ")
+          );
+        }
+      }
     }
     let batch = producer.extract(
       SANDBOX_WORLD_ID,
