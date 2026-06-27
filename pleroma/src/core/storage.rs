@@ -1,10 +1,15 @@
 // Copyright 2026 William Probyn
 // SPDX-License-Identifier: Apache-2.0
 
+use std::any::Any;
+
 use tessera::{mesh::Mesh, partition::PartitionMesh};
 use utility::serial::deserialize::{Deserialize, Deserializer};
 use utility::serial::serialize::{Serialize, Serializer};
-use utility::{domain::CellId, profile};
+use utility::{
+  domain::{CellId, CellRemap, NewCellSource},
+  profile,
+};
 
 pub trait FieldStorage<const N: usize>: Send + Sync {
   type CellView<'a>: CellView<N>
@@ -29,6 +34,37 @@ pub trait FieldStorage<const N: usize>: Send + Sync {
   fn axpy(&mut self, alpha: f64, other: &Self);
   fn weighted_sum(&mut self, a: f64, x: &Self, b: f64, y: &Self);
   fn clone_state(&self) -> Self;
+
+  /// Produce new-length storage for a topology adapt described by `remap`. Each
+  /// new cell draws its value from its [`NewCellSource`]:
+  /// [`Survivor`](NewCellSource::Survivor) / [`Child`](NewCellSource::Child) copy
+  /// the old cell's value (piecewise-constant *prolongation*, conservative for
+  /// cell-averaged states), and [`Merge`](NewCellSource::Merge) volume-averages
+  /// its children using `old_volumes` (*restriction*). `old_volumes[i]` is the
+  /// volume of old [`CellId`] `i` (length = `remap.old_count()`).
+  fn remap(&self, remap: &CellRemap, old_volumes: &[f64]) -> Self
+  where
+    Self: Sized;
+}
+
+/// Volume-weighted mean of `children`'s component `c`, used for the
+/// [`NewCellSource::Merge`] (coarsening) case. Falls back to a plain copy if the
+/// total volume is non-positive (degenerate / zero-volume cells).
+fn restrict_component(
+  children: &[CellId],
+  old_volumes: &[f64],
+  value_of: impl Fn(CellId) -> f64,
+) -> f64 {
+  let total: f64 = children.iter().map(|c| old_volumes[c.index()]).sum();
+  if total > 0.0 {
+    children
+      .iter()
+      .map(|c| value_of(*c) * old_volumes[c.index()])
+      .sum::<f64>()
+      / total
+  } else {
+    children.first().map(|c| value_of(*c)).unwrap_or(0.0)
+  }
 }
 
 pub trait CellView<const N: usize> {
@@ -121,6 +157,27 @@ impl<const N: usize> FieldStorage<N> for SoaField<N> {
     SoaField {
       state: std::array::from_fn(|i| self.state[i].clone()),
     }
+  }
+
+  fn remap(&self, remap: &CellRemap, old_volumes: &[f64]) -> Self {
+    let new_count = remap.new_count();
+    let state: [Vec<f64>; N] = std::array::from_fn(|c| {
+      remap
+        .new_sources()
+        .iter()
+        .map(|src| match src {
+          NewCellSource::Survivor(old)
+          | NewCellSource::Child { parent: old } => self.state[c][old.index()],
+          NewCellSource::Merge { children } => {
+            restrict_component(children, old_volumes, |ch| {
+              self.state[c][ch.index()]
+            })
+          }
+        })
+        .collect()
+    });
+    debug_assert!(state.iter().all(|v| v.len() == new_count));
+    SoaField { state }
   }
 }
 
@@ -230,6 +287,15 @@ impl<const N: usize> FieldStorage<N> for LocalPartitionField<N> {
   #[profile]
   fn clone_state(&self) -> Self {
     self.clone()
+  }
+
+  fn remap(&self, _remap: &CellRemap, _old_volumes: &[f64]) -> Self {
+    // A `CellRemap` is in *global* CellId space; a partition-local field is in
+    // local (owned + ghost) space and is a transient solver buffer that is never
+    // registered in the field registry, so it is never the target of a topology
+    // remap. Adapt happens on the global fields, after which partition buffers are
+    // re-gathered from scratch.
+    unreachable!("partition-local fields are not globally remapped");
   }
 }
 
@@ -390,6 +456,24 @@ impl<const N: usize> FieldStorage<N> for AosField<N> {
       state: self.state.clone(),
     }
   }
+
+  fn remap(&self, remap: &CellRemap, old_volumes: &[f64]) -> Self {
+    let state: Vec<[f64; N]> = remap
+      .new_sources()
+      .iter()
+      .map(|src| match src {
+        NewCellSource::Survivor(old) | NewCellSource::Child { parent: old } => {
+          self.state[old.index()]
+        }
+        NewCellSource::Merge { children } => std::array::from_fn(|c| {
+          restrict_component(children, old_volumes, |ch| {
+            self.state[ch.index()][c]
+          })
+        }),
+      })
+      .collect();
+    AosField { state }
+  }
 }
 
 impl<const N: usize> AosField<N> {
@@ -422,6 +506,24 @@ impl<const N: usize> Deserialize for AosField<N> {
   }
 }
 
+/// Build the type-erased remapper for a registered field storage type, captured
+/// at `register_field` where `N` and `S` are statically known. Mirrors
+/// [`crate::core::checkpoint::field_codec`]: the returned fn pointer downcasts
+/// the type-erased field, runs [`FieldStorage::remap`], and re-boxes the new
+/// (resized) storage so the slot can swap it in.
+pub(crate) fn field_remapper<const N: usize, S>()
+-> fn(&dyn Any, &CellRemap, &[f64]) -> Box<dyn Any + Send + Sync>
+where
+  S: FieldStorage<N> + 'static,
+{
+  |any, remap, old_volumes| {
+    let field = any
+      .downcast_ref::<S>()
+      .expect("field remapper type mismatch");
+    Box::new(field.remap(remap, old_volumes))
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use std::sync::Arc;
@@ -432,6 +534,126 @@ mod tests {
   };
 
   use super::*;
+  use utility::domain::TopologyEpoch;
+
+  #[test]
+  fn remap_prolongs_children_and_grows_length() {
+    // Old cell 0 refines into 4 children (new 0..3); old cells 1,2 survive.
+    let old = SoaField::<2>::from_fn(3, |c| {
+      let i = c.index() as f64;
+      [10.0 + i, 100.0 + i]
+    });
+    let remap = CellRemap::new(
+      TopologyEpoch::ZERO,
+      TopologyEpoch::ZERO.next(),
+      vec![None, Some(CellId::from(4)), Some(CellId::from(5))],
+      vec![
+        NewCellSource::Child {
+          parent: CellId::from(0),
+        },
+        NewCellSource::Child {
+          parent: CellId::from(0),
+        },
+        NewCellSource::Child {
+          parent: CellId::from(0),
+        },
+        NewCellSource::Child {
+          parent: CellId::from(0),
+        },
+        NewCellSource::Survivor(CellId::from(1)),
+        NewCellSource::Survivor(CellId::from(2)),
+      ],
+    );
+    // Volumes irrelevant to prolongation; any length-3 slice works.
+    let new = old.remap(&remap, &[1.0, 1.0, 1.0]);
+
+    assert_eq!(new.len(), 6, "length grows from 3 to 6");
+    // Every child inherits the parent (old cell 0) value.
+    for child in 0..4 {
+      assert_eq!(new.state(CellId::from(child)), [10.0, 100.0]);
+    }
+    // Survivors carry their old value across.
+    assert_eq!(new.state(CellId::from(4)), [11.0, 101.0]);
+    assert_eq!(new.state(CellId::from(5)), [12.0, 102.0]);
+  }
+
+  #[test]
+  fn remap_conserves_cell_integral_across_prolong_and_restrict() {
+    // Old: 3 cells. Refine cell 0 into 2 children; merge cells 1,2 into one.
+    let old = SoaField::<2>::from_fn(3, |c| match c.index() {
+      0 => [10.0, 1.0],
+      1 => [20.0, 2.0],
+      _ => [30.0, 3.0],
+    });
+    let old_volumes = [2.0, 3.0, 5.0];
+    let remap = CellRemap::new(
+      TopologyEpoch::ZERO,
+      TopologyEpoch::ZERO.next(),
+      vec![None, Some(CellId::from(2)), Some(CellId::from(2))],
+      vec![
+        NewCellSource::Child {
+          parent: CellId::from(0),
+        },
+        NewCellSource::Child {
+          parent: CellId::from(0),
+        },
+        NewCellSource::Merge {
+          children: vec![CellId::from(1), CellId::from(2)],
+        },
+      ],
+    );
+    let new = old.remap(&remap, &old_volumes);
+
+    // Children inherit the parent; the merge is the volume-weighted mean.
+    assert_eq!(new.state(CellId::from(0)), [10.0, 1.0]);
+    assert_eq!(new.state(CellId::from(1)), [10.0, 1.0]);
+    let merged = new.state(CellId::from(2));
+    assert!((merged[0] - (20.0 * 3.0 + 30.0 * 5.0) / 8.0).abs() < 1e-12);
+    assert!((merged[1] - (2.0 * 3.0 + 3.0 * 5.0) / 8.0).abs() < 1e-12);
+
+    // The two refinement children tile the parent's volume; the merge cell's
+    // volume is the sum of its children — so the cell-integral (Σ value·volume)
+    // is conserved component-wise.
+    let new_volumes = [1.0, 1.0, 8.0];
+    for comp in 0..2 {
+      let old_integral: f64 = (0..3)
+        .map(|i| old.state(CellId::from(i))[comp] * old_volumes[i])
+        .sum();
+      let new_integral: f64 = (0..3)
+        .map(|i| new.state(CellId::from(i))[comp] * new_volumes[i])
+        .sum();
+      assert!(
+        (old_integral - new_integral).abs() < 1e-9,
+        "component {comp} not conserved: {old_integral} vs {new_integral}"
+      );
+    }
+  }
+
+  #[test]
+  fn aos_remap_matches_soa_remap() {
+    let remap = CellRemap::new(
+      TopologyEpoch::ZERO,
+      TopologyEpoch::ZERO.next(),
+      vec![Some(CellId::from(0)), None, None],
+      vec![
+        NewCellSource::Survivor(CellId::from(0)),
+        NewCellSource::Merge {
+          children: vec![CellId::from(1), CellId::from(2)],
+        },
+      ],
+    );
+    let vols = [1.0, 1.0, 3.0];
+    let soa = SoaField::<1>::from_fn(3, |c| [c.index() as f64 + 1.0]);
+    let aos = AosField::<1>::from_fn(3, |c| [c.index() as f64 + 1.0]);
+    let soa_new = soa.remap(&remap, &vols);
+    let aos_new = aos.remap(&remap, &vols);
+    for i in 0..soa_new.len() {
+      assert_eq!(
+        soa_new.state(CellId::from(i)).as_state(),
+        aos_new.state(CellId::from(i))
+      );
+    }
+  }
 
   fn test_decomposition()
   -> tessera::partition::Decomposition<3, StructuredBlock<3>> {

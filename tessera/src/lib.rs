@@ -8,6 +8,7 @@
 //! See `tessera/docs/overview.md` for the module map and the curvilinear-metric
 //! gotcha.
 
+pub mod adaptive;
 pub mod coupling;
 pub mod cube_sphere;
 pub mod geo;
@@ -16,6 +17,8 @@ pub mod mask;
 pub mod mesh;
 pub mod partition;
 pub mod radial_stack;
+pub mod refine;
+pub mod refine_forest;
 pub mod spatial;
 pub mod topology;
 pub mod world_mesh;

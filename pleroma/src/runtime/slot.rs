@@ -13,7 +13,7 @@ use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
-use utility::domain::{FieldKey, ResourceKey};
+use utility::domain::{CellRemap, FieldKey, ResourceKey};
 use utility::error::AetherResult;
 
 /// Type-erased checkpoint codec for one slot, captured at register time when the
@@ -38,6 +38,12 @@ pub(crate) struct FieldSlot {
   /// Every field is checkpointable (the hard invariant enforced by the
   /// `Serialize + Deserialize` bound on `register_field`).
   pub(crate) codec: SlotCodec,
+  /// Type-erased resize/remap for a topology adapt, captured at register time.
+  /// Builds new-length storage from a [`CellRemap`] (prolong children / restrict
+  /// merges); the registry swaps the result into `data`. See
+  /// `core::storage::field_remapper`.
+  pub(crate) remapper:
+    fn(&dyn Any, &CellRemap, &[f64]) -> Box<dyn Any + Send + Sync>,
 }
 
 // SAFETY: the schedule layer guarantees that any concurrent access to a

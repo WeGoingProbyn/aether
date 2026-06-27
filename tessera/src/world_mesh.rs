@@ -3,7 +3,7 @@
 
 use std::{any::Any, collections::HashMap, sync::Arc};
 
-use utility::domain::MeshKey;
+use utility::domain::{MeshKey, TopologyEpoch};
 use utility::error::{AetherError, AetherResult};
 
 use crate::{
@@ -114,6 +114,10 @@ pub struct Tessera {
   /// Per-mesh cell-activity masks (which cells are really part of the domain).
   /// Built at setup alongside couplers; absent ⇒ all cells active.
   masks: HashMap<MeshKey, CellMask>,
+  /// Per-mesh topology version. Bumped once each time a mesh is adapted
+  /// (refined / coarsened); absent ⇒ [`TopologyEpoch::ZERO`] (an unadapted base
+  /// mesh). Consumers read this to detect that a mesh's `CellId` space changed.
+  epochs: HashMap<MeshKey, TopologyEpoch>,
 }
 
 impl Tessera {
@@ -142,6 +146,21 @@ impl Tessera {
 
   pub fn meshes(&self) -> impl Iterator<Item = (MeshKey, &Arc<dyn Mesh<3>>)> {
     self.meshes.iter().map(|(&key, entry)| (key, &entry.mesh))
+  }
+
+  /// The current topology epoch of `mesh` ([`TopologyEpoch::ZERO`] for an
+  /// unadapted base mesh, or one never registered).
+  pub fn topology_epoch(&self, mesh: MeshKey) -> TopologyEpoch {
+    self
+      .epochs
+      .get(&mesh)
+      .copied()
+      .unwrap_or(TopologyEpoch::ZERO)
+  }
+
+  /// Record a mesh's topology epoch (set by the adapt barrier after a re-mesh).
+  pub fn set_topology_epoch(&mut self, mesh: MeshKey, epoch: TopologyEpoch) {
+    self.epochs.insert(mesh, epoch);
   }
 
   /// Store a [`CellMask`] for `mesh`, replacing any previous one.

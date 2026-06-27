@@ -57,8 +57,37 @@ impl Pleroma {
         type_id: TypeId::of::<S>(),
         cell_count,
         codec: checkpoint::field_codec::<N, S>(),
+        remapper: crate::core::storage::field_remapper::<N, S>(),
       },
     );
+  }
+
+  /// Remap every field on `mesh` across a topology adapt, in place. For each such
+  /// field the captured remapper builds new-length storage from `remap` (children
+  /// prolong from their parent, merges restrict by volume), then it is swapped in
+  /// and the slot's `cell_count` updated to `remap.new_count()`. `old_volumes` is
+  /// the pre-adapt per-cell volume of `mesh`, indexed by old [`CellId`], needed
+  /// for the conservative coarsening average. Fields on other meshes are
+  /// untouched.
+  ///
+  /// Swap-to-new: each field's old buffer stays live until its replacement is
+  /// built, so a remap never leaves a field half-resized. Call at the end-of-tick
+  /// adapt barrier, never mid-DAG.
+  pub fn remap_mesh_fields(
+    &mut self,
+    mesh: utility::domain::MeshKey,
+    remap: &utility::domain::CellRemap,
+    old_volumes: &[f64],
+  ) {
+    for (key, slot) in self.fields.iter_mut() {
+      if key.mesh() != mesh {
+        continue;
+      }
+      let boxed = slot.data.get_mut();
+      let new_box = (slot.remapper)(boxed.as_ref(), remap, old_volumes);
+      *boxed = new_box;
+      slot.cell_count = remap.new_count();
+    }
   }
 
   /// Register a non-mesh-bound resource (e.g. orbital body state, sun
@@ -282,5 +311,63 @@ impl Pleroma {
     }
 
     Ok(())
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use utility::domain::{
+    CellId, CellRemap, FieldName, MeshKey, NewCellSource, TopologyEpoch,
+  };
+
+  use super::*;
+  use crate::core::storage::{FieldStorage, SoaField};
+
+  #[test]
+  fn remap_mesh_fields_resizes_and_remaps_only_the_target_mesh() {
+    let atmos = FieldKey::new(MeshKey::ATMOSPHERE, FieldName::Temperature);
+    let ocean = FieldKey::new(MeshKey::OCEAN, FieldName::Temperature);
+
+    let mut pleroma = Pleroma::new();
+    // Atmosphere: 3 cells; ocean: 3 cells (must be left untouched).
+    pleroma.register_field(
+      atmos,
+      SoaField::<1>::from_fn(3, |c| [10.0 + c.index() as f64]),
+    );
+    pleroma.register_field(ocean, SoaField::<1>::from_fn(3, |_| [99.0]));
+
+    // Refine atmosphere cell 0 into two children; merge cells 1,2.
+    let remap = CellRemap::new(
+      TopologyEpoch::ZERO,
+      TopologyEpoch::ZERO.next(),
+      vec![None, Some(CellId::from(2)), Some(CellId::from(2))],
+      vec![
+        NewCellSource::Child {
+          parent: CellId::from(0),
+        },
+        NewCellSource::Child {
+          parent: CellId::from(0),
+        },
+        NewCellSource::Merge {
+          children: vec![CellId::from(1), CellId::from(2)],
+        },
+      ],
+    );
+    pleroma.remap_mesh_fields(MeshKey::ATMOSPHERE, &remap, &[1.0, 1.0, 1.0]);
+
+    // Atmosphere field swapped to the new length with prolonged children.
+    assert_eq!(pleroma.cell_count(atmos), Some(3));
+    let atmos_field: &SoaField<1> = pleroma.read(atmos).unwrap();
+    assert_eq!(atmos_field.state(CellId::from(0)), [10.0]);
+    assert_eq!(atmos_field.state(CellId::from(1)), [10.0]);
+    // Equal volumes ⇒ merge is the plain mean of cells 1,2: (11 + 12) / 2.
+    assert!((atmos_field.state(CellId::from(2))[0] - 11.5).abs() < 1e-12);
+
+    // Ocean field is on another mesh: untouched.
+    assert_eq!(pleroma.cell_count(ocean), Some(3));
+    let ocean_field: &SoaField<1> = pleroma.read(ocean).unwrap();
+    for i in 0..3 {
+      assert_eq!(ocean_field.state(CellId::from(i)), [99.0]);
+    }
   }
 }

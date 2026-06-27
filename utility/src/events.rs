@@ -27,9 +27,9 @@
 //!   one tick; the [`emit`](EventBus::emit)/[`publish`](EventBus::publish) API is
 //!   the seam, so the internal structure can change without touching callers.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use crate::domain::FieldKey;
+use crate::domain::{CellRemap, FieldKey, MeshKey, TopologyEpoch};
 
 /// A time-advance regime, as a dependency-free vocabulary value. Mirrors the
 /// `chronos::Regime` states without `utility` depending on `chronos`; the runtime
@@ -56,6 +56,17 @@ pub enum Event {
   TransitionStarted { to: RegimeKind },
   /// A live↔climatology handoff completed, settling into `to`.
   TransitionCompleted { to: RegimeKind },
+  /// A mesh's topology was adapted (refined / coarsened) at the end-of-tick
+  /// barrier. Carries the new [`TopologyEpoch`] and the old→new [`CellRemap`], so
+  /// consumers (the query index, the render producer, checkpointing) can rebuild
+  /// or re-initialise against the new dense `CellId` space. The remap is shared
+  /// (`Arc`) so publishing and cloning the batch stays cheap even when the mesh
+  /// is large.
+  TopologyChanged {
+    mesh: MeshKey,
+    epoch: TopologyEpoch,
+    remap: Arc<CellRemap>,
+  },
 }
 
 /// The event channel held as a pleroma resource. Double-buffered: stages emit

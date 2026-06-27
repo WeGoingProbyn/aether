@@ -958,3 +958,56 @@ impl Topology for CubeSphere {
     Box::new(self.boundary_face_lists.iter().map(|(t, _)| *t))
   }
 }
+
+impl crate::adaptive::Subdividable for CubeSphere {
+  fn refine_fanout(&self) -> usize {
+    // Angular quad-split; the radial axis is preserved in v1.
+    4
+  }
+
+  fn refine_uniform_once(
+    &self,
+    old_epoch: utility::domain::TopologyEpoch,
+    new_epoch: utility::domain::TopologyEpoch,
+  ) -> utility::error::AetherResult<(
+    std::sync::Arc<dyn crate::adaptive::Subdividable>,
+    utility::domain::CellRemap,
+  )> {
+    use utility::domain::{CellRemap, NewCellSource};
+
+    // Double the angular resolution, keep the radial edges. The angular axes are
+    // equal by construction (`shell` asserts it), so one factor suffices.
+    let n = self.dims[0];
+    let nr = self.dims[2];
+    let nn = 2 * n;
+    let finer =
+      CubeSphere::with_radial_edges([nn, nn], self.axis_edges[2].clone());
+
+    // Index arithmetic only — no geometry needed. Old cell (panel, i, j, k) over
+    // [n, n, nr] is replaced by its four children (2i+{0,1}, 2j+{0,1}, k) over
+    // [2n, 2n, nr]; radial layer k is unchanged. CubeSphere cell ordering is
+    // `panel * cells_per_panel + (i + j*dim0 + k*dim0*dim1)`.
+    let old_cpp = n * n * nr;
+    let new_cpp = nn * nn * nr;
+    let new_count = 6 * new_cpp;
+
+    let new_sources: Vec<NewCellSource> = (0..new_count)
+      .map(|g| {
+        let panel = g / new_cpp;
+        let loc = g % new_cpp;
+        let ci = loc % nn;
+        let cj = (loc / nn) % nn;
+        let k = loc / (nn * nn);
+        let parent_loc = (ci / 2) + (cj / 2) * n + k * (n * n);
+        NewCellSource::Child {
+          parent: CellId::from(panel * old_cpp + parent_loc),
+        }
+      })
+      .collect();
+
+    // Every old cell is subdivided away: it has no single new image.
+    let old_to_new = vec![None; 6 * old_cpp];
+    let remap = CellRemap::new(old_epoch, new_epoch, old_to_new, new_sources);
+    Ok((std::sync::Arc::new(finer), remap))
+  }
+}

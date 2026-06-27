@@ -53,6 +53,166 @@ impl From<usize> for FaceId {
   }
 }
 
+/// Monotonic version stamp for a mesh's topology. Bumped once each time the mesh
+/// is adapted (refined / coarsened), so a consumer can tell that the dense
+/// [`CellId`] space has changed underneath it. Base meshes start at
+/// [`TopologyEpoch::ZERO`]. The keystone of the AMR identity contract: dense
+/// `CellId` stays the hot-path key, and the epoch (plus a [`CellRemap`]) is how
+/// everyone else detects and survives a re-mesh.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub struct TopologyEpoch(pub u64);
+
+impl TopologyEpoch {
+  pub const ZERO: TopologyEpoch = TopologyEpoch(0);
+
+  /// The next epoch after this one.
+  pub fn next(self) -> Self {
+    TopologyEpoch(self.0 + 1)
+  }
+}
+
+/// Where a cell in the *new* (post-adapt) mesh draws its initial state from when
+/// fields are remapped across a topology change. The variant selects the
+/// state-transfer rule, so a single per-new-cell value drives the whole remap:
+///
+/// - [`Survivor`](NewCellSource::Survivor): unchanged cell — copy the old value.
+/// - [`Child`](NewCellSource::Child): a freshly-created refinement child —
+///   *prolong* by inheriting the parent's value (piecewise-constant, which is
+///   conservative for cell-averaged states).
+/// - [`Merge`](NewCellSource::Merge): a coarsened cell replacing several old
+///   children — *restrict* by volume-averaging the children.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NewCellSource {
+  Survivor(CellId),
+  Child { parent: CellId },
+  Merge { children: Vec<CellId> },
+}
+
+/// The old↔new [`CellId`] correspondence produced by one mesh adapt, encoding
+/// **birth and death explicitly in both directions** so consumers can both
+/// follow surviving cells and correctly initialise new ones:
+///
+/// - `old → new` ([`image_of`](CellRemap::image_of)): `None` ⇒ the old cell
+///   *died* (it was refined or merged away and has no single image).
+/// - `new → source` ([`source_of`](CellRemap::source_of)): a [`NewCellSource`]
+///   that is also the field-remap rule and answers "where did this new cell come
+///   from" (a survivor has an old self; a child/merge does not).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CellRemap {
+  old_epoch: TopologyEpoch,
+  new_epoch: TopologyEpoch,
+  old_to_new: Vec<Option<CellId>>,
+  new_sources: Vec<NewCellSource>,
+}
+
+impl CellRemap {
+  /// Build a remap. `old_to_new` is indexed by old [`CellId`] (length = old cell
+  /// count); `new_sources` is indexed by new [`CellId`] (length = new cell
+  /// count). Debug builds assert the two directions reference in-range ids.
+  pub fn new(
+    old_epoch: TopologyEpoch,
+    new_epoch: TopologyEpoch,
+    old_to_new: Vec<Option<CellId>>,
+    new_sources: Vec<NewCellSource>,
+  ) -> Self {
+    let old_count = old_to_new.len();
+    let new_count = new_sources.len();
+    if cfg!(debug_assertions) {
+      for image in old_to_new.iter().flatten() {
+        debug_assert!(image.index() < new_count, "remap image out of range");
+      }
+      for src in &new_sources {
+        match src {
+          NewCellSource::Survivor(c) | NewCellSource::Child { parent: c } => {
+            debug_assert!(c.index() < old_count, "remap source out of range");
+          }
+          NewCellSource::Merge { children } => {
+            for c in children {
+              debug_assert!(
+                c.index() < old_count,
+                "remap merge child out of range"
+              );
+            }
+          }
+        }
+      }
+    }
+    Self {
+      old_epoch,
+      new_epoch,
+      old_to_new,
+      new_sources,
+    }
+  }
+
+  /// An identity remap of `count` cells: every cell survives to itself and the
+  /// epoch is unchanged. The verified no-op used as the "no adaptation" case.
+  pub fn identity(epoch: TopologyEpoch, count: usize) -> Self {
+    Self {
+      old_epoch: epoch,
+      new_epoch: epoch,
+      old_to_new: (0..count).map(|i| Some(CellId::from(i))).collect(),
+      new_sources: (0..count)
+        .map(|i| NewCellSource::Survivor(CellId::from(i)))
+        .collect(),
+    }
+  }
+
+  pub fn old_epoch(&self) -> TopologyEpoch {
+    self.old_epoch
+  }
+
+  pub fn new_epoch(&self) -> TopologyEpoch {
+    self.new_epoch
+  }
+
+  pub fn old_count(&self) -> usize {
+    self.old_to_new.len()
+  }
+
+  pub fn new_count(&self) -> usize {
+    self.new_sources.len()
+  }
+
+  /// The new-mesh image of an old cell, or `None` if it died.
+  pub fn image_of(&self, old: CellId) -> Option<CellId> {
+    self.old_to_new.get(old.index()).copied().flatten()
+  }
+
+  /// The source rule for a new cell (panics if out of range — a new cell id must
+  /// be valid for this remap).
+  pub fn source_of(&self, new: CellId) -> &NewCellSource {
+    &self.new_sources[new.index()]
+  }
+
+  /// Whether a new cell has no single old self (a refinement child or a merge),
+  /// so consumers know it needs initialising rather than carrying over.
+  pub fn is_newborn(&self, new: CellId) -> bool {
+    !matches!(self.source_of(new), NewCellSource::Survivor(_))
+  }
+
+  /// Old cells that died (no new image).
+  pub fn died(&self) -> impl Iterator<Item = CellId> + '_ {
+    self
+      .old_to_new
+      .iter()
+      .enumerate()
+      .filter_map(|(i, image)| image.is_none().then(|| CellId::from(i)))
+  }
+
+  /// New cells that were born this adapt (children / merges).
+  pub fn born(&self) -> impl Iterator<Item = CellId> + '_ {
+    self.new_sources.iter().enumerate().filter_map(|(i, src)| {
+      (!matches!(src, NewCellSource::Survivor(_))).then(|| CellId::from(i))
+    })
+  }
+
+  /// The per-new-cell source rules, in new-[`CellId`] order.
+  pub fn new_sources(&self) -> &[NewCellSource] {
+    &self.new_sources
+  }
+}
+
 pub type Point<const D: usize> = Vector<f64, D>;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
