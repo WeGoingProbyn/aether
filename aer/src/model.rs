@@ -24,6 +24,18 @@ use crate::{
 struct ConservationMonitorConfig {
   drift_threshold: f64,
   warmup_ticks: u64,
+  /// Broadcast `NonFiniteState` / `ConservationDrift` onto the runtime event bus.
+  emit_events: bool,
+}
+
+impl Default for ConservationMonitorConfig {
+  fn default() -> Self {
+    Self {
+      drift_threshold: DEFAULT_DRIFT_THRESHOLD,
+      warmup_ticks: 1,
+      emit_events: false,
+    }
+  }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -116,24 +128,26 @@ impl AtmosphereModel {
   ///
   /// [`DiagnosticsPolicy`]: utility::diagnostics::DiagnosticsPolicy
   pub fn with_conservation_monitor(mut self, drift_threshold: f64) -> Self {
-    self.conservation_monitor = Some(ConservationMonitorConfig {
-      drift_threshold,
-      warmup_ticks: 1,
-    });
+    let config = self.conservation_monitor.get_or_insert_default();
+    config.drift_threshold = drift_threshold;
     self
   }
 
   /// Enable the conservation monitor (if not already) and set how many ticks to
   /// skip before capturing the conservation baseline.
   pub fn with_conservation_monitor_warmup(mut self, warmup_ticks: u64) -> Self {
-    let config =
-      self
-        .conservation_monitor
-        .get_or_insert(ConservationMonitorConfig {
-          drift_threshold: DEFAULT_DRIFT_THRESHOLD,
-          warmup_ticks,
-        });
+    let config = self.conservation_monitor.get_or_insert_default();
     config.warmup_ticks = warmup_ticks;
+    self
+  }
+
+  /// Enable the conservation monitor (if not already) and have it broadcast
+  /// `NonFiniteState` / `ConservationDrift` events onto the runtime event bus, so
+  /// consumers can poll `World::events()` and react. Requires the world to
+  /// register the `Events` resource (the `WorldFactory` always does).
+  pub fn with_conservation_monitor_events(mut self) -> Self {
+    let config = self.conservation_monitor.get_or_insert_default();
+    config.emit_events = true;
     self
   }
 
@@ -284,11 +298,14 @@ impl AtmosphereModel {
     // both Euler-state writers (`tendency_to_energy`, `dynamics`) and it sees
     // the post-step state.
     let conservation_monitor = self.conservation_monitor.map(|config| {
-      nexus.add(
+      let mut monitor =
         AtmosphereConservationMonitor::new(self.mesh, self.fields.euler_state)
           .with_drift_threshold(config.drift_threshold)
-          .with_warmup_ticks(config.warmup_ticks),
-      )
+          .with_warmup_ticks(config.warmup_ticks);
+      if config.emit_events {
+        monitor = monitor.with_event_emission();
+      }
+      nexus.add(monitor)
     });
 
     Ok(AtmosphereStageIds {

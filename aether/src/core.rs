@@ -14,6 +14,7 @@ use utility::{
   diagnostics::{DiagnosticsPolicy, WorldDiagnostics},
   domain::SystemId,
   error::{AetherError, AetherResult, ErrorDomain},
+  events::{Event, EventBus, RegimeKind},
   profile,
   serial::deserialize::Deserialize,
   serial::json::{JsonDeserializer, JsonSerializer},
@@ -118,6 +119,23 @@ fn regime_code(regime: Regime) -> u32 {
   match regime {
     Regime::Live => 0,
     Regime::Climatology => 1,
+  }
+}
+
+/// Map the chronos advance regime onto the dependency-free event vocabulary, so
+/// `utility::events` need not depend on `chronos`.
+fn regime_kind(regime: Regime) -> RegimeKind {
+  match regime {
+    Regime::Live => RegimeKind::Live,
+    Regime::Climatology => RegimeKind::Climatology,
+  }
+}
+
+/// The settled regime a transition is heading toward.
+fn transition_target(kind: TransitionKind) -> RegimeKind {
+  match kind {
+    TransitionKind::ClimatologyToLive => RegimeKind::Live,
+    TransitionKind::LiveToClimatology => RegimeKind::Climatology,
   }
 }
 
@@ -259,6 +277,40 @@ impl World {
     }
   }
 
+  /// The events published at the last end-of-tick barrier — the broadcast batch
+  /// a consumer polls (mirrors [`World::diagnostics`]). Within a tick these are an
+  /// unordered set (see `utility::events`); empty if the world has no `Events`
+  /// resource. Stages read the same batch via the `Events` resource.
+  pub fn events(&self) -> &[Event] {
+    self
+      .pleroma
+      .read_resource::<EventBus>(ResourceKey::Events)
+      .map(EventBus::published)
+      .unwrap_or(&[])
+  }
+
+  /// Emit an event into this tick's pending buffer (interior mutability, so a
+  /// `&self` world-level emitter works). A no-op if the world has no `Events`
+  /// resource. The event becomes visible via [`events`](World::events) after the
+  /// next end-of-tick barrier.
+  fn emit_event(&self, event: Event) {
+    if let Some(bus) =
+      self.pleroma.read_resource::<EventBus>(ResourceKey::Events)
+    {
+      bus.emit(event);
+    }
+  }
+
+  /// Rotate the event buffer at the end-of-tick barrier: this tick's pending
+  /// emissions become the published batch. A no-op without an `Events` resource.
+  fn publish_events(&mut self) {
+    if let Some(bus) =
+      self.pleroma.write_resource::<EventBus>(ResourceKey::Events)
+    {
+      bus.publish();
+    }
+  }
+
   /// Whether this world's nexus advances more than one subsystem clock —
   /// i.e. the multirate driver subcycles it and it cannot be fused into the
   /// shared multi-world scheduler graph.
@@ -272,6 +324,12 @@ impl World {
   }
 
   pub fn set_regime(&mut self, regime: Regime) {
+    if regime != self.regime {
+      self.emit_event(Event::RegimeChanged {
+        from: regime_kind(self.regime),
+        to: regime_kind(regime),
+      });
+    }
     self.regime = regime;
   }
 
@@ -310,6 +368,9 @@ impl World {
   /// its relaxation fraction to `ResourceKey::ClimateRegime` so a chronos nudge
   /// stage (if the world has one) blends the live state across the switch.
   pub fn begin_transition(&mut self, transition: TransitionState) {
+    self.emit_event(Event::TransitionStarted {
+      to: transition_target(transition.kind),
+    });
     self.transition = Some(transition);
   }
 
@@ -397,14 +458,16 @@ impl World {
     self.tick(pool, dt)?;
     if let Some(transition) = self.transition.as_mut() {
       if transition.advance(dt) {
+        let settled = transition_target(transition.kind);
         self.transition = None;
+        self.emit_event(Event::TransitionCompleted { to: settled });
       }
     }
     Ok(())
   }
 
   pub fn tick(&mut self, pool: &Pool, dt: f64) -> AetherResult<()> {
-    self.nexus.tick_with_partition_count(
+    let result = self.nexus.tick_with_partition_count(
       self.id,
       &self.tessera,
       &self.constants,
@@ -412,7 +475,14 @@ impl World {
       pool,
       dt,
       self.partition_count,
-    )?;
+    );
+    // Publish the event buffer at the barrier regardless of success, so a stage
+    // that emitted (e.g. a `NonFiniteState` before a `Fail` `Err`) is still
+    // visible via `events()` to a consumer handling the error.
+    self.publish_events();
+    result?;
+    // Clocks only advance on a successful tick (preserving the Fail-freeze
+    // contract from the diagnostics layer).
     self.sim_time += dt;
     self.game_clock += dt;
     Ok(())
@@ -663,15 +733,20 @@ impl Aether {
       }
     }
 
-    pool.execute_scoped(graph)?;
-    // The fused path bypasses `World::tick`, so advance the clocks here to keep
-    // `sim_time` / `game_clock` consistent across both step paths.
+    let result = pool.execute_scoped(graph);
+    // The fused path bypasses `World::tick`, so do its barrier work here: rotate
+    // the event buffer **regardless of success** (so a stage that emitted before a
+    // failing tick is still visible to `events()`), and advance the clocks only on
+    // a successful tick (preserving the Fail-freeze contract).
     for system in self.systems.values_mut() {
       for world in system.worlds_mut() {
-        world.advance_clocks(dt);
+        world.publish_events();
+        if result.is_ok() {
+          world.advance_clocks(dt);
+        }
       }
     }
-    Ok(())
+    result
   }
 
   /// Advance game-time by `game_dt`, honouring each world's [`Regime`]. Live

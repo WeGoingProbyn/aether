@@ -100,3 +100,7 @@ showcase needs them:
   a consumer style-sheet, so the IR carries information and the consumer owns art.
 - **Determinism guarantees** — beyond save/load: reproducible parallel reduction
   order for bit-exact replay.
+- **Event-bus hardening** — the step-2 `EventBus` ships with a single `Mutex`
+  buffer, no intra-tick ordering, and no volume bound. Future work: lock-free /
+  per-stage emit buffers, a per-tick cap or per-kind dedup policy, and (if a
+  consumer needs it) push-style subscriber callbacks alongside the poll API.

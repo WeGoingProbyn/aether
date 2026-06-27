@@ -22,6 +22,7 @@ use utility::{
   diagnostics::{DiagnosticsPolicy, WorldDiagnostics},
   domain::ResourceKey,
   error::{AetherError, AetherResult, ErrorDomain},
+  events::EventBus,
   serial::deserialize::Deserialize,
   serial::serialize::Serialize,
 };
@@ -304,6 +305,12 @@ impl WorldFactory {
       ResourceKey::Diagnostics,
       WorldDiagnostics::with_policy(self.diagnostics_policy),
     );
+    // Always present so any stage may declare `Events` in `resource_reads` and
+    // emit, and so `World::events()` has a buffer to publish into. Ephemeral —
+    // not checkpointed.
+    self
+      .pleroma
+      .register_resource(ResourceKey::Events, EventBus::default());
     let compiled_nexus = self.nexus.build(&self.pleroma)?;
     let mut world = World::with_body_index(
       self.world_id,

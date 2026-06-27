@@ -185,6 +185,10 @@ pub enum ResourceKey {
   /// read at the `World` level. Also carries the active `DiagnosticsPolicy` so
   /// monitor stages know whether to merely observe, warn, or fail the tick.
   Diagnostics,
+  /// Deferred-dispatch event channel (`EventBus`): in-DAG stages and the `World`
+  /// emit `Event`s during a tick; the buffer is published at the end-of-tick
+  /// barrier and read via `World::events()`. Ephemeral / not checkpointed.
+  Events,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

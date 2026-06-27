@@ -13,6 +13,7 @@ pub mod constants;
 pub mod diagnostics;
 pub mod domain;
 pub mod error;
+pub mod events;
 pub mod logger;
 pub mod maths;
 pub mod profiler;

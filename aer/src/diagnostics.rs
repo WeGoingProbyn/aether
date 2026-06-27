@@ -15,6 +15,7 @@ use utility::{
   },
   domain::{CellId, ResourceKey},
   error::{AetherError, AetherResult},
+  events::{Event, EventBus},
 };
 
 use crate::{error::AerError, init::AtmosphereSpec};
@@ -337,6 +338,12 @@ pub struct ConservationMonitorStage<const N: usize, L> {
   drift_threshold: f64,
   reads: [FieldKey; 1],
   resource_writes: [ResourceKey; 1],
+  /// `[Events]` when event emission is enabled, empty otherwise — so a world that
+  /// does not opt in never requires the `Events` resource to exist.
+  resource_reads: Vec<ResourceKey>,
+  /// When set, broadcast `NonFiniteState` / `ConservationDrift` events onto the
+  /// `Events` bus (independent of `DiagnosticsPolicy`).
+  emit_events: bool,
   /// `fn() -> L` so the marker is unconditionally `Send + Sync` regardless of
   /// `L`; the law is only ever used at the type level.
   _law: PhantomData<fn() -> L>,
@@ -358,8 +365,21 @@ where
       drift_threshold: DEFAULT_DRIFT_THRESHOLD,
       reads: [state],
       resource_writes: [ResourceKey::Diagnostics],
+      resource_reads: Vec::new(),
+      emit_events: false,
       _law: PhantomData,
     }
+  }
+
+  /// Broadcast `NonFiniteState` / `ConservationDrift` events onto the runtime
+  /// event bus when this monitor detects them. Independent of the diagnostics
+  /// policy: the event is a soft, pollable signal published whether or not the
+  /// policy also hard-fails the tick. Requires the world to register the `Events`
+  /// resource (the `WorldFactory` always does).
+  pub fn with_event_emission(mut self) -> Self {
+    self.emit_events = true;
+    self.resource_reads = vec![ResourceKey::Events];
+    self
   }
 
   /// Set the relative conservation-drift tolerance.
@@ -395,6 +415,10 @@ where
 
   fn resource_writes(&self) -> &[ResourceKey] {
     &self.resource_writes
+  }
+
+  fn resource_reads(&self) -> &[ResourceKey] {
+    &self.resource_reads
   }
 
   fn run(&mut self, mut ctx: StageContext<'_>) -> AetherResult<()> {
@@ -473,6 +497,25 @@ where
       .resource_mut::<WorldDiagnostics>(ResourceKey::Diagnostics)
     {
       diagnostics.merge_field(self.state, report);
+    }
+
+    // Broadcast soft signals onto the event bus (independent of policy). Emitted
+    // through a shared `&EventBus` (interior mutability), so this runs in parallel
+    // with any other Events reader; published at the end-of-tick barrier.
+    if self.emit_events && (non_finite > 0 || drift_exceeded) {
+      if let Some(bus) =
+        ctx.world.fields.resource::<EventBus>(ResourceKey::Events)
+      {
+        if non_finite > 0 {
+          bus.emit(Event::NonFiniteState { field: self.state });
+        }
+        if drift_exceeded {
+          bus.emit(Event::ConservationDrift {
+            field: self.state,
+            drift: max_relative_drift,
+          });
+        }
+      }
     }
 
     // Enforce the policy. `Fail` only fails on non-finite state (a hard
