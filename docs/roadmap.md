@@ -25,7 +25,7 @@ back a bad tick, and no way to broadcast a state change to anyone but the log.
 The ordering is chosen so each step makes the next one safer or cheaper. Earlier
 steps are smaller and unlock the later ones.
 
-### 1. Persistence — save / load + checkpointing  *(next)*
+### 1. Persistence — save / load + checkpointing  (Done)
 
 A way to snapshot and restore the full mutable world state.
 
@@ -39,7 +39,7 @@ A way to snapshot and restore the full mutable world state.
   JSON/VTK backends already exist. The work is a state-registry round-trip, not
   new infrastructure.
 
-### 2. Event bus — state broadcast
+### 2. Event bus — state broadcast (Done)
 
 A deferred-dispatch event channel so stages can announce state changes and
 consumers (or other stages) can react.
@@ -56,7 +56,7 @@ consumers (or other stages) can react.
   barrier. Anything else reintroduces the global mutable coupling the architecture
   exists to avoid.
 
-### 3. A physics realism increment
+### 3. A physics realism increment (Done)
 
 One self-contained physics step to exercise the new infrastructure on something
 real and keep the reference world advancing. Two candidates, either order:
