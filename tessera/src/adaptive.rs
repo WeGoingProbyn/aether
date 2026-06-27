@@ -52,6 +52,20 @@ pub trait Subdividable: Mesh<3> {
     old_epoch: TopologyEpoch,
     new_epoch: TopologyEpoch,
   ) -> AetherResult<(Arc<dyn Subdividable>, CellRemap)>;
+
+  /// A uniformly-refined copy of this *base* mesh at refinement `levels` (≥ 1).
+  /// The mesh-agnostic geometry oracle: `AdaptiveMesh` builds one of these per
+  /// distinct level present in the forest and reads each leaf's geometry from it
+  /// (via [`leaf_fine_cell`](Subdividable::leaf_fine_cell)), so no per-leaf
+  /// curvilinear maths lives in the wrapper. Must be called on the level-0 base.
+  fn uniform_at_level(&self, levels: u32) -> Arc<dyn Subdividable>;
+
+  /// The cell id, within [`uniform_at_level`](Subdividable::uniform_at_level)`(path.len())`,
+  /// of the leaf reached from base cell `base_cell` by `path` (child indices, the
+  /// quad-split convention: child `k` is angular quadrant `(k & 1, (k >> 1) & 1)`).
+  /// This is the only place the backend's index layout is exposed; the wrapper
+  /// uses it purely to look up geometry.
+  fn leaf_fine_cell(&self, base_cell: CellId, path: &[u8]) -> CellId;
 }
 
 /// A base mesh plus a refinement state, presented to the engine as a plain
@@ -271,6 +285,41 @@ mod tests {
 
     // Every old cell is "refined away": no single new image.
     assert_eq!(remap.died().count(), old_count);
+  }
+
+  #[test]
+  fn leaf_fine_cell_oracle_partitions_the_parent() {
+    // A base cell's four level-1 children (via leaf_fine_cell into the level-1
+    // uniform mesh) must tile it: volumes sum to the parent, centroids cluster.
+    let base = CubeSphere::new([4, 4, 2], R_INNER, R_OUTER);
+    let level1 = base.uniform_at_level(1);
+
+    for base_cell in [0usize, 7, 30, 95].map(CellId::from) {
+      let parent_vol = base.cell_volume(base_cell);
+      let parent_c = base.cell_world_centroid(base_cell);
+      let mut sum = 0.0;
+      for child in 0u8..4 {
+        let fine = base.leaf_fine_cell(base_cell, &[child]);
+        sum += level1.cell_volume(fine);
+        // Each child centroid is within the parent's footprint (well inside one
+        // base-cell extent of the parent centroid).
+        let cc = level1.cell_world_centroid(fine);
+        let d = ((cc[0] - parent_c[0]).powi(2)
+          + (cc[1] - parent_c[1]).powi(2)
+          + (cc[2] - parent_c[2]).powi(2))
+        .sqrt();
+        assert!(d < R_INNER, "child {child} centroid too far from parent");
+      }
+      assert!(
+        (sum - parent_vol).abs() / parent_vol < 1e-9,
+        "children of {base_cell:?} don't tile it: {sum} vs {parent_vol}"
+      );
+      // The four children are distinct fine cells.
+      let ids: std::collections::HashSet<usize> = (0u8..4)
+        .map(|c| base.leaf_fine_cell(base_cell, &[c]).index())
+        .collect();
+      assert_eq!(ids.len(), 4);
+    }
   }
 
   #[test]

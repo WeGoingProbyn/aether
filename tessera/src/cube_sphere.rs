@@ -1010,4 +1010,45 @@ impl crate::adaptive::Subdividable for CubeSphere {
     let remap = CellRemap::new(old_epoch, new_epoch, old_to_new, new_sources);
     Ok((std::sync::Arc::new(finer), remap))
   }
+
+  fn uniform_at_level(
+    &self,
+    levels: u32,
+  ) -> std::sync::Arc<dyn crate::adaptive::Subdividable> {
+    debug_assert!(levels >= 1, "uniform_at_level expects levels >= 1");
+    let n = self.dims[0] * (1 << levels);
+    std::sync::Arc::new(CubeSphere::with_radial_edges(
+      [n, n],
+      self.axis_edges[2].clone(),
+    ))
+  }
+
+  fn leaf_fine_cell(&self, base_cell: CellId, path: &[u8]) -> CellId {
+    // Decode the base cell (panel, i, j, k) over [n, n, nr].
+    let n = self.dims[0];
+    let nr = self.dims[2];
+    let cpp = n * n * nr;
+    let g = base_cell.index();
+    let panel = g / cpp;
+    let loc = g % cpp;
+    let i = loc % n;
+    let j = (loc / n) % n;
+    let k = loc / (n * n);
+
+    // Decode the quad-split path to fine angular offsets within the base cell.
+    let levels = path.len() as u32;
+    let f = 1usize << levels;
+    let (mut si, mut sj) = (0usize, 0usize);
+    for (m, &p) in path.iter().enumerate() {
+      let shift = levels as usize - 1 - m;
+      si |= ((p & 1) as usize) << shift;
+      sj |= (((p >> 1) & 1) as usize) << shift;
+    }
+
+    // Fine angular indices over the level-`levels` mesh ([n*f, n*f, nr]).
+    let nl = n * f;
+    let fi = i * f + si;
+    let fj = j * f + sj;
+    CellId::from(panel * (nl * nl * nr) + (fi + fj * nl + k * (nl * nl)))
+  }
 }
