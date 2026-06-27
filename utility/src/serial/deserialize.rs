@@ -93,6 +93,24 @@ impl<T: Deserialize> Deserialize for Vec<T> {
   }
 }
 
+impl<const N: usize, T: Deserialize> Deserialize for [T; N] {
+  fn deserialize<D: Deserializer>(d: &mut D) -> Result<Self, D::Error> {
+    d.deserialize_seq_begin()?;
+    let mut items: Vec<T> = Vec::with_capacity(N);
+    for _ in 0..N {
+      items.push(d.deserialize_seq_element::<T>()?);
+    }
+    d.deserialize_seq_end()?;
+    // We pushed exactly `N` elements, so the iterator yields `N` values.
+    let mut iter = items.into_iter();
+    Ok(std::array::from_fn(|_| {
+      iter
+        .next()
+        .expect("array deserialize collected exactly N elements")
+    }))
+  }
+}
+
 impl<T: Deserialize> Deserialize for Option<T> {
   fn deserialize<D: Deserializer>(d: &mut D) -> Result<Self, D::Error> {
     d.deserialize_option::<T>()

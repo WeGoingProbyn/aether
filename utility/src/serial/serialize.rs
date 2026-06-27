@@ -74,10 +74,32 @@ impl_serialize_primitive! {
   f64  => serialize_f64,
 }
 
+impl Serialize for String {
+  fn serialize<S: Serializer>(&self, s: &mut S) -> Result<(), S::Error> {
+    s.serialize_str(self)
+  }
+}
+
+impl Serialize for &str {
+  fn serialize<S: Serializer>(&self, s: &mut S) -> Result<(), S::Error> {
+    s.serialize_str(self)
+  }
+}
+
 impl<T: Serialize> Serialize for &[T] {
   fn serialize<S: Serializer>(&self, s: &mut S) -> Result<(), S::Error> {
     s.serialize_seq_begin(self.len())?;
     for item in *self {
+      s.serialize_seq_element(item)?;
+    }
+    s.serialize_seq_end()
+  }
+}
+
+impl<const N: usize, T: Serialize> Serialize for [T; N] {
+  fn serialize<S: Serializer>(&self, s: &mut S) -> Result<(), S::Error> {
+    s.serialize_seq_begin(N)?;
+    for item in self {
       s.serialize_seq_element(item)?;
     }
     s.serialize_seq_end()
@@ -91,5 +113,14 @@ impl<T: Serialize> Serialize for Vec<T> {
       s.serialize_seq_element(item)?;
     }
     s.serialize_seq_end()
+  }
+}
+
+impl<T: Serialize> Serialize for Option<T> {
+  fn serialize<S: Serializer>(&self, s: &mut S) -> Result<(), S::Error> {
+    match self {
+      Some(v) => s.serialize_some(v),
+      None => s.serialize_none(),
+    }
   }
 }

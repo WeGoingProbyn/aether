@@ -22,6 +22,8 @@ use utility::{
   diagnostics::{DiagnosticsPolicy, WorldDiagnostics},
   domain::ResourceKey,
   error::{AetherError, AetherResult, ErrorDomain},
+  serial::deserialize::Deserialize,
+  serial::serialize::Serialize,
 };
 
 use crate::core::{World, world_constants_from_seed};
@@ -269,14 +271,14 @@ impl WorldFactory {
 
   pub fn register_field<S, const N: usize>(&mut self, key: FieldKey, init: S)
   where
-    S: FieldStorage<N> + 'static,
+    S: FieldStorage<N> + Serialize + Deserialize + 'static,
   {
     self.pleroma.register_field(key, init);
   }
 
   pub fn with_field<S, const N: usize>(mut self, key: FieldKey, init: S) -> Self
   where
-    S: FieldStorage<N> + 'static,
+    S: FieldStorage<N> + Serialize + Deserialize + 'static,
   {
     self.register_field(key, init);
     self

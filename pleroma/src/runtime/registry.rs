@@ -7,8 +7,14 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use utility::domain::{FieldKey, ResourceKey};
+use utility::error::AetherResult;
+use utility::serial::deserialize::Deserialize;
+use utility::serial::serialize::Serialize;
 
 use crate::core::access::ScheduleAccess;
+use crate::core::checkpoint::{
+  self, CHECKPOINT_VERSION, FieldRecord, PleromaCheckpoint, ResourceRecord,
+};
 use crate::core::storage::FieldStorage;
 use crate::runtime::slot::{FieldSlot, ResourceSlot};
 use crate::runtime::split::SplitBorrow;
@@ -40,7 +46,7 @@ impl Pleroma {
   /// so subsequent `read::<S>` / `write::<S>` calls can downcast safely.
   pub fn register_field<S, const N: usize>(&mut self, key: FieldKey, init: S)
   where
-    S: FieldStorage<N> + 'static,
+    S: FieldStorage<N> + Serialize + Deserialize + 'static,
   {
     let cell_count = init.len();
     let boxed: Box<dyn Any + Send + Sync> = Box::new(init);
@@ -50,6 +56,7 @@ impl Pleroma {
         data: UnsafeCell::new(boxed),
         type_id: TypeId::of::<S>(),
         cell_count,
+        codec: checkpoint::field_codec::<N, S>(),
       },
     );
   }
@@ -68,6 +75,29 @@ impl Pleroma {
       ResourceSlot {
         data: UnsafeCell::new(boxed),
         type_id: TypeId::of::<R>(),
+        codec: None,
+      },
+    );
+  }
+
+  /// Register a resource that is part of the persistent simulation state, so a
+  /// checkpoint round-trips it. Identical to [`register_resource`] but installs a
+  /// serialize/deserialize codec. Derived / transient resources (e.g. the
+  /// diagnostics report) should use the plain [`register_resource`] — a
+  /// checkpoint skips them and world assembly rebuilds them on load.
+  ///
+  /// [`register_resource`]: Self::register_resource
+  pub fn register_checkpointed_resource<R>(&mut self, key: ResourceKey, init: R)
+  where
+    R: Serialize + Deserialize + 'static + Send + Sync,
+  {
+    let boxed: Box<dyn Any + Send + Sync> = Box::new(init);
+    self.resources.insert(
+      key,
+      ResourceSlot {
+        data: UnsafeCell::new(boxed),
+        type_id: TypeId::of::<R>(),
+        codec: Some(checkpoint::resource_codec::<R>()),
       },
     );
   }
@@ -142,5 +172,115 @@ impl Pleroma {
   /// storage type. Useful for sanity-checking buffer sizes during init.
   pub fn cell_count(&self, key: FieldKey) -> Option<usize> {
     self.fields.get(&key).map(|s| s.cell_count)
+  }
+
+  /// Snapshot every field and every checkpointed resource into a serialisable
+  /// [`PleromaCheckpoint`]. Records are emitted in sorted key order so the output
+  /// is deterministic and diffable. Refuses to save if any field holds non-finite
+  /// values (the JSON backend cannot round-trip NaN/Inf, and a blown-up state is
+  /// not worth checkpointing). Derived / transient resources are skipped.
+  pub fn save(&self) -> AetherResult<PleromaCheckpoint> {
+    let mut field_keys: Vec<FieldKey> = self.fields.keys().copied().collect();
+    field_keys.sort();
+    let mut fields = Vec::with_capacity(field_keys.len());
+    for key in field_keys {
+      let slot = &self.fields[&key];
+      // SAFETY: `&self` blocks any concurrent `write`/`view_for`; we only read.
+      let any: &dyn Any = unsafe { &**slot.data.get() };
+      let json = (slot.codec.save)(any)?;
+      fields.push(FieldRecord {
+        key: format!("{key:?}"),
+        cell_count: slot.cell_count as u64,
+        type_name: slot.codec.type_name.to_string(),
+        json,
+      });
+    }
+
+    let mut resource_keys: Vec<ResourceKey> =
+      self.resources.keys().copied().collect();
+    resource_keys.sort();
+    let mut resources = Vec::new();
+    for key in resource_keys {
+      let slot = &self.resources[&key];
+      let Some(codec) = &slot.codec else { continue };
+      // SAFETY: as above.
+      let any: &dyn Any = unsafe { &**slot.data.get() };
+      let json = (codec.save)(any)?;
+      resources.push(ResourceRecord {
+        key: format!("{key:?}"),
+        type_name: codec.type_name.to_string(),
+        json,
+      });
+    }
+
+    Ok(PleromaCheckpoint {
+      version: CHECKPOINT_VERSION,
+      fields,
+      resources,
+    })
+  }
+
+  /// Restore state from a [`PleromaCheckpoint`] **into the already-registered
+  /// schema**: every live field (and every checkpointed resource) must have a
+  /// matching record of the same type and size, or a clear schema/type-mismatch
+  /// error is returned and no state is left partially applied beyond the slots
+  /// already restored. Records present in the file but absent from the live world
+  /// are ignored (a superset checkpoint is allowed).
+  pub fn load(&mut self, ckpt: &PleromaCheckpoint) -> AetherResult<()> {
+    if ckpt.version != CHECKPOINT_VERSION {
+      return Err(checkpoint::version_mismatch(format!(
+        "checkpoint version {} != supported {CHECKPOINT_VERSION}",
+        ckpt.version,
+      )));
+    }
+
+    let field_recs: HashMap<&str, &FieldRecord> =
+      ckpt.fields.iter().map(|r| (r.key.as_str(), r)).collect();
+    for (key, slot) in self.fields.iter_mut() {
+      let key_str = format!("{key:?}");
+      let rec = field_recs.get(key_str.as_str()).ok_or_else(|| {
+        checkpoint::schema_mismatch(format!(
+          "checkpoint is missing field {key_str}"
+        ))
+      })?;
+      if rec.type_name != slot.codec.type_name {
+        return Err(checkpoint::type_mismatch(format!(
+          "field {key_str}: checkpoint type {} != live {}",
+          rec.type_name, slot.codec.type_name,
+        )));
+      }
+      if rec.cell_count != slot.cell_count as u64 {
+        return Err(checkpoint::type_mismatch(format!(
+          "field {key_str}: checkpoint has {} cells != live {}",
+          rec.cell_count, slot.cell_count,
+        )));
+      }
+      let load_fn = slot.codec.load;
+      let any: &mut dyn Any = slot.data.get_mut().as_mut();
+      load_fn(any, &rec.json)?;
+    }
+
+    let resource_recs: HashMap<&str, &ResourceRecord> =
+      ckpt.resources.iter().map(|r| (r.key.as_str(), r)).collect();
+    for (key, slot) in self.resources.iter_mut() {
+      let Some(codec) = &slot.codec else { continue };
+      let key_str = format!("{key:?}");
+      let rec = resource_recs.get(key_str.as_str()).ok_or_else(|| {
+        checkpoint::schema_mismatch(format!(
+          "checkpoint is missing resource {key_str}"
+        ))
+      })?;
+      if rec.type_name != codec.type_name {
+        return Err(checkpoint::type_mismatch(format!(
+          "resource {key_str}: checkpoint type {} != live {}",
+          rec.type_name, codec.type_name,
+        )));
+      }
+      let load_fn = codec.load;
+      let any: &mut dyn Any = slot.data.get_mut().as_mut();
+      load_fn(any, &rec.json)?;
+    }
+
+    Ok(())
   }
 }

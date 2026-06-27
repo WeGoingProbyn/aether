@@ -14,6 +14,19 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use utility::domain::{FieldKey, ResourceKey};
+use utility::error::AetherResult;
+
+/// Type-erased checkpoint codec for one slot, captured at register time when the
+/// concrete storage / resource type `S` is statically known. The two function
+/// pointers commit to the concrete JSON backend on purpose: the `Serializer`
+/// trait has generic methods and so is **not** object-safe, ruling out a
+/// `&mut dyn Serializer`. Each slot therefore serialises to its own independent
+/// JSON document. See `core/checkpoint.rs` for how these are built.
+pub(crate) struct SlotCodec {
+  pub(crate) type_name: &'static str,
+  pub(crate) save: fn(&dyn Any) -> AetherResult<String>,
+  pub(crate) load: fn(&mut dyn Any, &str) -> AetherResult<()>,
+}
 
 /// One registered field. Holds an `UnsafeCell<Box<dyn Any + Send + Sync>>` so
 /// the registry can hand out aliased typed references when the schedule has
@@ -22,6 +35,9 @@ pub(crate) struct FieldSlot {
   pub(crate) data: UnsafeCell<Box<dyn Any + Send + Sync>>,
   pub(crate) type_id: TypeId,
   pub(crate) cell_count: usize,
+  /// Every field is checkpointable (the hard invariant enforced by the
+  /// `Serialize + Deserialize` bound on `register_field`).
+  pub(crate) codec: SlotCodec,
 }
 
 // SAFETY: the schedule layer guarantees that any concurrent access to a
@@ -35,6 +51,10 @@ unsafe impl Sync for FieldSlot {}
 pub(crate) struct ResourceSlot {
   pub(crate) data: UnsafeCell<Box<dyn Any + Send + Sync>>,
   pub(crate) type_id: TypeId,
+  /// `Some` for state resources registered via `register_checkpointed_resource`;
+  /// `None` for derived / transient resources (e.g. `Diagnostics`) that a
+  /// checkpoint skips and world assembly rebuilds on load.
+  pub(crate) codec: Option<SlotCodec>,
 }
 
 // SAFETY: same as `FieldSlot`.

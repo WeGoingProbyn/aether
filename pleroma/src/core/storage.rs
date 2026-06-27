@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use tessera::{mesh::Mesh, partition::PartitionMesh};
+use utility::serial::deserialize::{Deserialize, Deserializer};
+use utility::serial::serialize::{Serialize, Serializer};
 use utility::{domain::CellId, profile};
 
 pub trait FieldStorage<const N: usize>: Send + Sync {
@@ -138,6 +140,22 @@ impl<const N: usize> SoaField<N> {
       }
     }
     SoaField { state }
+  }
+}
+
+// Checkpoint round-trip: a structure-of-arrays field serializes as a sequence of
+// `N` component vectors. Field state is the bulk of any checkpoint, and the JSON
+// backend's `{}`-formatted f64 round-trips finite values bit-exactly.
+impl<const N: usize> Serialize for SoaField<N> {
+  fn serialize<S: Serializer>(&self, s: &mut S) -> Result<(), S::Error> {
+    self.state.serialize(s)
+  }
+}
+
+impl<const N: usize> Deserialize for SoaField<N> {
+  fn deserialize<D: Deserializer>(d: &mut D) -> Result<Self, D::Error> {
+    let components = <[Vec<f64>; N]>::deserialize(d)?;
+    Ok(SoaField { state: components })
   }
 }
 
@@ -388,6 +406,22 @@ impl<const N: usize> AosField<N> {
   }
 }
 
+// Checkpoint round-trip: an array-of-structures field serializes as a sequence of
+// per-cell `[f64; N]` states, reusing the fixed-array and `Vec` codecs.
+impl<const N: usize> Serialize for AosField<N> {
+  fn serialize<S: Serializer>(&self, s: &mut S) -> Result<(), S::Error> {
+    self.state.serialize(s)
+  }
+}
+
+impl<const N: usize> Deserialize for AosField<N> {
+  fn deserialize<D: Deserializer>(d: &mut D) -> Result<Self, D::Error> {
+    Ok(AosField {
+      state: Vec::<[f64; N]>::deserialize(d)?,
+    })
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use std::sync::Arc;
@@ -472,6 +506,52 @@ mod tests {
       assert_eq!(
         global.state(global_cell).as_state(),
         &[global_cell.index() as f64],
+      );
+    }
+  }
+
+  fn json_roundtrip<T>(value: &T) -> T
+  where
+    T: Serialize + Deserialize,
+  {
+    use utility::serial::json::{JsonDeserializer, JsonSerializer};
+    let mut buf = Vec::new();
+    {
+      let mut ser = JsonSerializer::new(&mut buf);
+      value.serialize(&mut ser).expect("serialize");
+    }
+    let mut de = JsonDeserializer::new(buf.as_slice());
+    T::deserialize(&mut de).expect("deserialize")
+  }
+
+  #[test]
+  fn soa_field_survives_a_json_round_trip() {
+    let field = SoaField::<3>::from_fn(5, |c| {
+      let i = c.index() as f64;
+      [i, -i * 0.5, 1.0e6 + i]
+    });
+    let restored = json_roundtrip(&field);
+    assert_eq!(restored.len(), field.len());
+    for i in 0..field.len() {
+      assert_eq!(
+        restored.state(CellId::from(i)).as_state(),
+        field.state(CellId::from(i)).as_state(),
+      );
+    }
+  }
+
+  #[test]
+  fn aos_field_survives_a_json_round_trip() {
+    let field = AosField::<2>::from_fn(4, |c| {
+      let i = c.index() as f64;
+      [i * 2.0, i - 10.0]
+    });
+    let restored = json_roundtrip(&field);
+    assert_eq!(restored.len(), field.len());
+    for i in 0..field.len() {
+      assert_eq!(
+        restored.state(CellId::from(i)).as_state(),
+        field.state(CellId::from(i)).as_state(),
       );
     }
   }

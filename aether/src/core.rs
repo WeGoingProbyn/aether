@@ -1,19 +1,23 @@
 use std::collections::HashMap;
 
-use chronos::{Regime, RegimeConfig, TransitionState};
+use chronos::{Regime, RegimeConfig, TransitionKind, TransitionState};
 use cosmo::kind::{BodyKind, CelestialBody};
 use nexus::{
   AtmosphereConstants, CompiledNexus, RadiationConstants, ResourceKey,
   ScheduledStageTask, StageTask, WorldConstants, WorldId,
 };
 use pleroma::Pleroma;
+use pleroma::prelude::PleromaCheckpoint;
 use tessera::world_mesh::Tessera;
 use utility::{
   constants::solar_flux,
   diagnostics::{DiagnosticsPolicy, WorldDiagnostics},
   domain::SystemId,
-  error::AetherResult,
+  error::{AetherError, AetherResult, ErrorDomain},
   profile,
+  serial::deserialize::Deserialize,
+  serial::json::{JsonDeserializer, JsonSerializer},
+  serial::serialize::Serialize,
   thread::pool::{Pool, ScopedTaskGraph},
 };
 
@@ -57,6 +61,89 @@ pub struct World {
   /// `ResourceKey::ClimateRegime` so a chronos nudge stage can spin the live
   /// state up from / down to the climatology smoothly. Cleared when complete.
   transition: Option<TransitionState>,
+}
+
+/// The serialised advance state of a transition handoff (the chronos
+/// `TransitionState` rendered as primitives, since the serial derives only cover
+/// named structs of serialisable fields).
+#[derive(utility::Serialize, utility::Deserialize)]
+pub struct TransitionRecord {
+  /// `0 = ClimatologyToLive`, `1 = LiveToClimatology`.
+  pub kind: u32,
+  pub progress: f64,
+  pub window: f64,
+}
+
+/// A full, restartable snapshot of one [`World`]: the integrated clocks and
+/// advance mode, plus the entire pleroma state. Reload an *identically assembled*
+/// world from it (same meshes, same registered fields) and resume bit-for-bit.
+/// Geometry, the compiled DAG, and derived/transient resources are rebuilt by
+/// world assembly, not carried here.
+#[derive(utility::Serialize, utility::Deserialize)]
+pub struct WorldCheckpoint {
+  pub sim_time: f64,
+  pub game_clock: f64,
+  /// `0 = Live`, `1 = Climatology`.
+  pub regime: u32,
+  pub transition: Option<TransitionRecord>,
+  pub pleroma: PleromaCheckpoint,
+}
+
+#[derive(Debug)]
+enum CheckpointError {
+  UnknownRegime(u32),
+  UnknownTransitionKind(u32),
+}
+
+impl ErrorDomain for CheckpointError {
+  fn domain(&self) -> &str {
+    "aether checkpoint"
+  }
+}
+
+impl std::fmt::Display for CheckpointError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      CheckpointError::UnknownRegime(c) => {
+        write!(f, "checkpoint has unknown regime code {c}")
+      }
+      CheckpointError::UnknownTransitionKind(c) => {
+        write!(f, "checkpoint has unknown transition-kind code {c}")
+      }
+    }
+  }
+}
+
+fn regime_code(regime: Regime) -> u32 {
+  match regime {
+    Regime::Live => 0,
+    Regime::Climatology => 1,
+  }
+}
+
+fn regime_from_code(code: u32) -> AetherResult<Regime> {
+  match code {
+    0 => Ok(Regime::Live),
+    1 => Ok(Regime::Climatology),
+    other => Err(AetherError::new(CheckpointError::UnknownRegime(other))),
+  }
+}
+
+fn transition_kind_code(kind: TransitionKind) -> u32 {
+  match kind {
+    TransitionKind::ClimatologyToLive => 0,
+    TransitionKind::LiveToClimatology => 1,
+  }
+}
+
+fn transition_kind_from_code(code: u32) -> AetherResult<TransitionKind> {
+  match code {
+    0 => Ok(TransitionKind::ClimatologyToLive),
+    1 => Ok(TransitionKind::LiveToClimatology),
+    other => Err(AetherError::new(CheckpointError::UnknownTransitionKind(
+      other,
+    ))),
+  }
 }
 
 impl World {
@@ -224,6 +311,73 @@ impl World {
   /// stage (if the world has one) blends the live state across the switch.
   pub fn begin_transition(&mut self, transition: TransitionState) {
     self.transition = Some(transition);
+  }
+
+  /// Capture a full, restartable [`WorldCheckpoint`]: the integrated clocks,
+  /// advance mode, and the entire pleroma state. Fails if any field is
+  /// non-finite (a blown-up world is not checkpointed).
+  pub fn save_checkpoint(&self) -> AetherResult<WorldCheckpoint> {
+    Ok(WorldCheckpoint {
+      sim_time: self.sim_time,
+      game_clock: self.game_clock,
+      regime: regime_code(self.regime),
+      transition: self.transition.map(|t| TransitionRecord {
+        kind: transition_kind_code(t.kind),
+        progress: t.progress,
+        window: t.window,
+      }),
+      pleroma: self.pleroma.save()?,
+    })
+  }
+
+  /// Restore from a [`WorldCheckpoint`] into this already-assembled world: the
+  /// pleroma schema must match (same registered fields/resources of the same
+  /// type and size) or a clear error is returned. The clocks and advance mode are
+  /// rewound to the snapshot and the run can resume.
+  pub fn load_checkpoint(
+    &mut self,
+    checkpoint: &WorldCheckpoint,
+  ) -> AetherResult<()> {
+    // Validate the advance mode before mutating any state, so a corrupt header
+    // fails cleanly rather than half-applying.
+    let regime = regime_from_code(checkpoint.regime)?;
+    let transition = match &checkpoint.transition {
+      Some(record) => {
+        let mut state = TransitionState::new(
+          transition_kind_from_code(record.kind)?,
+          record.window,
+        );
+        state.progress = record.progress;
+        Some(state)
+      }
+      None => None,
+    };
+    self.pleroma.load(&checkpoint.pleroma)?;
+    self.sim_time = checkpoint.sim_time;
+    self.game_clock = checkpoint.game_clock;
+    self.regime = regime;
+    self.transition = transition;
+    Ok(())
+  }
+
+  /// Write a checkpoint to `writer` as JSON, reusing the serialization backend.
+  pub fn save_checkpoint_to<W: std::io::Write>(
+    &self,
+    writer: W,
+  ) -> AetherResult<()> {
+    let checkpoint = self.save_checkpoint()?;
+    let mut serializer = JsonSerializer::new(writer);
+    checkpoint.serialize(&mut serializer)
+  }
+
+  /// Read a checkpoint from `reader` (JSON) and restore it into this world.
+  pub fn load_checkpoint_from<R: std::io::Read>(
+    &mut self,
+    reader: R,
+  ) -> AetherResult<()> {
+    let mut deserializer = JsonDeserializer::new(reader);
+    let checkpoint = WorldCheckpoint::deserialize(&mut deserializer)?;
+    self.load_checkpoint(&checkpoint)
   }
 
   /// Integrate one tick of `dt`, publishing the current transition relaxation

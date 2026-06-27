@@ -6,6 +6,7 @@
 //! verbatim so physics crates depend on `nexus` alone.
 
 pub use crate::core::access::*;
+pub use crate::core::checkpoint::PleromaCheckpoint;
 pub use crate::core::exchange::exchange_ghosts;
 pub use crate::core::storage::*;
 pub use utility::domain::{

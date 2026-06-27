@@ -61,7 +61,7 @@ pub struct WorldId(pub usize);
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct SystemId(pub usize);
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum FieldName {
   Temperature,
   TemperatureTendency,
@@ -138,7 +138,7 @@ impl SurfaceClass {
   }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub enum MeshType {
   Atmosphere,
   Surface,
@@ -149,7 +149,7 @@ pub enum MeshType {
   Ocean,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub struct MeshKey(MeshType);
 
 impl MeshKey {
@@ -170,7 +170,7 @@ impl MeshKey {
 /// Identifier for a typed singleton in pleroma that isn't bound to a mesh.
 /// Used for things like orbital body state, sun direction, planetary spin —
 /// data physics stages need but that doesn't live per-cell on a mesh.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ResourceKey {
   Bodies,
   SunPosition,
@@ -187,7 +187,7 @@ pub enum ResourceKey {
   Diagnostics,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FieldKey {
   mesh: MeshKey,
   name: FieldName,
