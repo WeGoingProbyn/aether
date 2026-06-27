@@ -82,6 +82,99 @@ impl AlbedoTable {
   }
 }
 
+/// Per-class open-water fraction — the base layer of the composable
+/// [`FieldName::MoistureAvailability`] contract that gates air–sea evaporation.
+/// `1` = open water (full evaporation), `0` = dry. Like [`AlbedoTable`], a
+/// consumer (the evaporation stage) reads the per-cell field, not this table.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AvailabilityTable {
+  pub ocean: f64,
+  pub land: f64,
+  pub ice: f64,
+}
+
+impl Default for AvailabilityTable {
+  fn default() -> Self {
+    // Open ocean evaporates fully; land and (frozen) ice do not. Sublimation
+    // over ice is ignored in v1.
+    Self {
+      ocean: 1.0,
+      land: 0.0,
+      ice: 0.0,
+    }
+  }
+}
+
+impl AvailabilityTable {
+  pub fn availability_for(&self, class: SurfaceClass) -> f64 {
+    match class {
+      SurfaceClass::Ocean => self.ocean,
+      SurfaceClass::Land => self.land,
+      SurfaceClass::Ice => self.ice,
+    }
+  }
+}
+
+/// Register and initialise the inert [`FieldName::MoistureAvailability`] field on
+/// `mesh` from a geographic land/sea classifier, using the default
+/// [`AvailabilityTable`]. The value at each cell is the open-water fraction of the
+/// surface class directly below it (`generator(geo).class`), so registering this on
+/// the **atmosphere** mesh gives the evaporation stage a same-mesh moisture gate —
+/// the vertical projection of the land/sea mask. Returns the field's key.
+///
+/// This is the "surface property as a field" producer for moisture, mirroring the
+/// terrain albedo path; inert/static in v1, but the field seam supports a future
+/// dynamic (soil-moisture) producer.
+pub fn register_moisture_availability<M, G>(
+  pleroma: &mut Pleroma,
+  mesh_key: MeshKey,
+  mesh: &M,
+  surface_radius: f64,
+  generator: G,
+) -> FieldKey
+where
+  M: Mesh<3> + ?Sized,
+  G: Fn(GeoCoord) -> TerrainSample,
+{
+  register_moisture_availability_with_table(
+    pleroma,
+    mesh_key,
+    mesh,
+    surface_radius,
+    AvailabilityTable::default(),
+    generator,
+  )
+}
+
+/// As [`register_moisture_availability`] but with an explicit [`AvailabilityTable`].
+pub fn register_moisture_availability_with_table<M, G>(
+  pleroma: &mut Pleroma,
+  mesh_key: MeshKey,
+  mesh: &M,
+  surface_radius: f64,
+  table: AvailabilityTable,
+  generator: G,
+) -> FieldKey
+where
+  M: Mesh<3> + ?Sized,
+  G: Fn(GeoCoord) -> TerrainSample,
+{
+  let n = mesh.cell_count();
+  let availability: Vec<f64> = (0..n)
+    .map(|i| {
+      let pos = mesh.cell_world_centroid(CellId::from(i));
+      let geo = GeoCoord::from_world(&pos, surface_radius);
+      table.availability_for(generator(geo).class)
+    })
+    .collect();
+  let key = FieldKey::new(mesh_key, FieldName::MoistureAvailability);
+  pleroma.register_field(
+    key,
+    SoaField::<1>::from_fn(n, |i| [availability[i.index()]]),
+  );
+  key
+}
+
 /// Registers and initialises the inert terrain fields on a surface mesh,
 /// including the base per-cell surface albedo.
 pub struct TerrainModel {
@@ -271,6 +364,51 @@ mod tests {
 
   const R_INNER: f64 = 6.371e6;
   const R_OUTER: f64 = 6.381e6;
+
+  #[test]
+  fn moisture_availability_matches_surface_class() {
+    let mesh = Arc::new(CubeSphere::new([12, 12, 1], R_INNER, R_OUTER));
+    let mut pleroma = Pleroma::new();
+    let key = register_moisture_availability(
+      &mut pleroma,
+      MeshKey::ATMOSPHERE,
+      mesh.as_ref(),
+      R_INNER,
+      earthlike_terrain,
+    );
+
+    let field: &SoaField<1> = pleroma.read(key).unwrap();
+    let table = AvailabilityTable::default();
+    assert_eq!(field.len(), mesh.cell_count());
+
+    let mut saw_ocean = false;
+    let mut saw_dry = false;
+    for i in 0..mesh.cell_count() {
+      let cell = CellId::from(i);
+      let geo = GeoCoord::from_world(&mesh.cell_world_centroid(cell), R_INNER);
+      let class = earthlike_terrain(geo).class;
+      let a = field.state(cell)[0];
+      assert!(
+        a.is_finite() && (0.0..=1.0).contains(&a),
+        "availability {a}"
+      );
+      assert!((a - table.availability_for(class)).abs() < 1e-12);
+      match class {
+        SurfaceClass::Ocean => {
+          saw_ocean = true;
+          assert_eq!(a, 1.0);
+        }
+        SurfaceClass::Land | SurfaceClass::Ice => {
+          saw_dry = true;
+          assert_eq!(a, 0.0);
+        }
+      }
+    }
+    assert!(
+      saw_ocean && saw_dry,
+      "generator should yield ocean and dry cells"
+    );
+  }
 
   #[test]
   fn registers_finite_terrain_with_valid_classes() {

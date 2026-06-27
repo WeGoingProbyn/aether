@@ -86,6 +86,112 @@ fn showcase_world_is_stable_over_many_steps() {
   ));
 }
 
+/// Land–sea masking is live end-to-end: the tessera ocean cell-mask exists and
+/// stops the ocean solver evolving land columns (they stay at their inert initial
+/// temperature), while active ocean columns evolve.
+#[test]
+fn showcase_masks_the_ocean_solver_to_open_water() {
+  let (mut aether, _layout) = build_showcase_world().unwrap();
+  let ocean_temp = FieldKey::new(MeshKey::OCEAN, FieldName::Temperature);
+
+  // The mask was built alongside the couplers, with both land and ocean columns.
+  let initial: Vec<f64> = {
+    let world = aether.world(SANDBOX_WORLD_ID).unwrap();
+    let mask = world
+      .tessera()
+      .cell_mask(MeshKey::OCEAN)
+      .expect("showcase builds the ocean cell mask");
+    assert!(
+      mask.active_count() > 0 && mask.inactive_count() > 0,
+      "the ocean mask must mark both ocean ({}) and land ({}) cells",
+      mask.active_count(),
+      mask.inactive_count()
+    );
+    let f: &SoaField<1> = world.pleroma().read(ocean_temp).unwrap();
+    (0..f.len()).map(|i| f.state(CellId::from(i))[0]).collect()
+  };
+
+  for _ in 0..10 {
+    aether.step(20.0).unwrap();
+  }
+
+  let world = aether.world(SANDBOX_WORLD_ID).unwrap();
+  let mask = world.tessera().cell_mask(MeshKey::OCEAN).unwrap();
+  let temp: &SoaField<1> = world.pleroma().read(ocean_temp).unwrap();
+  let mut any_active_changed = false;
+  for i in 0..temp.len() {
+    let cell = CellId::from(i);
+    let t = temp.state(cell)[0];
+    if mask.is_active(cell) {
+      if (t - initial[i]).abs() > 1e-9 {
+        any_active_changed = true;
+      }
+    } else {
+      assert_eq!(
+        t, initial[i],
+        "masked land ocean-cell {i} must stay at its inert initial temperature"
+      );
+    }
+  }
+  assert!(
+    any_active_changed,
+    "active ocean columns should evolve under radiation / SST coupling"
+  );
+}
+
+/// Evaporation is gated to open water: land cells (moisture availability 0) inject
+/// no vapour, so mean evaporation over ocean strictly exceeds land.
+#[test]
+fn showcase_gates_evaporation_to_ocean() {
+  let (mut aether, _layout) = build_showcase_world().unwrap();
+  for _ in 0..1 {
+    aether.step(20.0).unwrap();
+  }
+
+  let world = aether.world(SANDBOX_WORLD_ID).unwrap();
+  let avail: &SoaField<1> = world
+    .pleroma()
+    .read(FieldKey::new(
+      MeshKey::ATMOSPHERE,
+      FieldName::MoistureAvailability,
+    ))
+    .unwrap();
+  let evap: &SoaField<1> = world
+    .pleroma()
+    .read(FieldKey::new(
+      MeshKey::ATMOSPHERE,
+      FieldName::EvaporationFlux,
+    ))
+    .unwrap();
+
+  let (mut ocean_sum, mut ocean_n, mut land_sum, mut land_n) =
+    (0.0, 0usize, 0.0, 0usize);
+  for i in 0..evap.len() {
+    let cell = CellId::from(i);
+    let e = evap.state(cell)[0];
+    if avail.state(cell)[0] > 0.5 {
+      ocean_sum += e;
+      ocean_n += 1;
+    } else {
+      land_sum += e;
+      land_n += 1;
+    }
+  }
+  assert!(
+    ocean_n > 0 && land_n > 0,
+    "both ocean and land cells present"
+  );
+  assert_eq!(land_sum, 0.0, "land injects no evaporation (gated to zero)");
+  assert!(
+    ocean_sum > 0.0,
+    "open ocean evaporates on the first step (before the air saturates)"
+  );
+  assert!(
+    ocean_sum / ocean_n as f64 > land_sum / land_n as f64,
+    "ocean must evaporate more than land (ocean {ocean_sum}, land {land_sum})"
+  );
+}
+
 /// The showcase enables the in-DAG conservation monitor, so after stepping the
 /// world publishes a health report (what the demo runner prints periodically):
 /// a finite-state, finite-conserved-totals report for the atmosphere Euler

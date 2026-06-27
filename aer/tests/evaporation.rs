@@ -32,6 +32,8 @@ const SST: FieldKey =
   FieldKey::new(MeshKey::ATMOSPHERE, FieldName::Temperature);
 const EVAP: FieldKey =
   FieldKey::new(MeshKey::ATMOSPHERE, FieldName::EvaporationFlux);
+const AVAIL: FieldKey =
+  FieldKey::new(MeshKey::ATMOSPHERE, FieldName::MoistureAvailability);
 
 fn constants() -> WorldConstants {
   WorldConstants {
@@ -114,4 +116,84 @@ fn warm_sea_evaporates_into_bottom_layer_only() {
   // An upper-layer cell (layer 1, same column) is untouched (still dry).
   let upper = state.state(CellId::from(stride));
   assert_eq!(upper[5], 0.0, "only the bottom layer evaporates");
+}
+
+/// Run one evaporation step from the same dry-air / warm-sea state and return the
+/// bottom cell's vapour (`ρq`). `availability` registers a uniform open-water
+/// fraction field and gates the step; `None` leaves the step ungated.
+fn bottom_vapour_after_step(availability: Option<f64>) -> f64 {
+  let mesh = Arc::new(CubeSphere::shell(CubeSphereShellSpec::uniform(
+    [ANGULAR[0], ANGULAR[1], LAYERS],
+    1000.0,
+    1100.0,
+  )));
+  let mut tessera = Tessera::new();
+  tessera.register_mesh(MeshKey::ATMOSPHERE, mesh.clone());
+
+  let p = 101_325.0;
+  let t_air = 290.0;
+  let rho = p / (GAS_CONSTANT * t_air);
+  let energy = p / (GAMMA - 1.0);
+  let mut pleroma = Pleroma::new();
+  pleroma.register_field(
+    STATE,
+    SoaField::<6>::from_fn(mesh.cell_count(), |_| {
+      [rho, 0.0, 0.0, 0.0, energy, 0.0]
+    }),
+  );
+  pleroma.register_field(
+    SST,
+    SoaField::<1>::from_fn(mesh.cell_count(), |_| [300.0]),
+  );
+  pleroma.register_field(EVAP, SoaField::<1>::zeros(mesh.cell_count()));
+
+  let columns = ShellColumns::cube_sphere(ANGULAR, LAYERS);
+  let mut step =
+    EvaporationStep::new(MeshKey::ATMOSPHERE, STATE, SST, EVAP, columns, 1e-3)
+      .unwrap();
+  if let Some(a) = availability {
+    pleroma.register_field(
+      AVAIL,
+      SoaField::<1>::from_fn(mesh.cell_count(), |_| [a]),
+    );
+    step = step.with_moisture_availability(AVAIL).unwrap();
+  }
+
+  let mut nexus = Nexus::new();
+  nexus.add(step);
+  let mut compiled = nexus.build(&pleroma).unwrap();
+  compiled
+    .tick(
+      WorldId(0),
+      &tessera,
+      &constants(),
+      &mut pleroma,
+      &Pool::default(),
+      100.0,
+    )
+    .unwrap();
+
+  let state: &SoaField<6> = pleroma.read(STATE).unwrap();
+  state.state(CellId::from(0))[5]
+}
+
+#[test]
+fn moisture_availability_gates_evaporation() {
+  let full = bottom_vapour_after_step(Some(1.0));
+  let ungated = bottom_vapour_after_step(None);
+  let land = bottom_vapour_after_step(Some(0.0));
+  let half = bottom_vapour_after_step(Some(0.5));
+
+  assert!(full > 0.0, "open water (availability 1) evaporates");
+  assert_eq!(
+    ungated, full,
+    "no availability field behaves as availability 1"
+  );
+  assert_eq!(land, 0.0, "land (availability 0) injects no vapour");
+  // The relaxation is linear in availability for one step from a fixed state.
+  let ratio = half / full;
+  assert!(
+    (ratio - 0.5).abs() < 1e-6,
+    "half availability gives ~half the vapour, got {ratio}"
+  );
 }

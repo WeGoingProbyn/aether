@@ -12,6 +12,7 @@ pub mod coupling;
 pub mod cube_sphere;
 pub mod geo;
 pub mod geometry;
+pub mod mask;
 pub mod mesh;
 pub mod partition;
 pub mod radial_stack;

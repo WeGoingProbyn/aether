@@ -79,7 +79,11 @@ pub struct EvaporationStep {
   columns: ShellColumns,
   /// Relaxation rate toward sea-surface saturation (1/s).
   exchange_rate: f64,
-  reads: [FieldKey; 2],
+  /// Optional per-cell open-water fraction (`FieldName::MoistureAvailability`,
+  /// `[0,1]`) scaling the flux: `0` over land disables evaporation, `1` over ocean
+  /// is full. `None` ⇒ `1` everywhere (the pre-masking behaviour).
+  moisture_availability: Option<FieldKey>,
+  reads: Vec<FieldKey>,
   writes: [FieldKey; 2],
 }
 
@@ -110,9 +114,32 @@ impl EvaporationStep {
       evaporation_flux,
       columns,
       exchange_rate,
-      reads: [state, sea_surface_temperature],
+      moisture_availability: None,
+      reads: vec![state, sea_surface_temperature],
       writes: [state, evaporation_flux],
     })
+  }
+
+  /// Gate evaporation by a per-cell open-water fraction
+  /// (`FieldName::MoistureAvailability`, `[0,1]`) on the same mesh: `0` over land
+  /// disables it, `1` over ocean is full. The key is added to `reads` so the
+  /// scheduler orders its producer first. The mask is the moisture half of
+  /// land–sea masking (the structural half is the tessera ocean cell-mask).
+  pub fn with_moisture_availability(
+    mut self,
+    availability: FieldKey,
+  ) -> AetherResult<Self> {
+    if availability.mesh() != self.mesh {
+      return Err(AetherError::new(AerError::FieldMeshMismatch).context(
+        format!(
+          "moisture availability {:?} not on evaporation mesh {:?}",
+          availability, self.mesh
+        ),
+      ));
+    }
+    self.moisture_availability = Some(availability);
+    self.reads.push(availability);
+    Ok(self)
   }
 
   pub fn mesh(&self) -> MeshKey {
@@ -179,6 +206,22 @@ impl Stage for EvaporationStep {
       field.component(0).as_ref().to_vec()
     };
 
+    // Per-cell open-water fraction gating the flux. `None` ⇒ all-`1` (no masking).
+    let availability: Vec<f64> = match self.moisture_availability {
+      Some(key) => {
+        let field: &SoaField<1> =
+          ctx.world.fields.read(key).ok_or_else(|| {
+            AetherError::new(AerError::MissingReadField)
+              .context(format!("{:?}", key))
+          })?;
+        if field.len() != mesh_cell_count {
+          return Err(AetherError::new(AerError::FieldLengthMismatch));
+        }
+        field.component(0).as_ref().to_vec()
+      }
+      None => vec![1.0; mesh_cell_count],
+    };
+
     // Compute added vapour per surface cell, then write state + flux.
     let mut added = vec![0.0; mesh_cell_count];
     let new_states: Vec<(usize, [f64; 6])> = {
@@ -206,7 +249,9 @@ impl Stage for EvaporationStep {
         }
         let q = s[5] / rho;
         let q_sat_sea = saturation_specific_humidity(t_sea, p);
-        let dq = self.exchange_rate * dt * (q_sat_sea - q);
+        // Gate by the open-water fraction: 0 over land, 1 over open ocean.
+        let avail = availability[cell].clamp(0.0, 1.0);
+        let dq = avail * self.exchange_rate * dt * (q_sat_sea - q);
         if dq > 0.0 {
           // The vapour carries its latent heat implicitly: the air's sensible
           // energy is unchanged here (sea-surface evaporation draws its latent

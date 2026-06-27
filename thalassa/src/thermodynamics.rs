@@ -102,6 +102,26 @@ impl Stage for OceanThermodynamicsStep {
       })?
       .cell_count();
 
+    // Cell-activity mask (e.g. land columns of a global ocean shell). Absent ⇒
+    // every cell active (the backward-compatible default). The mask is keyed by
+    // global CellId, the same space as the temperature field. Fetched up front
+    // (it borrows `tessera`, not `fields`) so it can be consulted while the
+    // temperature buffer is borrowed below.
+    let cell_mask = ctx.world.tessera.cell_mask(self.mesh);
+    if let Some(mask) = cell_mask {
+      if mask.len() != mesh_cell_count {
+        return Err(
+          AetherError::new(ThalassaError::FieldLengthMismatch).context(
+            format!(
+              "cell mask {} cells, mesh has {}",
+              mask.len(),
+              mesh_cell_count
+            ),
+          ),
+        );
+      }
+    }
+
     let dt = ctx.world.dt;
     if !dt.is_finite() || dt <= 0.0 {
       return Err(
@@ -155,6 +175,15 @@ impl Stage for OceanThermodynamicsStep {
       let panel_base = panel * layout.cells_per_panel();
       for column in 0..stride {
         let base = panel_base + column;
+        // Skip masked-out (e.g. land) columns: land/ocean is a lat/lon property,
+        // so the whole column shares its surface cell's mask bit. Skipped columns
+        // keep their inert initial temperature — the ocean never evolves there.
+        if let Some(mask) = cell_mask {
+          let surface_cell = base + surface_layer * stride;
+          if !mask.is_active(CellId::from(surface_cell)) {
+            continue;
+          }
+        }
         for k in 0..layers {
           let here = base + k * stride;
           let t_here = old[here];

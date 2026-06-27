@@ -31,7 +31,10 @@ use eidolon::ir::{
 use lumen::{DiurnalSunStep, RadiationCoefficients, RadiationModel};
 use nexus::{FieldStorage, MeshKey, SoaField, SubsystemId, WorldId};
 use syzygy::{CouplingStencil, ScalarInterfaceDeposition, ScalarRelaxation};
-use terra::{SurfaceThermalModel, TerrainModel, earthlike_terrain};
+use terra::{
+  SurfaceClass, SurfaceThermalModel, TerrainModel, earthlike_terrain,
+  register_moisture_availability,
+};
 use tessera::cube_sphere::CubeSphereShellSpec;
 use thalassa::{OceanColumnLayout, OceanModel};
 use utility::domain::{CellId, FieldKey, FieldName, SystemId};
@@ -778,9 +781,11 @@ pub fn debug_render_frame(
 /// also drives the radiative albedo (land/ocean/ice differ in brightness).
 ///
 /// This is the reference world for the eidolon render showcase and the basis
-/// for future end-to-end testing. (Land-sea masking of the *heat/moisture*
-/// exchange — gating evaporation to ocean cells — is the documented next
-/// increment; today land and ocean differ in albedo, orography and rendering.)
+/// for future end-to-end testing. Land–sea **masking** is live: a tessera cell
+/// mask stops the ocean solver evolving columns under land, and a moisture
+/// availability field gates evaporation to open water. (The remaining increment is
+/// the *heat* side — giving land its own skin temperature; today land and ocean
+/// differ in albedo, orography, rendering, ocean activity and moisture.)
 #[profile]
 pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
   let angular_dims = [16, 16];
@@ -815,6 +820,17 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
     factory.add_radial_stack_coupler(MeshKey::OCEAN, MeshKey::ATMOSPHERE)?;
   let surface_coupler =
     factory.add_radial_stack_coupler(MeshKey::SURFACE, MeshKey::ATMOSPHERE)?;
+
+  // Mask the ocean shell so the ocean solver only runs where there is actually
+  // ocean: a column is active iff the surface below it is open water. Built here,
+  // alongside the couplers and before `factory.build()`, so it travels into the
+  // world ahead of the first tick. (The atmosphere-side moisture gate below is the
+  // companion projection of this same land/sea classifier.)
+  factory.tessera_mut().build_geographic_cell_mask(
+    MeshKey::OCEAN,
+    reference_radius,
+    |geo| earthlike_terrain(geo).class == SurfaceClass::Ocean,
+  )?;
 
   let atmosphere_mesh =
     factory.tessera().mesh(MeshKey::ATMOSPHERE).unwrap().clone();
@@ -902,6 +918,16 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
     ocean_mesh.as_ref(),
     earthlike_terrain,
   )?;
+  // Moisture availability on the atmosphere mesh (the vertical projection of the
+  // land/sea mask): open water = 1, land/ice = 0. Gates evaporation so land does
+  // not inject ocean-rate vapour.
+  let moisture_availability = register_moisture_availability(
+    factory.pleroma_mut(),
+    MeshKey::ATMOSPHERE,
+    atmosphere_mesh.as_ref(),
+    reference_radius,
+    earthlike_terrain,
+  );
   radiation_model.register_fields(
     factory.pleroma_mut(),
     atmosphere_mesh.as_ref(),
@@ -974,14 +1000,17 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
   ));
   factory.before(atmosphere_stages.dynamics, lift_id);
 
-  factory.add_stage(EvaporationStep::new(
-    MeshKey::ATMOSPHERE,
-    atmosphere_fields.euler_state,
-    sst,
-    evaporation,
-    ShellColumns::cube_sphere(angular_dims, atmosphere_layers),
-    1.0e-6,
-  )?);
+  factory.add_stage(
+    EvaporationStep::new(
+      MeshKey::ATMOSPHERE,
+      atmosphere_fields.euler_state,
+      sst,
+      evaporation,
+      ShellColumns::cube_sphere(angular_dims, atmosphere_layers),
+      1.0e-6,
+    )?
+    .with_moisture_availability(moisture_availability)?,
+  );
   factory.add_stage(SaturationAdjustmentStep::new(
     MeshKey::ATMOSPHERE,
     atmosphere_fields.euler_state,

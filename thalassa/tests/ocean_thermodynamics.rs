@@ -8,10 +8,13 @@
 
 use std::sync::Arc;
 
-use nexus::{FieldStorage, Nexus, Pleroma, SoaField, WorldConstants, WorldId};
+use nexus::{
+  FieldStorage, MeshKey, Nexus, Pleroma, SoaField, WorldConstants, WorldId,
+};
 use tessera::{
   cube_sphere::{CubeSphere, CubeSphereShellSpec},
   geometry::CellGeometry,
+  mask::CellMask,
   world_mesh::Tessera,
 };
 use thalassa::{OceanColumnLayout, OceanModel};
@@ -81,6 +84,66 @@ fn positive_surface_flux_warms_sea_surface_layer() {
   assert!(
     temperature.state(CellId::from(bottom_cell))[0] <= 290.0 + 1e-9,
     "deep layer shouldn't warm faster than the surface in one step"
+  );
+}
+
+#[test]
+fn masked_land_columns_do_not_evolve() {
+  let mesh = ocean_mesh();
+  let mut tessera = Tessera::new();
+  tessera.register_mesh(MeshKey::OCEAN, mesh.clone());
+
+  // Mask even columns active (ocean) and odd columns inactive (land), uniformly
+  // down each column. Active and inactive columns sit side by side in one world.
+  let stride = layout().radial_stride();
+  let cells_per_panel = layout().cells_per_panel();
+  tessera.set_cell_mask(
+    MeshKey::OCEAN,
+    CellMask::from_fn(mesh.cell_count(), |cell| {
+      let column = (cell.index() % cells_per_panel) % stride;
+      column % 2 == 0
+    }),
+  );
+
+  let model = OceanModel::new(MeshKey::OCEAN, layout())
+    .with_initial_temperature(290.0)
+    .with_layer_thickness(50.0);
+  let fields = model.fields();
+
+  let mut pleroma = Pleroma::new();
+  model.register_fields(&mut pleroma, mesh.as_ref()).unwrap();
+  pleroma.register_field(
+    fields.net_flux,
+    SoaField::<1>::from_fn(mesh.cell_count(), |_| [500.0]),
+  );
+
+  let mut nexus = Nexus::new();
+  model.add_stages(&mut nexus).unwrap();
+  let mut compiled = nexus.build(&pleroma).unwrap();
+  compiled
+    .tick(
+      WorldId(0),
+      &tessera,
+      &WorldConstants::default(),
+      &mut pleroma,
+      &Pool::default(),
+      3600.0,
+    )
+    .unwrap();
+
+  let temperature: &SoaField<1> = pleroma.read(fields.temperature).unwrap();
+  let surface = layout().surface_layer();
+  // Column 0 (even → active) warms; column 1 (odd → masked) stays exactly inert.
+  let active_surface = surface * stride; // column 0
+  let inactive_surface = 1 + surface * stride; // column 1
+  assert!(
+    temperature.state(CellId::from(active_surface))[0] > 290.0,
+    "active ocean column must warm under positive flux"
+  );
+  assert_eq!(
+    temperature.state(CellId::from(inactive_surface))[0],
+    290.0,
+    "masked land column must stay at its inert initial temperature"
   );
 }
 

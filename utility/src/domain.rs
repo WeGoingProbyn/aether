@@ -94,6 +94,11 @@ pub enum FieldName {
   /// surface brightness: derived from the surface type / coverage by one or
   /// more producers (terrain base, then ice / snow), and read by radiation.
   SurfaceAlbedo,
+  /// Per-cell open-water fraction (0..1) gating air–sea moisture exchange:
+  /// `1` = open ocean (full evaporation), `0` = dry land. The reusable contract
+  /// for the moisture half of land–sea masking — derived from the surface
+  /// land/sea class and read by the evaporation stage. Inert/static in v1.
+  MoistureAvailability,
   /// Slowly-varying time-mean (climatology) of air temperature (K). Written by
   /// the chronos climatology accumulator, not by physics — the aggregate field
   /// a slow consumer reads while game-time advances by holding the live state.
