@@ -8,5 +8,6 @@
 //!
 //! See `aether/docs/overview.md` for the runtime hierarchy and the advance modes.
 
+pub mod adapt;
 pub mod core;
 pub mod factory;

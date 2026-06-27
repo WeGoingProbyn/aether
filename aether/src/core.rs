@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use chronos::{Regime, RegimeConfig, TransitionKind, TransitionState};
 use cosmo::kind::{BodyKind, CelestialBody};
@@ -8,11 +9,13 @@ use nexus::{
 };
 use pleroma::Pleroma;
 use pleroma::prelude::PleromaCheckpoint;
+use tessera::geometry::CellGeometry;
+use tessera::refine::balance_2to1;
 use tessera::world_mesh::Tessera;
 use utility::{
   constants::solar_flux,
   diagnostics::{DiagnosticsPolicy, WorldDiagnostics},
-  domain::SystemId,
+  domain::{CellId, SystemId},
   error::{AetherError, AetherResult, ErrorDomain},
   events::{Event, EventBus, RegimeKind},
   profile,
@@ -62,6 +65,11 @@ pub struct World {
   /// `ResourceKey::ClimateRegime` so a chronos nudge stage can spin the live
   /// state up from / down to the climatology smoothly. Cleared when complete.
   transition: Option<TransitionState>,
+  /// Per-mesh adaptive-refinement controllers, run at the end-of-tick barrier.
+  /// Empty ⇒ no AMR (the default). See [`crate::adapt`].
+  adapters: Vec<crate::adapt::MeshAdapter>,
+  /// Successful ticks integrated so far — the adapt governors' cadence clock.
+  tick_count: u64,
 }
 
 /// The serialised advance state of a transition handoff (the chronos
@@ -201,7 +209,17 @@ impl World {
       game_clock: 0.0,
       sim_time: 0.0,
       transition: None,
+      adapters: Vec::new(),
+      tick_count: 0,
     }
+  }
+
+  /// Register an adaptive-refinement controller for one mesh. The world drives it
+  /// at the end-of-tick barrier (see [`crate::adapt`]); without any adapter the
+  /// mesh never changes. The `mesh` must be the same [`AdaptiveMesh`] that was
+  /// registered into the world's `Tessera` for `mesh_key`.
+  pub fn add_adapter(&mut self, adapter: crate::adapt::MeshAdapter) {
+    self.adapters.push(adapter);
   }
 
   pub fn body_index(&self) -> Option<usize> {
@@ -476,15 +494,84 @@ impl World {
       dt,
       self.partition_count,
     );
+    // Adapt at the end-of-tick barrier — never mid-DAG — and only on success, so
+    // no stage is holding state borrows and a failed tick freezes the mesh too.
+    // Runs before `publish_events` so its `TopologyChanged` joins this tick's
+    // batch. Mesh adaptation is bounded by each adapter's governor.
+    let adapt_result = if result.is_ok() {
+      self.tick_count = self.tick_count.wrapping_add(1);
+      self.run_adapters()
+    } else {
+      Ok(())
+    };
     // Publish the event buffer at the barrier regardless of success, so a stage
     // that emitted (e.g. a `NonFiniteState` before a `Fail` `Err`) is still
     // visible via `events()` to a consumer handling the error.
     self.publish_events();
     result?;
+    adapt_result?;
     // Clocks only advance on a successful tick (preserving the Fail-freeze
     // contract from the diagnostics layer).
     self.sim_time += dt;
     self.game_clock += dt;
+    Ok(())
+  }
+
+  /// Run every registered adapter whose governor fires this tick: evaluate its
+  /// criterion, balance the request, refine the mesh, conservatively remap the
+  /// mesh's fields, swap in the new mesh with a bumped epoch, and emit
+  /// [`Event::TopologyChanged`]. The serial solver path picks up the new mesh on
+  /// the next tick (AMR v1 runs on a single partition).
+  #[profile]
+  fn run_adapters(&mut self) -> AetherResult<()> {
+    for i in 0..self.adapters.len() {
+      let governor = self.adapters[i].governor;
+      if !governor.fires_on(self.tick_count) {
+        continue;
+      }
+      let mesh = self.adapters[i].mesh.clone();
+      let key = self.adapters[i].mesh_key;
+
+      let desired = self.adapters[i]
+        .criterion
+        .evaluate(mesh.as_ref(), &self.pleroma)?;
+      let request = governor.cap(desired);
+      if request.refine.is_empty() && request.coarsen.is_empty() {
+        continue;
+      }
+      let balanced = balance_2to1(
+        mesh.as_ref(),
+        mesh.cell_count(),
+        |c| mesh.level_of(c),
+        &request,
+      );
+
+      // Pre-adapt volumes drive the conservative coarsening average.
+      let old_volumes: Vec<f64> = (0..mesh.cell_count())
+        .map(|c| mesh.cell_volume(CellId::from(c)))
+        .collect();
+      let (new_mesh, remap) = mesh.refine(&balanced)?;
+      let epoch = remap.new_epoch();
+
+      // Remap state into the new cell layout, then swap the mesh in and bump the
+      // epoch (build-then-swap: state is intact until the remap completes).
+      self.pleroma.remap_mesh_fields(key, &remap, &old_volumes);
+      let new_mesh = Arc::new(new_mesh);
+      self.tessera.register_mesh(key, new_mesh.clone());
+      self.tessera.set_topology_epoch(key, epoch);
+
+      // Broadcast for the read-side consumers (query / render / checkpoint).
+      if let Some(bus) =
+        self.pleroma.read_resource::<EventBus>(ResourceKey::Events)
+      {
+        bus.emit(Event::TopologyChanged {
+          mesh: key,
+          epoch,
+          remap: Arc::new(remap),
+        });
+      }
+      self.adapters[i].mesh = new_mesh;
+    }
     Ok(())
   }
 
@@ -920,6 +1007,81 @@ mod tests {
     );
     world.set_partition_count(partition_count);
     world
+  }
+
+  #[test]
+  fn adaptation_refines_a_high_gradient_region_and_emits_topology_changed() {
+    use crate::adapt::{AdaptGovernor, GradientCriterion, MeshAdapter};
+    use tessera::adaptive::AdaptiveMesh;
+    use tessera::cube_sphere::CubeSphere;
+    use tessera::geometry::CellGeometry;
+    use utility::events::{Event, EventBus};
+    use utility::thread::pool::Pool;
+
+    let key = MeshKey::ATMOSPHERE;
+    let field = FieldKey::new(key, FieldName::Temperature);
+
+    let base = Arc::new(CubeSphere::new([8, 8, 2], 1.0, 2.0));
+    let amesh = Arc::new(AdaptiveMesh::new(base));
+    let n0 = amesh.cell_count();
+
+    // A sharp spike deep in panel 0's interior (angular (4,4), radial 0 ⇒ local
+    // 4 + 4*8 = 36), zero elsewhere — so every high-gradient cell is interior to
+    // the panel (no seam), which v1 refinement supports.
+    let spike = 36usize;
+    let mut pleroma = Pleroma::new();
+    pleroma.register_field(
+      field,
+      SoaField::<1>::from_fn(n0, |c| {
+        if c.index() == spike { [1.0] } else { [0.0] }
+      }),
+    );
+    pleroma.register_resource(ResourceKey::Events, EventBus::new());
+
+    let mut tessera = Tessera::default();
+    tessera.register_mesh(key, amesh.clone());
+
+    let compiled = Nexus::new().build(&pleroma).unwrap();
+    let mut world = World::new(
+      WorldId(0),
+      factory::earth(),
+      None,
+      tessera,
+      pleroma,
+      compiled,
+    );
+    world.add_adapter(MeshAdapter::new(
+      key,
+      amesh,
+      // Refine where the field jumps by > 0.5; never coarsen; cap depth at 1.
+      Box::new(GradientCriterion::<1>::new(field, 0, 0.5, -1.0, 1)),
+      AdaptGovernor::new(1, usize::MAX, usize::MAX),
+    ));
+
+    world.tick(&Pool::default(), 1.0).unwrap();
+
+    // The spike region refined: more cells, epoch bumped to 1.
+    let new_count = world.tessera.mesh(key).unwrap().cell_count();
+    assert!(new_count > n0, "mesh did not refine: {n0} -> {new_count}");
+    assert_eq!(world.tessera.topology_epoch(key).0, 1);
+
+    // The field was conservatively remapped onto the new layout and stays finite.
+    let remapped: &SoaField<1> = world.pleroma.read(field).unwrap();
+    assert_eq!(remapped.len(), new_count);
+    assert!(
+      (0..new_count).all(|i| remapped.state(CellId::from(i))[0].is_finite())
+    );
+
+    // The topology change was broadcast for the read-side consumers.
+    assert!(
+      world.events().iter().any(|e| matches!(
+        e,
+        Event::TopologyChanged { mesh, epoch, .. }
+          if *mesh == key && epoch.0 == 1
+      )),
+      "no TopologyChanged event: {:?}",
+      world.events()
+    );
   }
 
   #[test]

@@ -177,6 +177,28 @@ impl AdaptiveMesh {
     &self.base
   }
 
+  /// The refinement level of a cell (0 = unrefined). Same as the
+  /// [`RefinableMesh`] method, available without the trait in scope.
+  pub fn level_of(&self, cell: CellId) -> u32 {
+    self.cell_levels[cell.index()]
+  }
+
+  /// Apply a (balanced) request and return the **concrete** refined mesh plus
+  /// the remap — the typed counterpart of [`RefinableMesh::adapt`], so the
+  /// adaptation driver can keep refining the same `AdaptiveMesh` across ticks
+  /// (the `dyn Mesh` the trait returns would lose the type).
+  pub fn refine(
+    &self,
+    request: &AdaptRequest,
+  ) -> AetherResult<(AdaptiveMesh, CellRemap)> {
+    let new_epoch = self.epoch.next();
+    let (new_forest, remap) = self.forest.adapt(request, self.epoch, new_epoch);
+    Ok((
+      AdaptiveMesh::build(self.base.clone(), new_forest, new_epoch)?,
+      remap,
+    ))
+  }
+
   /// Assemble the flat mesh from `base` + `forest`. Errors with
   /// [`RefineError::UnbalancedRequest`] if a leaf face cannot be matched to its
   /// neighbour(s) — in practice, refinement that creates a level jump across a
@@ -525,10 +547,7 @@ impl RefinableMesh<3> for AdaptiveMesh {
     &self,
     request: &AdaptRequest,
   ) -> AetherResult<(Arc<dyn Mesh<3>>, CellRemap)> {
-    let new_epoch = self.epoch.next();
-    let (new_forest, remap) = self.forest.adapt(request, self.epoch, new_epoch);
-    let adapted =
-      AdaptiveMesh::build(self.base.clone(), new_forest, new_epoch)?;
+    let (adapted, remap) = self.refine(request)?;
     Ok((Arc::new(adapted), remap))
   }
 }
