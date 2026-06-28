@@ -641,6 +641,9 @@ impl World {
       let new_mesh = Arc::new(new_mesh);
       self.tessera.register_mesh(key, new_mesh.clone());
       self.tessera.set_topology_epoch(key, epoch);
+      // Rebuild couplers touching this mesh from the new topology, atomically
+      // with the swap, so coupling stages never read pairings with dead cells.
+      self.tessera.rebuild_couplers_for(key);
 
       // Broadcast for the read-side consumers (query / render / checkpoint).
       if let Some(bus) =
@@ -1254,6 +1257,108 @@ mod tests {
         "restored cell {i} differs from the saved world"
       );
     }
+  }
+
+  #[test]
+  fn adapting_a_coupled_mesh_rebuilds_the_coupler_and_keeps_coupling_live() {
+    use crate::adapt::{AdaptGovernor, MeshAdapter, RegionRefinementCriterion};
+    use syzygy::ScalarRelaxation;
+    use tessera::adaptive::AdaptiveMesh;
+    use tessera::coupling::MeshCoupler;
+    use tessera::cube_sphere::CubeSphere;
+    use tessera::geometric_coupler::GeometricRadialCoupler;
+    use tessera::geometry::CellGeometry;
+    use utility::events::EventBus;
+    use utility::thread::pool::Pool;
+
+    let surf = FieldKey::new(MeshKey::SURFACE, FieldName::Temperature);
+    let atm = FieldKey::new(MeshKey::ATMOSPHERE, FieldName::Temperature);
+
+    // Adaptive surface below a uniform atmosphere, sharing the angular grid.
+    let surface = Arc::new(AdaptiveMesh::new(Arc::new(CubeSphere::new(
+      [8, 8, 1],
+      0.99,
+      1.0,
+    ))));
+    let atmosphere = Arc::new(CubeSphere::new([8, 8, 2], 1.0, 1.02));
+    let n_surf = surface.cell_count();
+    let n_atm = atmosphere.cell_count();
+
+    let mut tessera = Tessera::default();
+    tessera.register_mesh(MeshKey::SURFACE, surface.clone());
+    tessera.register_mesh(MeshKey::ATMOSPHERE, atmosphere);
+    let coupler_idx = {
+      let coupler = GeometricRadialCoupler::between_shells(
+        tessera.mesh(MeshKey::SURFACE).unwrap().as_ref(),
+        tessera.mesh(MeshKey::ATMOSPHERE).unwrap().as_ref(),
+      );
+      tessera.add_coupler(MeshKey::SURFACE, MeshKey::ATMOSPHERE, coupler)
+    };
+    let pairs_before = tessera.couplers()[coupler_idx].coupler().pairs().len();
+
+    let mut pleroma = Pleroma::new();
+    pleroma.register_field(surf, SoaField::<1>::from_fn(n_surf, |_| [300.0]));
+    pleroma.register_field(atm, SoaField::<1>::zeros(n_atm));
+    pleroma.register_resource(ResourceKey::Events, EventBus::new());
+
+    // Relax the atmosphere (target) toward the surface (source) over the coupler.
+    let mut nexus = Nexus::new();
+    nexus.add(
+      ScalarRelaxation::from_coupler(&tessera, coupler_idx, surf, atm, 1.0)
+        .unwrap(),
+    );
+    let compiled = nexus.build(&pleroma).unwrap();
+
+    let mut world = World::new(
+      WorldId(0),
+      factory::earth(),
+      None,
+      tessera,
+      pleroma,
+      compiled,
+    );
+    world.add_adapter(MeshAdapter::new(
+      MeshKey::SURFACE,
+      surface,
+      Box::new(RegionRefinementCriterion::new(
+        [0.0, 0.0, 1.0],
+        0.30,
+        0.45,
+        1,
+      )),
+      AdaptGovernor::new(2, 256, 256),
+    ));
+
+    // Step past the adapt cadence. The surface refines; the barrier remaps its
+    // fields *and* rebuilds the coupler, and the relaxation resolves the live
+    // coupler each run — so the tick must not error on stale/dead cells.
+    for _ in 0..4 {
+      world.tick(&Pool::default(), 0.5).unwrap();
+    }
+
+    // The surface refined, and the coupler was rebuilt to more (N:M) pairs.
+    assert!(
+      world.tessera.mesh(MeshKey::SURFACE).unwrap().cell_count() > n_surf
+    );
+    let pairs_after = world.tessera.couplers()[coupler_idx]
+      .coupler()
+      .pairs()
+      .len();
+    assert!(
+      pairs_after > pairs_before,
+      "barrier should rebuild the coupler with more pairs: {pairs_before} -> {pairs_after}"
+    );
+
+    // Coupling stayed live: the atmosphere relaxed toward the 300 K surface on
+    // its coupled cells, all finite.
+    let atm_field: &SoaField<1> = world.pleroma.read(atm).unwrap();
+    assert!(
+      (0..n_atm).all(|i| atm_field.state(CellId::from(i))[0].is_finite())
+    );
+    assert!(
+      (0..n_atm).any(|i| atm_field.state(CellId::from(i))[0] > 1.0),
+      "atmosphere should relax toward the surface across the rebuilt coupler"
+    );
   }
 
   #[test]

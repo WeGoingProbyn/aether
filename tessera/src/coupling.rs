@@ -12,6 +12,15 @@ pub trait MeshCoupler: Send + Sync {
   fn paired_face(&self, side: Side, face: FaceId) -> Option<(Side, FaceId)>;
   fn paired_cell(&self, side: Side, cell: CellId) -> Option<(Side, CellId)>;
   fn pairs(&self) -> &[FacePair];
+
+  /// Recompute the coupling from the (possibly re-meshed) side meshes — `mesh_a`
+  /// and `mesh_b` in this coupler's registration order. Called by the adapt
+  /// barrier when either side's topology changes, so consumers never see pairings
+  /// referencing dead cells. The default is a no-op: index-based couplers over
+  /// non-adaptive meshes don't change. Geometry-based couplers override it.
+  fn rebuild(&mut self, mesh_a: &dyn Mesh<3>, mesh_b: &dyn Mesh<3>) {
+    let _ = (mesh_a, mesh_b);
+  }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

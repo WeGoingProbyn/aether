@@ -29,48 +29,27 @@ use crate::coupling::{FacePair, MeshCoupler, Side};
 use crate::mesh::Mesh;
 
 pub struct GeometricRadialCoupler {
+  lower_tag: BoundaryTag,
+  upper_tag: BoundaryTag,
   pairs: Vec<FacePair>,
 }
 
 impl GeometricRadialCoupler {
   /// Pair `lower`'s `lower_tag` boundary faces with `upper`'s `upper_tag`
-  /// boundary faces by angular-footprint nesting.
+  /// boundary faces by angular-footprint nesting. The tags are remembered so the
+  /// pairing can be recomputed when a side is re-meshed (see
+  /// [`MeshCoupler::rebuild`](crate::coupling::MeshCoupler::rebuild)).
   pub fn build(
     lower: &dyn Mesh<3>,
     lower_tag: BoundaryTag,
     upper: &dyn Mesh<3>,
     upper_tag: BoundaryTag,
   ) -> Self {
-    let lower_faces = interface_faces(lower, lower_tag);
-    let upper_faces = interface_faces(upper, upper_tag);
-
-    // Two-pass nearest-neighbour by angular position. Each face pairs with the
-    // single face *containing its centroid* on the other side — which is its
-    // angularly-nearest face, since the interface tiles the sphere. Doing it from
-    // both sides captures every nesting direction: when the lower side is finer,
-    // each fine lower face finds its one coarse upper parent (pass 1); when the
-    // upper side is finer, each fine upper face finds its coarse lower parent
-    // (pass 2). The union (deduplicated) is the exact N:M overlap set; for a
-    // conforming interface it is the 1:1 bijection.
-    let mut seen: std::collections::HashSet<(usize, usize)> =
-      std::collections::HashSet::new();
-    let mut pairs = Vec::new();
-    let mut add = |lf: FaceId, uf: FaceId, pairs: &mut Vec<FacePair>| {
-      if seen.insert((lf.index(), uf.index())) {
-        pairs.push(FacePair::new(lf, uf));
-      }
-    };
-    for (lf, ldir) in &lower_faces {
-      if let Some((uf, _)) = nearest(*ldir, &upper_faces) {
-        add(*lf, uf, &mut pairs);
-      }
+    Self {
+      lower_tag,
+      upper_tag,
+      pairs: match_faces(lower, lower_tag, upper, upper_tag),
     }
-    for (uf, udir) in &upper_faces {
-      if let Some((lf, _)) = nearest(*udir, &lower_faces) {
-        add(lf, *uf, &mut pairs);
-      }
-    }
-    Self { pairs }
   }
 
   /// Build with the default shell interface tags: the lower shell's outer ring is
@@ -90,6 +69,43 @@ impl GeometricRadialCoupler {
   }
 }
 
+/// Two-pass nearest-neighbour pairing of two interface rings by angular position.
+/// Each face pairs with the single face *containing its centroid* on the other
+/// side — its angularly-nearest face, since the interface tiles the sphere.
+/// Pairing from both sides captures every nesting direction: when the lower side
+/// is finer, each fine lower face finds its one coarse upper parent (pass 1);
+/// when the upper side is finer, each fine upper face finds its coarse lower
+/// parent (pass 2). The deduplicated union is the exact N:M overlap set; for a
+/// conforming interface it is the 1:1 bijection.
+fn match_faces(
+  lower: &dyn Mesh<3>,
+  lower_tag: BoundaryTag,
+  upper: &dyn Mesh<3>,
+  upper_tag: BoundaryTag,
+) -> Vec<FacePair> {
+  let lower_faces = interface_faces(lower, lower_tag);
+  let upper_faces = interface_faces(upper, upper_tag);
+  let mut seen: std::collections::HashSet<(usize, usize)> =
+    std::collections::HashSet::new();
+  let mut pairs = Vec::new();
+  let mut add = |lf: FaceId, uf: FaceId, pairs: &mut Vec<FacePair>| {
+    if seen.insert((lf.index(), uf.index())) {
+      pairs.push(FacePair::new(lf, uf));
+    }
+  };
+  for (lf, ldir) in &lower_faces {
+    if let Some((uf, _)) = nearest(*ldir, &upper_faces) {
+      add(*lf, uf, &mut pairs);
+    }
+  }
+  for (uf, udir) in &upper_faces {
+    if let Some((lf, _)) = nearest(*udir, &lower_faces) {
+      add(lf, *uf, &mut pairs);
+    }
+  }
+  pairs
+}
+
 impl MeshCoupler for GeometricRadialCoupler {
   fn paired_face(&self, side: Side, face: FaceId) -> Option<(Side, FaceId)> {
     self.pairs.iter().find_map(|p| match side {
@@ -106,6 +122,13 @@ impl MeshCoupler for GeometricRadialCoupler {
 
   fn pairs(&self) -> &[FacePair] {
     &self.pairs
+  }
+
+  fn rebuild(&mut self, mesh_a: &dyn Mesh<3>, mesh_b: &dyn Mesh<3>) {
+    // `mesh_a` is the lower side, `mesh_b` the upper, matching the order this
+    // coupler was registered with. Recompute the angular pairing for the
+    // (possibly re-meshed) interfaces.
+    self.pairs = match_faces(mesh_a, self.lower_tag, mesh_b, self.upper_tag);
   }
 }
 

@@ -8,7 +8,10 @@ use utility::{
   error::{AetherError, AetherResult},
 };
 
-use crate::{error::SyzygyError, stencil::CouplingStencil};
+use crate::{
+  error::SyzygyError,
+  stencil::{CouplingStencil, StencilSource},
+};
 
 /// Computes a target-side scalar tendency from an interface stencil.
 ///
@@ -20,7 +23,7 @@ use crate::{error::SyzygyError, stencil::CouplingStencil};
 /// This keeps Syzygy responsible for cross-physics exchange terms without
 /// directly mutating the target prognostic state.
 pub struct ScalarInterfaceFlux {
-  stencil: CouplingStencil,
+  coupling: StencilSource,
   source: FieldKey,
   target: FieldKey,
   tendency: FieldKey,
@@ -37,25 +40,17 @@ impl ScalarInterfaceFlux {
     tendency: FieldKey,
     conductance: f64,
   ) -> AetherResult<Self> {
-    validate_conductance(conductance)?;
-    validate_field_meshes(
-      source,
-      target,
-      tendency,
-      stencil.source_mesh(),
-      stencil.target_mesh(),
-    )?;
-    Ok(Self {
-      stencil,
+    Self::with_coupling(
+      StencilSource::Static(stencil),
       source,
       target,
       tendency,
       conductance,
-      reads: [source, target],
-      writes: [tendency],
-    })
+    )
   }
 
+  /// As [`new`](Self::new) but bound to a tessera coupler, rebuilt each run so an
+  /// adaptively re-meshed interface is tracked.
   pub fn from_coupler(
     tessera: &Tessera,
     coupler_index: usize,
@@ -64,17 +59,39 @@ impl ScalarInterfaceFlux {
     tendency: FieldKey,
     conductance: f64,
   ) -> AetherResult<Self> {
-    let stencil = CouplingStencil::from_tessera_coupler(
+    let coupling = StencilSource::from_coupler(
       tessera,
       coupler_index,
       source.mesh(),
       target.mesh(),
     )?;
-    Self::new(stencil, source, target, tendency, conductance)
+    Self::with_coupling(coupling, source, target, tendency, conductance)
   }
 
-  pub fn stencil(&self) -> &CouplingStencil {
-    &self.stencil
+  fn with_coupling(
+    coupling: StencilSource,
+    source: FieldKey,
+    target: FieldKey,
+    tendency: FieldKey,
+    conductance: f64,
+  ) -> AetherResult<Self> {
+    validate_conductance(conductance)?;
+    validate_field_meshes(
+      source,
+      target,
+      tendency,
+      coupling.source_mesh(),
+      coupling.target_mesh(),
+    )?;
+    Ok(Self {
+      coupling,
+      source,
+      target,
+      tendency,
+      conductance,
+      reads: [source, target],
+      writes: [tendency],
+    })
   }
 
   pub fn source(&self) -> FieldKey {
@@ -108,6 +125,7 @@ impl Stage for ScalarInterfaceFlux {
   }
 
   fn run(&mut self, mut ctx: StageContext<'_>) -> AetherResult<()> {
+    let stencil = self.coupling.resolve(ctx.world.tessera)?;
     let tendencies = {
       let source: &SoaField<1> =
         ctx.world.fields.read(self.source).ok_or_else(|| {
@@ -120,7 +138,7 @@ impl Stage for ScalarInterfaceFlux {
             .context(format!("{:?}", self.target))
         })?;
 
-      compute_tendencies(&self.stencil, source, target, self.conductance)?
+      compute_tendencies(&stencil, source, target, self.conductance)?
     };
 
     let tendency: &mut SoaField<1> =
@@ -158,7 +176,7 @@ impl Stage for ScalarInterfaceFlux {
 /// `-L_v · Δz`, debits the ocean surface energy the vapour will later release
 /// on condensation.
 pub struct ScalarInterfaceDeposition {
-  stencil: CouplingStencil,
+  coupling: StencilSource,
   source: FieldKey,
   target: FieldKey,
   scale: f64,
@@ -173,30 +191,11 @@ impl ScalarInterfaceDeposition {
     target: FieldKey,
     scale: f64,
   ) -> AetherResult<Self> {
-    validate_conductance(scale)?;
-    if source.mesh() != stencil.source_mesh()
-      || target.mesh() != stencil.target_mesh()
-    {
-      return Err(AetherError::new(SyzygyError::FieldMeshMismatch).context(
-        format!(
-          "source {:?}, target {:?}, stencil {:?} -> {:?}",
-          source,
-          target,
-          stencil.source_mesh(),
-          stencil.target_mesh()
-        ),
-      ));
-    }
-    Ok(Self {
-      stencil,
-      source,
-      target,
-      scale,
-      reads: [source],
-      writes: [target],
-    })
+    Self::with_coupling(StencilSource::Static(stencil), source, target, scale)
   }
 
+  /// As [`new`](Self::new) but bound to a tessera coupler, rebuilt each run so an
+  /// adaptively re-meshed interface is tracked.
   pub fn from_coupler(
     tessera: &Tessera,
     coupler_index: usize,
@@ -204,13 +203,43 @@ impl ScalarInterfaceDeposition {
     target: FieldKey,
     scale: f64,
   ) -> AetherResult<Self> {
-    let stencil = CouplingStencil::from_tessera_coupler(
+    let coupling = StencilSource::from_coupler(
       tessera,
       coupler_index,
       source.mesh(),
       target.mesh(),
     )?;
-    Self::new(stencil, source, target, scale)
+    Self::with_coupling(coupling, source, target, scale)
+  }
+
+  fn with_coupling(
+    coupling: StencilSource,
+    source: FieldKey,
+    target: FieldKey,
+    scale: f64,
+  ) -> AetherResult<Self> {
+    validate_conductance(scale)?;
+    if source.mesh() != coupling.source_mesh()
+      || target.mesh() != coupling.target_mesh()
+    {
+      return Err(AetherError::new(SyzygyError::FieldMeshMismatch).context(
+        format!(
+          "source {:?}, target {:?}, stencil {:?} -> {:?}",
+          source,
+          target,
+          coupling.source_mesh(),
+          coupling.target_mesh()
+        ),
+      ));
+    }
+    Ok(Self {
+      coupling,
+      source,
+      target,
+      scale,
+      reads: [source],
+      writes: [target],
+    })
   }
 }
 
@@ -228,6 +257,7 @@ impl Stage for ScalarInterfaceDeposition {
   }
 
   fn run(&mut self, mut ctx: StageContext<'_>) -> AetherResult<()> {
+    let stencil = self.coupling.resolve(ctx.world.tessera)?;
     // Accumulate per target cell from the source field first.
     let deposits = {
       let source: &SoaField<1> =
@@ -237,7 +267,7 @@ impl Stage for ScalarInterfaceDeposition {
         })?;
       let mut deposits = vec![0.0; source.len().max(1)];
       let mut target_len = 0usize;
-      for entry in self.stencil.entries() {
+      for entry in stencil.entries() {
         ensure_cell_in_bounds(entry.source_cell, source.len(), "source")?;
         target_len = target_len.max(entry.target_cell.index() + 1);
         if deposits.len() < target_len {

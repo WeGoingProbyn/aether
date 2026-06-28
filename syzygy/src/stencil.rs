@@ -109,6 +109,84 @@ impl CouplingStencil {
   }
 }
 
+/// Where a coupling stage gets its stencil at run time.
+///
+/// - [`Static`](StencilSource::Static): a fixed stencil (meshes that never adapt,
+///   or a hand-built stencil). Cheapest; the long-standing behaviour.
+/// - [`Live`](StencilSource::Live): rebuilt from a tessera coupler on **every**
+///   run, so an adaptively re-meshed coupler (whose pairings the adapt barrier
+///   recomputed) is reflected immediately — the stage never holds a snapshot that
+///   could reference dead cells. The expensive geometric pairing is cached on the
+///   coupler; resolving here just turns the current pairs into a stencil.
+pub enum StencilSource {
+  Static(CouplingStencil),
+  Live {
+    coupler_index: usize,
+    source_mesh: MeshKey,
+    target_mesh: MeshKey,
+  },
+}
+
+impl StencilSource {
+  /// A live source bound to a tessera coupler. Validates the coupler/meshes now
+  /// (so a bad index or mesh mismatch fails at assembly, not mid-run).
+  pub fn from_coupler(
+    tessera: &Tessera,
+    coupler_index: usize,
+    source_mesh: MeshKey,
+    target_mesh: MeshKey,
+  ) -> AetherResult<Self> {
+    CouplingStencil::from_tessera_coupler(
+      tessera,
+      coupler_index,
+      source_mesh,
+      target_mesh,
+    )?;
+    Ok(Self::Live {
+      coupler_index,
+      source_mesh,
+      target_mesh,
+    })
+  }
+
+  pub fn source_mesh(&self) -> MeshKey {
+    match self {
+      Self::Static(s) => s.source_mesh(),
+      Self::Live { source_mesh, .. } => *source_mesh,
+    }
+  }
+
+  pub fn target_mesh(&self) -> MeshKey {
+    match self {
+      Self::Static(s) => s.target_mesh(),
+      Self::Live { target_mesh, .. } => *target_mesh,
+    }
+  }
+
+  /// The stencil to use this run — borrowed for `Static`, freshly rebuilt from
+  /// the current coupler for `Live`.
+  pub fn resolve<'a>(
+    &'a self,
+    tessera: &Tessera,
+  ) -> AetherResult<std::borrow::Cow<'a, CouplingStencil>> {
+    match self {
+      Self::Static(s) => Ok(std::borrow::Cow::Borrowed(s)),
+      Self::Live {
+        coupler_index,
+        source_mesh,
+        target_mesh,
+      } => Ok(std::borrow::Cow::Owned(
+        CouplingStencil::from_tessera_coupler(
+          tessera,
+          *coupler_index,
+          *source_mesh,
+          *target_mesh,
+        )?,
+      )),
+    }
+  }
+}
+
 fn validate_coupler_meshes(
   source: MeshKey,
   target: MeshKey,

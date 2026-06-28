@@ -8,7 +8,10 @@ use utility::{
   error::{AetherError, AetherResult},
 };
 
-use crate::{error::SyzygyError, stencil::CouplingStencil};
+use crate::{
+  error::SyzygyError,
+  stencil::{CouplingStencil, StencilSource},
+};
 
 /// Minimal scalar coupling law for validating cross-mesh data flow.
 ///
@@ -20,7 +23,7 @@ use crate::{error::SyzygyError, stencil::CouplingStencil};
 /// This is not intended to be a final physical law; it is the first Syzygy
 /// stage shape that proves ownership and scheduling.
 pub struct ScalarRelaxation {
-  stencil: CouplingStencil,
+  coupling: StencilSource,
   source: FieldKey,
   target: FieldKey,
   rate_per_second: f64,
@@ -35,23 +38,16 @@ impl ScalarRelaxation {
     target: FieldKey,
     rate_per_second: f64,
   ) -> AetherResult<Self> {
-    validate_rate(rate_per_second)?;
-    validate_field_meshes(
-      source.mesh(),
-      target.mesh(),
-      stencil.source_mesh(),
-      stencil.target_mesh(),
-    )?;
-    Ok(Self {
-      stencil,
+    Self::with_coupling(
+      StencilSource::Static(stencil),
       source,
       target,
       rate_per_second,
-      reads: [source, target],
-      writes: [target],
-    })
+    )
   }
 
+  /// As [`new`](Self::new) but bound to a tessera coupler, rebuilt each run so an
+  /// adaptively re-meshed interface is tracked (no stale pairings).
   pub fn from_coupler(
     tessera: &Tessera,
     coupler_index: usize,
@@ -59,17 +55,36 @@ impl ScalarRelaxation {
     target: FieldKey,
     rate_per_second: f64,
   ) -> AetherResult<Self> {
-    let stencil = CouplingStencil::from_tessera_coupler(
+    let coupling = StencilSource::from_coupler(
       tessera,
       coupler_index,
       source.mesh(),
       target.mesh(),
     )?;
-    Self::new(stencil, source, target, rate_per_second)
+    Self::with_coupling(coupling, source, target, rate_per_second)
   }
 
-  pub fn stencil(&self) -> &CouplingStencil {
-    &self.stencil
+  fn with_coupling(
+    coupling: StencilSource,
+    source: FieldKey,
+    target: FieldKey,
+    rate_per_second: f64,
+  ) -> AetherResult<Self> {
+    validate_rate(rate_per_second)?;
+    validate_field_meshes(
+      source.mesh(),
+      target.mesh(),
+      coupling.source_mesh(),
+      coupling.target_mesh(),
+    )?;
+    Ok(Self {
+      coupling,
+      source,
+      target,
+      rate_per_second,
+      reads: [source, target],
+      writes: [target],
+    })
   }
 
   pub fn source(&self) -> FieldKey {
@@ -100,6 +115,8 @@ impl Stage for ScalarRelaxation {
 
   fn run(&mut self, mut ctx: StageContext<'_>) -> AetherResult<()> {
     let coefficient = self.rate_per_second * ctx.world.dt;
+    // Resolve against the *current* coupler so a re-meshed interface is tracked.
+    let stencil = self.coupling.resolve(ctx.world.tessera)?;
     let updates = {
       let source: &SoaField<1> =
         ctx.world.fields.read(self.source).ok_or_else(|| {
@@ -112,7 +129,7 @@ impl Stage for ScalarRelaxation {
             .context(format!("{:?}", self.target))
         })?;
 
-      proposed_updates(&self.stencil, source, target, coefficient)?
+      proposed_updates(&stencil, source, target, coefficient)?
     };
 
     let target: &mut SoaField<1> =

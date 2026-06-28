@@ -163,6 +163,24 @@ impl Tessera {
     self.epochs.insert(mesh, epoch);
   }
 
+  /// Recompute every coupler that references `mesh` from the current meshes —
+  /// called by the adapt barrier right after `mesh` is re-meshed, so a coupler's
+  /// pairings never reference cells from a stale topology. No-op for couplers
+  /// whose [`MeshCoupler::rebuild`] is the default (index couplers don't change).
+  pub fn rebuild_couplers_for(&mut self, mesh: MeshKey) {
+    let meshes = &self.meshes;
+    for entry in &mut self.couplers {
+      if entry.mesh_a != mesh && entry.mesh_b != mesh {
+        continue;
+      }
+      if let (Some(a), Some(b)) =
+        (meshes.get(&entry.mesh_a), meshes.get(&entry.mesh_b))
+      {
+        entry.coupler.rebuild(a.mesh.as_ref(), b.mesh.as_ref());
+      }
+    }
+  }
+
   /// Store a [`CellMask`] for `mesh`, replacing any previous one.
   pub fn set_cell_mask(&mut self, mesh: MeshKey, mask: CellMask) {
     self.masks.insert(mesh, mask);
