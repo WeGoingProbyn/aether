@@ -12,6 +12,7 @@ pub mod adaptive;
 pub mod coupling;
 pub mod cube_sphere;
 pub mod geo;
+pub mod geometric_coupler;
 pub mod geometry;
 pub mod mask;
 pub mod mesh;

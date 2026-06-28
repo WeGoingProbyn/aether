@@ -309,4 +309,64 @@ mod tests {
     );
     assert_eq!(a.normal, [-b.normal[0], -b.normal[1], -b.normal[2]]);
   }
+
+  #[test]
+  fn geometric_coupler_yields_a_normalised_nm_stencil() {
+    use std::collections::HashMap;
+
+    use tessera::adaptive::AdaptiveMesh;
+    use tessera::geometric_coupler::GeometricRadialCoupler;
+    use tessera::refine::AdaptRequest;
+    use utility::domain::CellId;
+
+    // Refine a panel-interior surface cell; uniform atmosphere above.
+    let lower =
+      AdaptiveMesh::new(Arc::new(CubeSphere::new([4, 4, 1], 0.9, 1.0)));
+    let (refined, _) = lower
+      .refine(&AdaptRequest {
+        refine: vec![CellId::from(5)],
+        coarsen: vec![],
+      })
+      .unwrap();
+    let upper = Arc::new(CubeSphere::new([4, 4, 2], 1.0, 1.1));
+
+    let mut tessera = Tessera::new();
+    tessera.register_mesh(MeshKey::SURFACE, Arc::new(refined));
+    tessera.register_mesh(MeshKey::ATMOSPHERE, upper);
+    let coupler = GeometricRadialCoupler::between_shells(
+      tessera.mesh(MeshKey::SURFACE).unwrap().as_ref(),
+      tessera.mesh(MeshKey::ATMOSPHERE).unwrap().as_ref(),
+    );
+    let idx =
+      tessera.add_coupler(MeshKey::SURFACE, MeshKey::ATMOSPHERE, coupler);
+
+    // Surface (fine) → atmosphere (coarse): a coarse target gathers from several
+    // fine sources. Building the stencil would panic (debug_assert) if the
+    // per-target gather weights didn't sum to 1; check that here, and that the
+    // refined region really produced an N:M (≥2-source) target.
+    let stencil = CouplingStencil::from_tessera_coupler(
+      &tessera,
+      idx,
+      MeshKey::SURFACE,
+      MeshKey::ATMOSPHERE,
+    )
+    .unwrap();
+    let mut per_target: HashMap<usize, (usize, f64)> = HashMap::new();
+    for e in stencil.entries() {
+      let slot = per_target.entry(e.target_cell.index()).or_insert((0, 0.0));
+      slot.0 += 1;
+      slot.1 += e.target_weight;
+    }
+    for (_, weight) in per_target.values() {
+      assert!(
+        (weight - 1.0).abs() < 1e-9,
+        "gather weights sum to {weight}"
+      );
+    }
+    assert!(
+      per_target.values().any(|(n, _)| *n >= 2),
+      "refining the surface should give a coarse atmosphere target multiple \
+       fine sources"
+    );
+  }
 }

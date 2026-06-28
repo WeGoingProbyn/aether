@@ -106,7 +106,11 @@ impl CoupledFace {
       owner_b,
       centroid: (&centroid_a + &centroid_b) * 0.5,
       normal_a_to_b,
-      area: 0.5 * (area_a + area_b),
+      // Overlap area of the pair. When the two interface faces are *nested*
+      // (level-mismatch coupling under AMR), one face lies inside the other, so
+      // the shared area is the finer (smaller) of the two. For a conforming 1:1
+      // interface the areas are equal, so this matches the previous mean.
+      area: area_a.min(area_b),
       area_a,
       area_b,
       distance,
