@@ -244,7 +244,11 @@ impl Stage for ScalarInterfaceDeposition {
           deposits.resize(target_len, 0.0);
         }
         let s = source.state(entry.source_cell).as_state()[0];
-        deposits[entry.target_cell.index()] += self.scale * entry.weight * s;
+        // Conservative scatter: a source splits across its targets by area
+        // fraction, so the total deposited equals `scale · source` regardless of
+        // how the interface is refined.
+        deposits[entry.target_cell.index()] +=
+          self.scale * entry.source_weight * s;
       }
       deposits
     };
@@ -312,8 +316,10 @@ fn compute_tendencies(
     let source_value = source.state(entry.source_cell).as_state()[0];
     let target_value = target.state(entry.target_cell).as_state()[0];
     let distance = entry.distance.max(f64::EPSILON);
-    let exchange = conductance * entry.weight * entry.area / distance
-      * (source_value - target_value);
+    // Gradient exchange scales by the raw overlap interface area; many overlaps
+    // sharing a target simply sum.
+    let exchange =
+      conductance * entry.area / distance * (source_value - target_value);
     tendencies[entry.target_cell.index()] += exchange;
   }
 

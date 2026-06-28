@@ -9,14 +9,29 @@ use utility::{
 
 use crate::error::SyzygyError;
 
+/// One source↔target interface overlap. Many entries may share a `target_cell`
+/// (a coarse target gathering from several fine sources) or a `source_cell` (a
+/// coarse source scattering to several fine targets) — that is how level-mismatch
+/// (N:M) coupling under AMR is expressed; a conforming 1:1 interface is the
+/// degenerate case with one entry per cell.
+///
+/// `area` is the raw overlap physical area; the two normalised weights are derived
+/// from it in [`CouplingStencil::new`] so a consumer picks the one matching its
+/// semantics (and they each sum to 1 over their axis — see that constructor).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CouplingEntry {
   pub source_cell: CellId,
   pub target_cell: CellId,
-  pub weight: f64,
+  /// Raw overlap physical area of this pair.
   pub area: f64,
   pub distance: f64,
   pub normal: [f64; 3],
+  /// `area` normalised so the weights over all entries sharing this `target_cell`
+  /// sum to 1 — the **gather** weight (relaxation / interpolation read).
+  pub target_weight: f64,
+  /// `area` normalised so the weights over all entries sharing this `source_cell`
+  /// sum to 1 — the conservative **scatter** fraction (deposition).
+  pub source_weight: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -30,7 +45,7 @@ impl CouplingStencil {
   pub fn new(
     source_mesh: MeshKey,
     target_mesh: MeshKey,
-    entries: Vec<CouplingEntry>,
+    mut entries: Vec<CouplingEntry>,
   ) -> AetherResult<Self> {
     if source_mesh == target_mesh {
       return Err(AetherError::new(SyzygyError::FieldMeshMismatch).context(
@@ -40,6 +55,7 @@ impl CouplingStencil {
     for entry in &entries {
       validate_entry(entry)?;
     }
+    normalise_weights(&mut entries);
     Ok(Self {
       source_mesh,
       target_mesh,
@@ -146,10 +162,12 @@ fn entry_from_face(
   let entry = CouplingEntry {
     source_cell,
     target_cell,
-    weight: 1.0,
     area: face.area,
     distance: face.distance,
     normal,
+    // Filled by `normalise_weights` in `CouplingStencil::new`.
+    target_weight: 0.0,
+    source_weight: 0.0,
   };
   validate_entry(&entry)?;
   Ok(entry)
@@ -157,9 +175,7 @@ fn entry_from_face(
 
 fn validate_entry(entry: &CouplingEntry) -> AetherResult<()> {
   let normal_magnitude = entry.normal.iter().map(|x| x * x).sum::<f64>().sqrt();
-  if entry.weight.is_finite()
-    && entry.weight >= 0.0
-    && entry.area.is_finite()
+  if entry.area.is_finite()
     && entry.area > 0.0
     && entry.distance.is_finite()
     && entry.distance >= 0.0
@@ -171,6 +187,43 @@ fn validate_entry(entry: &CouplingEntry) -> AetherResult<()> {
       AetherError::new(SyzygyError::InvalidStencil)
         .context(format!("entry {:?}", entry)),
     )
+  }
+}
+
+/// Derive each entry's `target_weight` / `source_weight` from its raw overlap
+/// `area`, normalised so the weights sum to 1 over all entries sharing a target
+/// (gather) and over all entries sharing a source (scatter), respectively. Doing
+/// it here — once, at construction — means the geometric area computation's
+/// floating-point slop is absorbed into exact fractions, so conservative
+/// deposition (which splits by `source_weight`) cannot silently gain/lose mass.
+fn normalise_weights(entries: &mut [CouplingEntry]) {
+  use std::collections::HashMap;
+  let mut target_area: HashMap<usize, f64> = HashMap::new();
+  let mut source_area: HashMap<usize, f64> = HashMap::new();
+  for e in entries.iter() {
+    *target_area.entry(e.target_cell.index()).or_default() += e.area;
+    *source_area.entry(e.source_cell.index()).or_default() += e.area;
+  }
+  for e in entries.iter_mut() {
+    let ts = target_area[&e.target_cell.index()];
+    let ss = source_area[&e.source_cell.index()];
+    e.target_weight = if ts > 0.0 { e.area / ts } else { 0.0 };
+    e.source_weight = if ss > 0.0 { e.area / ss } else { 0.0 };
+  }
+
+  if cfg!(debug_assertions) {
+    let mut tsum: HashMap<usize, f64> = HashMap::new();
+    let mut ssum: HashMap<usize, f64> = HashMap::new();
+    for e in entries.iter() {
+      *tsum.entry(e.target_cell.index()).or_default() += e.target_weight;
+      *ssum.entry(e.source_cell.index()).or_default() += e.source_weight;
+    }
+    for (_, s) in tsum {
+      debug_assert!((s - 1.0).abs() < 1e-9, "target weights sum to {s}, not 1");
+    }
+    for (_, s) in ssum {
+      debug_assert!((s - 1.0).abs() < 1e-9, "source weights sum to {s}, not 1");
+    }
   }
 }
 
@@ -245,7 +298,10 @@ mod tests {
     let b = reverse.entries()[0];
     assert_eq!(a.source_cell, b.target_cell);
     assert_eq!(a.target_cell, b.source_cell);
-    assert_eq!(a.weight, 1.0);
+    // A conforming 1:1 interface: each cell has a single partner, so both
+    // normalised weights are 1.
+    assert_eq!(a.target_weight, 1.0);
+    assert_eq!(a.source_weight, 1.0);
     assert!(a.area > 0.0);
     assert!(a.distance > 0.0);
     assert!(

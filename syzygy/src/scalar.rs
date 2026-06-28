@@ -174,8 +174,9 @@ fn proposed_updates(
     let target_value = target.state(entry.target_cell).as_state()[0];
     let proposed = target_value + coefficient * (source_value - target_value);
     let index = entry.target_cell.index();
-    sums[index] += proposed * entry.weight;
-    weights[index] += entry.weight;
+    // Gather: weight each source by its share of the target's interface area.
+    sums[index] += proposed * entry.target_weight;
+    weights[index] += entry.target_weight;
   }
 
   Ok(
