@@ -58,8 +58,28 @@ impl Pleroma {
         cell_count,
         codec: checkpoint::field_codec::<N, S>(),
         remapper: crate::core::storage::field_remapper::<N, S>(),
+        resizer: crate::core::storage::field_resizer::<N, S>(),
       },
     );
+  }
+
+  /// Resize every field on `mesh` to `cell_count` zeroed cells, updating each
+  /// slot's `cell_count`. Used to grow/shrink a mesh's fields to a reconstructed
+  /// (e.g. checkpoint-restored adaptive) topology before the stored values are
+  /// loaded over them. Fields on other meshes are untouched.
+  pub fn resize_mesh_fields(
+    &mut self,
+    mesh: utility::domain::MeshKey,
+    cell_count: usize,
+  ) {
+    for (key, slot) in self.fields.iter_mut() {
+      if key.mesh() != mesh {
+        continue;
+      }
+      let boxed = slot.data.get_mut();
+      *boxed = (slot.resizer)(cell_count);
+      slot.cell_count = cell_count;
+    }
   }
 
   /// Remap every field on `mesh` across a topology adapt, in place. For each such

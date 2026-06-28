@@ -37,8 +37,18 @@ On a cube-sphere shell the *volume* metric must **not** be reused as a
 Cartesian domains but must be overridden for curvilinear ones, or characteristic
 lengths come out wrong by a factor of the radius.
 
+## Adaptive refinement
+
+`refine` defines the mesh-agnostic AMR contract (`RefinableMesh`, `RefineFlags` /
+`AdaptRequest`, the `balance_2to1` balancer); `refine_forest` is the per-cell
+quadtree (`RefinementForest`) of active cells; `adaptive` wraps any base mesh that
+implements the `Subdividable` geometry hook in an `AdaptiveMesh` that rebuilds a
+conforming + hanging-node mesh on each adapt. The cube-sphere is the first
+backend. See [amr.md](../../docs/amr.md).
+
 ## See also
 
 - Adding a mesh type: [extending](../../docs/extending.md#add-a-new-mesh-type).
 - Geographic queries built on `geo`/`spatial`:
   [rendering](../../docs/rendering.md), [`eidolon`](../../eidolon/docs/overview.md).
+- Runtime mesh adaptation: [amr.md](../../docs/amr.md).

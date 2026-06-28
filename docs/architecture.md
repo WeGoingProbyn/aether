@@ -120,6 +120,10 @@ boundaries above:
 - **Coupling is explicit and typed.** Same-mesh dependencies are ordinary DAG
   edges; cross-mesh exchange goes through `syzygy` couplers. Either way the
   coupling is declared data, inspectable and testable.
+- **Adaptivity is a versioned seam, not a special case.** Meshes can refine at
+  runtime: dense `CellId` stays the hot-path key, and a `TopologyEpoch` +
+  `CellRemap` (broadcast on the event bus) is how state, query, render, and
+  checkpoints survive a re-mesh. See [amr.md](amr.md).
 
 See [extending.md](extending.md) for the concrete recipes (new field, new stage,
 new physics crate, new coupling, new mesh, new solver backend).

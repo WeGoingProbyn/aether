@@ -9,13 +9,14 @@ use nexus::{
 };
 use pleroma::Pleroma;
 use pleroma::prelude::PleromaCheckpoint;
+use tessera::adaptive::AdaptiveMesh;
 use tessera::geometry::CellGeometry;
 use tessera::refine::balance_2to1;
 use tessera::world_mesh::Tessera;
 use utility::{
   constants::solar_flux,
   diagnostics::{DiagnosticsPolicy, WorldDiagnostics},
-  domain::{CellId, SystemId},
+  domain::{CellId, MeshKey, MeshType, SystemId, TopologyEpoch},
   error::{AetherError, AetherResult, ErrorDomain},
   events::{Event, EventBus, RegimeKind},
   profile,
@@ -83,11 +84,22 @@ pub struct TransitionRecord {
   pub window: f64,
 }
 
+/// The adapted topology of one AMR mesh: its [`MeshType`] code, current epoch,
+/// and the refinement forest's leaf codes. Persisted so a reload reconstructs the
+/// *adapted* mesh before the (adapted-size) fields are loaded into it.
+#[derive(utility::Serialize, utility::Deserialize)]
+pub struct RefinementRecord {
+  pub mesh: u32,
+  pub epoch: u64,
+  pub leaf_bases: Vec<u64>,
+  pub leaf_paths: Vec<Vec<u32>>,
+}
+
 /// A full, restartable snapshot of one [`World`]: the integrated clocks and
-/// advance mode, plus the entire pleroma state. Reload an *identically assembled*
-/// world from it (same meshes, same registered fields) and resume bit-for-bit.
-/// Geometry, the compiled DAG, and derived/transient resources are rebuilt by
-/// world assembly, not carried here.
+/// advance mode, the adapted mesh topology of any AMR meshes, plus the entire
+/// pleroma state. Reload an *identically assembled* world from it (same base
+/// meshes + adapters, same registered fields) and resume bit-for-bit. The
+/// compiled DAG and derived/transient resources are rebuilt by world assembly.
 #[derive(utility::Serialize, utility::Deserialize)]
 pub struct WorldCheckpoint {
   pub sim_time: f64,
@@ -95,6 +107,8 @@ pub struct WorldCheckpoint {
   /// `0 = Live`, `1 = Climatology`.
   pub regime: u32,
   pub transition: Option<TransitionRecord>,
+  /// Adapted topology per AMR mesh (empty for a non-adaptive world).
+  pub refinements: Vec<RefinementRecord>,
   pub pleroma: PleromaCheckpoint,
 }
 
@@ -102,6 +116,7 @@ pub struct WorldCheckpoint {
 enum CheckpointError {
   UnknownRegime(u32),
   UnknownTransitionKind(u32),
+  UnknownMeshType(u32),
 }
 
 impl ErrorDomain for CheckpointError {
@@ -119,6 +134,9 @@ impl std::fmt::Display for CheckpointError {
       CheckpointError::UnknownTransitionKind(c) => {
         write!(f, "checkpoint has unknown transition-kind code {c}")
       }
+      CheckpointError::UnknownMeshType(c) => {
+        write!(f, "checkpoint has unknown mesh-type code {c}")
+      }
     }
   }
 }
@@ -127,6 +145,25 @@ fn regime_code(regime: Regime) -> u32 {
   match regime {
     Regime::Live => 0,
     Regime::Climatology => 1,
+  }
+}
+
+fn mesh_type_code(mesh_type: MeshType) -> u32 {
+  match mesh_type {
+    MeshType::Atmosphere => 0,
+    MeshType::Surface => 1,
+    MeshType::Mantle => 2,
+    MeshType::Ocean => 3,
+  }
+}
+
+fn mesh_type_from_code(code: u32) -> AetherResult<MeshType> {
+  match code {
+    0 => Ok(MeshType::Atmosphere),
+    1 => Ok(MeshType::Surface),
+    2 => Ok(MeshType::Mantle),
+    3 => Ok(MeshType::Ocean),
+    other => Err(AetherError::new(CheckpointError::UnknownMeshType(other))),
   }
 }
 
@@ -405,6 +442,19 @@ impl World {
         progress: t.progress,
         window: t.window,
       }),
+      refinements: self
+        .adapters
+        .iter()
+        .map(|a| {
+          let (leaf_bases, leaf_paths) = a.mesh.forest_leaf_codes();
+          RefinementRecord {
+            mesh: mesh_type_code(a.mesh_key.mesh_type()),
+            epoch: self.tessera.topology_epoch(a.mesh_key).0,
+            leaf_bases,
+            leaf_paths,
+          }
+        })
+        .collect(),
       pleroma: self.pleroma.save()?,
     })
   }
@@ -431,6 +481,33 @@ impl World {
       }
       None => None,
     };
+    // Reconstruct the adapted mesh topology *before* loading the (adapted-size)
+    // fields, so the pleroma schema (cell counts) matches. Each record rebuilds
+    // its adapter's `AdaptiveMesh` from the saved leaf codes, swaps it into the
+    // tessera, and bumps the epoch.
+    for record in &checkpoint.refinements {
+      let key = MeshKey::new(mesh_type_from_code(record.mesh)?);
+      let Some(idx) = self.adapters.iter().position(|a| a.mesh_key == key)
+      else {
+        continue;
+      };
+      let base = self.adapters[idx].mesh.base().clone();
+      let restored = Arc::new(AdaptiveMesh::restore(
+        base,
+        &record.leaf_bases,
+        &record.leaf_paths,
+        TopologyEpoch(record.epoch),
+      )?);
+      let adapted_count = restored.cell_count();
+      self.tessera.register_mesh(key, restored.clone());
+      self
+        .tessera
+        .set_topology_epoch(key, TopologyEpoch(record.epoch));
+      self.adapters[idx].mesh = restored;
+      // Grow/shrink the field slots to the reconstructed topology so the
+      // (adapted-size) checkpoint values load cleanly over them.
+      self.pleroma.resize_mesh_fields(key, adapted_count);
+    }
     self.pleroma.load(&checkpoint.pleroma)?;
     self.sim_time = checkpoint.sim_time;
     self.game_clock = checkpoint.game_clock;
@@ -550,7 +627,12 @@ impl World {
       let old_volumes: Vec<f64> = (0..mesh.cell_count())
         .map(|c| mesh.cell_volume(CellId::from(c)))
         .collect();
-      let (new_mesh, remap) = mesh.refine(&balanced)?;
+      // Best-effort: a request the backend can't realise (e.g. one that would
+      // cross a cube-sphere panel seam — the v1 limitation) is skipped this tick,
+      // leaving the mesh unchanged, rather than failing the whole simulation.
+      let Ok((new_mesh, remap)) = mesh.refine(&balanced) else {
+        continue;
+      };
       let epoch = remap.new_epoch();
 
       // Remap state into the new cell layout, then swap the mesh in and bump the
@@ -1082,6 +1164,96 @@ mod tests {
       "no TopologyChanged event: {:?}",
       world.events()
     );
+  }
+
+  /// A fresh, level-0 adaptive world (ATMOSPHERE) with a single-cell spike field
+  /// and a gradient adapter — assembled identically each call so a checkpoint can
+  /// round-trip between two instances.
+  fn adaptive_spike_world() -> (World, FieldKey, MeshKey) {
+    use crate::adapt::{AdaptGovernor, GradientCriterion, MeshAdapter};
+    use tessera::cube_sphere::CubeSphere;
+    use utility::events::EventBus;
+
+    let key = MeshKey::ATMOSPHERE;
+    let field = FieldKey::new(key, FieldName::Temperature);
+    let amesh = Arc::new(AdaptiveMesh::new(Arc::new(CubeSphere::new(
+      [8, 8, 2],
+      1.0,
+      2.0,
+    ))));
+    let n0 = amesh.cell_count();
+
+    let mut pleroma = Pleroma::new();
+    pleroma.register_field(
+      field,
+      SoaField::<1>::from_fn(
+        n0,
+        |c| {
+          if c.index() == 36 { [1.0] } else { [0.0] }
+        },
+      ),
+    );
+    pleroma.register_resource(ResourceKey::Events, EventBus::new());
+
+    let mut tessera = Tessera::default();
+    tessera.register_mesh(key, amesh.clone());
+    let compiled = Nexus::new().build(&pleroma).unwrap();
+    let mut world = World::new(
+      WorldId(0),
+      factory::earth(),
+      None,
+      tessera,
+      pleroma,
+      compiled,
+    );
+    world.add_adapter(MeshAdapter::new(
+      key,
+      amesh,
+      Box::new(GradientCriterion::<1>::new(field, 0, 0.5, -1.0, 1)),
+      AdaptGovernor::new(1, usize::MAX, usize::MAX),
+    ));
+    (world, field, key)
+  }
+
+  #[test]
+  fn checkpoint_round_trips_an_adapted_world() {
+    use tessera::geometry::CellGeometry;
+    use utility::thread::pool::Pool;
+    let pool = Pool::default();
+
+    // World A: adapt once, then snapshot the adapted topology + state.
+    let (mut a, field, key) = adaptive_spike_world();
+    let n0 = a.tessera.mesh(key).unwrap().cell_count();
+    a.tick(&pool, 1.0).unwrap();
+    let adapted = a.tessera.mesh(key).unwrap().cell_count();
+    assert!(adapted > n0, "world A did not refine");
+    let checkpoint = a.save_checkpoint().unwrap();
+    let a_values: Vec<f64> = {
+      let f: &SoaField<1> = a.pleroma.read(field).unwrap();
+      (0..adapted).map(|i| f.state(CellId::from(i))[0]).collect()
+    };
+
+    // World B: fresh level-0 assembly; load must reconstruct the adapted mesh and
+    // restore the adapted-size state bit-for-bit.
+    let (mut b, _, _) = adaptive_spike_world();
+    assert_eq!(b.tessera.mesh(key).unwrap().cell_count(), n0);
+    b.load_checkpoint(&checkpoint).unwrap();
+
+    assert_eq!(
+      b.tessera.mesh(key).unwrap().cell_count(),
+      adapted,
+      "reconstructed mesh has the wrong cell count"
+    );
+    assert_eq!(b.tessera.topology_epoch(key).0, 1);
+    let b_field: &SoaField<1> = b.pleroma.read(field).unwrap();
+    assert_eq!(b_field.len(), adapted);
+    for i in 0..adapted {
+      assert_eq!(
+        b_field.state(CellId::from(i))[0],
+        a_values[i],
+        "restored cell {i} differs from the saved world"
+      );
+    }
   }
 
   #[test]

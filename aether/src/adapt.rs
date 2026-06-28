@@ -136,6 +136,68 @@ impl<const N: usize> RefinementCriterion for GradientCriterion<N> {
   }
 }
 
+/// Refine cells inside a spherical cap (within `inner_angle` of a world-space
+/// direction) up to `max_level`, and coarsen cells outside a slightly wider cap
+/// (`outer_angle > inner_angle`, for hysteresis). Field-free — it reads only cell
+/// centroids — so it is the simplest way to drive a *localised* refinement, e.g.
+/// a region of interest. Keep the cap inside one cube-sphere panel to avoid the
+/// v1 seam limitation.
+pub struct RegionRefinementCriterion {
+  /// World-space cap centre (unit vector).
+  center: [f64; 3],
+  cos_inner: f64,
+  cos_outer: f64,
+  max_level: u32,
+}
+
+impl RegionRefinementCriterion {
+  /// `center` is a world-space direction (normalised internally); `inner_angle`
+  /// and `outer_angle` are the cap half-angles in radians (`outer > inner`).
+  pub fn new(
+    center: [f64; 3],
+    inner_angle: f64,
+    outer_angle: f64,
+    max_level: u32,
+  ) -> Self {
+    let n = (center[0].powi(2) + center[1].powi(2) + center[2].powi(2)).sqrt();
+    let n = if n > 0.0 { n } else { 1.0 };
+    Self {
+      center: [center[0] / n, center[1] / n, center[2] / n],
+      cos_inner: inner_angle.cos(),
+      cos_outer: outer_angle.cos(),
+      max_level,
+    }
+  }
+}
+
+impl RefinementCriterion for RegionRefinementCriterion {
+  fn evaluate(
+    &self,
+    mesh: &dyn RefinableMesh<3>,
+    _pleroma: &Pleroma,
+  ) -> AetherResult<RefineFlags> {
+    let mut flags = RefineFlags::default();
+    for c in 0..mesh.cell_count() {
+      let cell = CellId::from(c);
+      let p = mesh.cell_world_centroid(cell);
+      let n = (p[0].powi(2) + p[1].powi(2) + p[2].powi(2)).sqrt();
+      if n == 0.0 {
+        continue;
+      }
+      let cos =
+        (p[0] * self.center[0] + p[1] * self.center[1] + p[2] * self.center[2])
+          / n;
+      let level = mesh.cell_level(cell);
+      if cos >= self.cos_inner && level < self.max_level {
+        flags.refine.push(cell);
+      } else if cos < self.cos_outer && level > 0 {
+        flags.coarsen.push(cell);
+      }
+    }
+    Ok(flags)
+  }
+}
+
 /// Bounds how often and how much the mesh adapts, so the (full) re-mesh + field
 /// remap cost cannot dominate: adapt only every `every_n_ticks` ticks, and change
 /// at most `max_refine` / `max_coarsen` cells per adapt.

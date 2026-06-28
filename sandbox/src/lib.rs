@@ -16,6 +16,7 @@ use aer::{
   SaturationAdjustmentStep, ShellColumns, build_lift_sites,
 };
 use aether::{
+  adapt::{AdaptGovernor, MeshAdapter, RegionRefinementCriterion},
   core::{Aether, System},
   factory::WorldFactory,
 };
@@ -30,11 +31,14 @@ use eidolon::ir::{
 };
 use lumen::{DiurnalSunStep, RadiationCoefficients, RadiationModel};
 use nexus::{FieldStorage, MeshKey, SoaField, SubsystemId, WorldId};
+use std::sync::Arc;
 use syzygy::{CouplingStencil, ScalarInterfaceDeposition, ScalarRelaxation};
 use terra::{
   SurfaceClass, SurfaceThermalModel, TerrainModel, earthlike_terrain,
   register_moisture_availability,
 };
+use tessera::adaptive::AdaptiveMesh;
+use tessera::cube_sphere::CubeSphere;
 use tessera::cube_sphere::CubeSphereShellSpec;
 use thalassa::{OceanColumnLayout, OceanModel};
 use utility::domain::{CellId, FieldKey, FieldName, SystemId};
@@ -816,6 +820,20 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
   ));
   factory = factory
     .cube_sphere_surface(shell_layout.surface_shell_spec(angular_dims, 1));
+
+  // Make the (inert terrain) surface mesh adaptive so AMR can refine it. It wraps
+  // a cube-sphere built from the same spec, so its cell ids match the couplers and
+  // terrain registered below; the AMR adapter is attached to the world after
+  // `build()`. The surface carries no solver, so refining it never conflicts with
+  // the partitioned atmosphere — and the orographic lift sites are baked at setup,
+  // so a later surface re-mesh leaves the atmosphere stable.
+  let surface_adaptive = Arc::new(AdaptiveMesh::new(Arc::new(
+    CubeSphere::shell(shell_layout.surface_shell_spec(angular_dims, 1)),
+  )));
+  factory
+    .tessera_mut()
+    .register_mesh(MeshKey::SURFACE, surface_adaptive.clone());
+
   let ocean_coupler =
     factory.add_radial_stack_coupler(MeshKey::OCEAN, MeshKey::ATMOSPHERE)?;
   let surface_coupler =
@@ -1032,7 +1050,26 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
   climatology.add_stages(factory.nexus_mut())?;
   ocean_climatology.add_stages(factory.nexus_mut())?;
 
-  let world = factory.build()?;
+  let mut world = factory.build()?;
+
+  // Attach an AMR adapter to the surface: refine a spherical cap over the north
+  // pole (the centre of the ZP cube-sphere panel, well clear of the panel seams)
+  // to level 1 on a slow cadence. This drives the cell-outline debug view so it
+  // is obvious where refinement is applied. The region criterion is field-free;
+  // a `GradientCriterion` (e.g. on `SurfaceElevation`) is the physics-driven
+  // alternative, constrained to panel interiors by the v1 seam limitation.
+  world.add_adapter(MeshAdapter::new(
+    MeshKey::SURFACE,
+    surface_adaptive,
+    Box::new(RegionRefinementCriterion::new(
+      [0.0, 0.0, 1.0],
+      0.30,
+      0.45,
+      1,
+    )),
+    AdaptGovernor::new(4, 256, 256),
+  ));
+
   let system_id = SystemId(0);
   let mut systems = HashMap::new();
   systems.insert(system_id, System::single(system_id, world));
@@ -1095,6 +1132,14 @@ pub fn showcase_extract_config() -> ExtractConfig {
         MeshKey::ATMOSPHERE,
         MeshRepresentation::BoundaryFaces,
         "atmosphere",
+      ),
+      // AMR debug view: the surface cell-outline wireframe. A distinct
+      // representation, so it overlays the surface as its own render mesh; where
+      // AMR refines the surface this grid visibly densifies.
+      MeshConfig::new(
+        MeshKey::SURFACE,
+        MeshRepresentation::Wireframe,
+        "surface cell outlines",
       ),
     ],
     layers: vec![

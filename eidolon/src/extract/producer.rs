@@ -26,7 +26,7 @@ use utility::profile;
 use crate::{
   extract::mesh::{
     boundary_surface_triangles, boundary_surface_triangles_masked,
-    cell_centroid_points,
+    cell_centroid_points, cell_outline_lines,
   },
   ir::{
     CategoricalSamples, ClassInfo, ClassSet, LayerHandle, LayerId, LayerKind,
@@ -604,6 +604,11 @@ fn build_mesh(
     },
     MeshRepresentation::Cells => {
       cell_centroid_points(world_id, cfg.mesh_key, mesh)
+    }
+    // Cell-outline wireframe — the AMR debug view: the boundary cell grid, which
+    // densifies wherever the mesh is refined.
+    MeshRepresentation::Wireframe => {
+      cell_outline_lines(world_id, cfg.mesh_key, mesh)
     }
     // For the others, fall back to cell centroids — extractors for
     // them aren't wired into the producer yet. Tests don't exercise

@@ -104,6 +104,22 @@ impl LeafLocation {
   }
 }
 
+/// Rebuild one base cell's quadtree from the set of (relative) leaf paths
+/// beneath it. A node is a leaf iff a zero-length path reaches it; otherwise it
+/// is a split whose four children are built from the paths' tails. Empty input
+/// (a base cell with no recorded leaves) is treated as an unrefined leaf.
+fn build_node(paths: &[Vec<u8>]) -> QuadNode {
+  if paths.is_empty() || paths.iter().any(|p| p.is_empty()) {
+    return QuadNode::Leaf;
+  }
+  let mut groups: [Vec<Vec<u8>>; 4] =
+    [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+  for p in paths {
+    groups[p[0] as usize].push(p[1..].to_vec());
+  }
+  QuadNode::Split(Box::new(groups.map(|g| build_node(&g))))
+}
+
 impl RefinementForest {
   /// A forest over `base_cell_count` cells, all unrefined (level 0).
   pub fn new(base_cell_count: usize) -> Self {
@@ -132,6 +148,39 @@ impl RefinementForest {
       }
     }
     out
+  }
+
+  /// Flatten the forest to a serialisable per-leaf code: parallel arrays of each
+  /// leaf's base-cell index and its child-index path (empty ⇒ an unrefined base
+  /// cell). Round-trips with [`from_leaf_codes`](RefinementForest::from_leaf_codes).
+  /// Used by checkpointing to persist the adapted topology.
+  pub fn leaf_codes(&self) -> (Vec<u64>, Vec<Vec<u32>>) {
+    let leaves = self.leaves();
+    let bases = leaves.iter().map(|l| l.base_cell.index() as u64).collect();
+    let paths = leaves
+      .iter()
+      .map(|l| l.path.iter().map(|&p| p as u32).collect())
+      .collect();
+    (bases, paths)
+  }
+
+  /// Rebuild a forest over `base_cell_count` base cells from the
+  /// [`leaf_codes`](RefinementForest::leaf_codes) of a previous forest. Each base
+  /// cell's quadtree is reconstructed so exactly the listed paths are leaves.
+  pub fn from_leaf_codes(
+    base_cell_count: usize,
+    bases: &[u64],
+    paths: &[Vec<u32>],
+  ) -> Self {
+    let mut per_base: Vec<Vec<Vec<u8>>> = vec![Vec::new(); base_cell_count];
+    for (base, path) in bases.iter().zip(paths.iter()) {
+      per_base[*base as usize].push(path.iter().map(|&p| p as u8).collect());
+    }
+    let roots = per_base
+      .into_iter()
+      .map(|paths| build_node(&paths))
+      .collect();
+    Self { roots }
   }
 
   pub fn leaf_count(&self) -> usize {
@@ -328,6 +377,20 @@ mod tests {
     // Old surviving cell 4 (the other base cell) maps to new cell 1.
     assert_eq!(remap.image_of(CellId::from(4)), Some(CellId::from(1)));
     assert_eq!(merged.leaves()[1].level(), 0);
+  }
+
+  #[test]
+  fn leaf_codes_round_trip_reconstructs_the_forest() {
+    // Build a non-trivial forest: refine cell 0, then one of its children.
+    let e = TopologyEpoch::ZERO;
+    let forest = RefinementForest::new(3);
+    let (f1, _) = forest.adapt(&refine(&[0]), e, e.next());
+    let (f2, _) = f1.adapt(&refine(&[0]), e.next(), e.next().next());
+
+    let (bases, paths) = f2.leaf_codes();
+    let rebuilt = RefinementForest::from_leaf_codes(3, &bases, &paths);
+    assert_eq!(rebuilt, f2, "forest did not round-trip through leaf codes");
+    assert_eq!(rebuilt.leaf_count(), f2.leaf_count());
   }
 
   #[test]

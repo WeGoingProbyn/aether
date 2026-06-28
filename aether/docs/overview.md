@@ -37,8 +37,18 @@ Three entry points, in increasing capability:
   [`chronos`](../../chronos/docs/overview.md)). Tracks `game_clock` vs `sim_time`
   per world.
 
+## Adaptive refinement
+
+`adapt` is the AMR driver: a `World` runs registered `MeshAdapter`s at the
+end-of-tick barrier (criterion → balance → refine → remap fields → swap mesh +
+bump epoch → emit `TopologyChanged`), bounded by an `AdaptGovernor`.
+`RefinementCriterion` is the mesh- and consumer-agnostic seam (`GradientCriterion`,
+`RegionRefinementCriterion` ship today). Checkpoints persist the adapted topology.
+See [amr.md](../../docs/amr.md).
+
 ## See also
 
 - The seed it consumes: [`cosmo`](../../cosmo/docs/overview.md).
 - A concrete assembled world: [`sandbox`](../../sandbox/docs/overview.md).
 - The execution model: [architecture](../../docs/architecture.md#the-execution-model).
+- Runtime mesh adaptation: [amr.md](../../docs/amr.md).

@@ -199,6 +199,27 @@ impl AdaptiveMesh {
     ))
   }
 
+  /// Serialisable description of the current refinement — the forest's leaf codes
+  /// (see [`RefinementForest::leaf_codes`]). Checkpointing persists these (with
+  /// the epoch) so [`restore`](AdaptiveMesh::restore) rebuilds the same mesh.
+  pub fn forest_leaf_codes(&self) -> (Vec<u64>, Vec<Vec<u32>>) {
+    self.forest.leaf_codes()
+  }
+
+  /// Rebuild an adapted mesh from `base` and a forest reconstructed from leaf
+  /// codes, stamped at `epoch` — the inverse of
+  /// [`forest_leaf_codes`](AdaptiveMesh::forest_leaf_codes) for checkpoint restore.
+  pub fn restore(
+    base: Arc<dyn Subdividable>,
+    bases: &[u64],
+    paths: &[Vec<u32>],
+    epoch: TopologyEpoch,
+  ) -> AetherResult<Self> {
+    let forest =
+      RefinementForest::from_leaf_codes(base.cell_count(), bases, paths);
+    Self::build(base, forest, epoch)
+  }
+
   /// Assemble the flat mesh from `base` + `forest`. Errors with
   /// [`RefineError::UnbalancedRequest`] if a leaf face cannot be matched to its
   /// neighbour(s) — in practice, refinement that creates a level jump across a

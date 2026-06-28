@@ -16,6 +16,8 @@
 //!                shells in the opaque debug view)
 //!   1 / 2 / 3  — atmosphere overlay shows temperature / humidity / pressure
 //!   4 / 5      — surface shows elevation / albedo (debug fields)
+//!   G          — toggle the AMR cell-outline wireframe (the grid densifies
+//!                where the surface mesh is adaptively refined)
 //!   6 / 7 / 8  — atmosphere overlay shows the climatology (slowly-varying
 //!                time-mean) of temperature / humidity / pressure; compare
 //!                against 1 / 2 / 3 to see the aggregate smooth the weather
@@ -55,6 +57,11 @@ const TICK_DT: f64 = 20.0;
 
 /// Wall-clock pacing for the runner thread (~60 Hz).
 const TICK_PERIOD: Duration = Duration::from_micros(16_667);
+
+/// Radial scale applied to the cell-outline wireframe so it floats just above the
+/// terrain the reference renderer displaces outward (~6% of the radius at the
+/// showcase's 200× exaggeration) instead of being buried under the raised land.
+const OUTLINE_LIFT: f32 = 1.08;
 
 /// Game time advanced per frame in the climatology regime. Far larger than the
 /// burst the solver actually integrates (`TICK_DT`), so each frame covers a big
@@ -174,6 +181,7 @@ fn main() -> AetherResult<()> {
      Tab toggles debug/rendered; 1/2/3 swap atmosphere temp/humidity/pressure; \
      4/5 swap surface elevation/albedo; \
      6/7/8 swap atmosphere climatology mean temp/humidity/pressure; \
+     G toggles the AMR cell-outline wireframe; \
      C toggles live ↔ climatology regime (burst-then-hold)"
   );
   App::new()
@@ -183,7 +191,10 @@ fn main() -> AetherResult<()> {
     .add_plugins(ShowcaseRenderPlugin)
     .insert_resource(RegimeToggle(climatology))
     .add_systems(Startup, spawn_camera_and_light)
-    .add_systems(Update, (layer_toggle_input, regime_toggle_input))
+    .add_systems(
+      Update,
+      (layer_toggle_input, regime_toggle_input, outline_view_input),
+    )
     .run();
 
   runner.shutdown_and_join()?;
@@ -328,6 +339,42 @@ fn layer_toggle_input(
       layer("atmosphere_mean_pressure", atmosphere),
       "atmosphere ← mean pressure (climatology)",
     );
+  }
+}
+
+/// The AMR debug view (G): the surface cell-outline wireframe. It is lifted just
+/// above the displaced terrain each frame (idempotent, so it survives the mesh
+/// being rebuilt when AMR refines), and `G` toggles its visibility. Where the
+/// surface mesh is refined, this grid visibly densifies — that is where AMR is
+/// being applied.
+fn outline_view_input(
+  keys: Res<ButtonInput<KeyCode>>,
+  registry: Res<RenderRegistry>,
+  mut commands: Commands,
+  mut hidden: Local<bool>,
+) {
+  if keys.just_pressed(KeyCode::KeyG) {
+    *hidden = !*hidden;
+    info!("cell outlines {}", if *hidden { "hidden" } else { "shown" });
+  }
+
+  let handle = RenderMeshId {
+    world: SANDBOX_WORLD_ID,
+    mesh: MeshKey::SURFACE,
+    representation: MeshRepresentation::Wireframe,
+  }
+  .handle();
+  if let Some(entry) = registry.meshes.get(&handle) {
+    let visibility = if *hidden {
+      Visibility::Hidden
+    } else {
+      Visibility::Inherited
+    };
+    // Re-applied every frame so a re-meshed (refined) wireframe keeps its lift
+    // and visibility even if the backend rebuilds the entity.
+    commands
+      .entity(entry.entity)
+      .insert((Transform::from_scale(Vec3::splat(OUTLINE_LIFT)), visibility));
   }
 }
 

@@ -5,8 +5,8 @@ use tessera::mesh::Mesh;
 use utility::domain::{BoundaryTag, CellId, FaceId, MeshKey, Point, WorldId};
 
 use crate::ir::{
-  MeshRepresentation, MeshSource, PointCloud, RenderGeometry, RenderMesh,
-  RenderMeshId, Rgba, TriangleMesh,
+  LineMesh, MeshRepresentation, MeshSource, PointCloud, RenderGeometry,
+  RenderMesh, RenderMeshId, Rgba, TriangleMesh,
 };
 
 pub fn cell_centroid_points(
@@ -144,6 +144,46 @@ pub fn boundary_surface_triangles_masked(
     mesh,
     "boundary surface (masked)",
     faces,
+  )
+}
+
+/// A wireframe of every boundary cell's outline: the four edges of each boundary
+/// face drawn as line segments. On a shell this is the angular cell grid on the
+/// surface, so where the mesh is adaptively refined the wireframe visibly
+/// densifies — a debug view that makes "where AMR is applied" obvious.
+pub fn cell_outline_lines(
+  world: WorldId,
+  mesh_key: MeshKey,
+  mesh: &dyn Mesh<3>,
+) -> RenderMesh {
+  let mut lines = LineMesh::default();
+  for tag in mesh.boundary_tags() {
+    for &(face, _owner) in mesh.boundary_faces(tag) {
+      let Some(vertices) = mesh.face_world_vertices(face) else {
+        continue;
+      };
+      if vertices.len() != 4 {
+        continue;
+      }
+      let base = lines.positions.len() as u32;
+      lines.positions.extend(vertices.iter().map(point_to_f32));
+      lines.colours.extend(std::iter::repeat_n(Rgba::WHITE, 4));
+      // The four edges of the quad, closing back to the first vertex.
+      for k in 0..4 {
+        lines.segments.push([base + k, base + (k + 1) % 4]);
+      }
+    }
+  }
+
+  RenderMesh::new(
+    RenderMeshId {
+      world,
+      mesh: mesh_key,
+      representation: MeshRepresentation::Wireframe,
+    },
+    "cell outlines",
+    MeshSource::TesseraMesh(mesh_key),
+    RenderGeometry::Lines(lines),
   )
 }
 

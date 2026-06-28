@@ -223,6 +223,68 @@ fn showcase_world_publishes_runtime_diagnostics() {
   assert!(report.conserved.iter().all(|(_, total)| total.is_finite()));
 }
 
+/// AMR is live in the showcase: the surface mesh refines a panel-interior cap
+/// after the adapter's cadence elapses, broadcasting a `TopologyChanged`, and the
+/// producer emits the cell-outline wireframe (line geometry) that visualises it.
+#[test]
+fn showcase_refines_the_surface_and_emits_a_wireframe() {
+  use eidolon::ir::RenderGeometry;
+  use tessera::geometry::CellGeometry;
+  use utility::events::Event;
+
+  let (mut aether, _layout) = build_showcase_world().unwrap();
+  let initial = aether
+    .world(SANDBOX_WORLD_ID)
+    .unwrap()
+    .tessera()
+    .mesh(MeshKey::SURFACE)
+    .unwrap()
+    .cell_count();
+
+  // The surface adapter fires every 4th tick; step exactly to the first firing.
+  for _ in 0..4 {
+    aether.step(20.0).unwrap();
+  }
+
+  let world = aether.world(SANDBOX_WORLD_ID).unwrap();
+  let refined = world.tessera().mesh(MeshKey::SURFACE).unwrap().cell_count();
+  assert!(
+    refined > initial,
+    "AMR should refine the surface cap: {initial} -> {refined}"
+  );
+
+  // The topology change was broadcast on the tick it happened.
+  assert!(
+    world.events().iter().any(|e| matches!(
+      e,
+      Event::TopologyChanged { mesh, .. } if *mesh == MeshKey::SURFACE
+    )),
+    "expected a TopologyChanged event for the refined surface, got {:?}",
+    world.events()
+  );
+
+  // The producer emits the surface cell-outline wireframe (a line mesh).
+  let mut producer = FrameProducer::new(showcase_extract_config());
+  let batch = producer.extract(
+    SANDBOX_WORLD_ID,
+    world.tessera(),
+    world.pleroma(),
+    None,
+    0.0,
+    0,
+  );
+  assert!(
+    batch.updates.iter().any(|u| matches!(
+      u,
+      Update::RegisterMesh {
+        geometry: RenderGeometry::Lines(_),
+        ..
+      }
+    )),
+    "expected a wireframe (line) mesh for the surface cell outlines"
+  );
+}
+
 /// The render config gives a consumer the art-free terrain data it needs: a
 /// categorical land/ocean/ice layer and an elevation data layer on the surface,
 /// plus the atmosphere overlay fields.

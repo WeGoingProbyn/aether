@@ -72,19 +72,32 @@ real and keep the reference world advancing. Two candidates, either order:
   gives ice-albedo feedback for free. Needs an ice-fraction field and a minimal
   ice model.
 
-### 4. AMR / LOD — the capstone
+### 4. AMR / LOD — the capstone  *(v1 DONE)*
 
-Adaptive mesh refinement / level-of-detail for the data plane.
+Adaptive mesh refinement / level-of-detail for the data plane. The v1
+implementation is in place end-to-end — see [amr.md](amr.md) for the design.
 
 - **Why last.** It is the heaviest item on the board and touches nearly every
   crate: `tessera` (refinement topology, hanging nodes), `pleroma` (fields must
   grow/shrink — storage is fixed-length today), `continuum` (flux at refinement
   boundaries), `nexus` (mid-run rebalancing), and `eidolon` (the IR assumes
-  stable cell IDs). It wants every other foundation under it first — checkpointing
+  stable cell IDs). It wanted every other foundation under it first — checkpointing
   for refine-time snapshots, events for refinement triggers, and the already-built
   stable query layer.
-- **Possible split.** Render-only LOD is a much smaller subset that could be
-  pulled forward independently of full data-plane AMR.
+- **What v1 delivers.** A mesh-agnostic refinement contract (`tessera::refine`),
+  an `AdaptiveMesh` wrapper that rebuilds a conforming + hanging-node mesh from a
+  per-cell refinement forest, conservative field remap (`pleroma`), an end-of-tick
+  adaptation driver with criteria + a governor (`aether::adapt`), and read-side
+  reactions: render-LOD (the producer re-emits geometry), the query index rebuild,
+  and checkpoint persistence of the adapted topology. Dense `CellId` stays the
+  hot-path key; a `TopologyEpoch` + `CellRemap` (broadcast via the event bus) is
+  how consumers survive a re-mesh. The cube-sphere is the first refinable backend.
+- **v1 limitations (deferred).** Angular (horizontal) refinement only; refinement
+  that crosses a cube-sphere *panel seam* is skipped (best-effort); AMR runs on the
+  serial solver path (single partition) — AMR-aware partitioning / load balancing,
+  radial refinement, and coupler remap under AMR are future work.
+- **Render-only LOD** fell out of the same topology-change path rather than being a
+  separate milestone.
 
 ## Standing deferred items
 

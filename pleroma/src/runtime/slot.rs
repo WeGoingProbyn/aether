@@ -44,6 +44,10 @@ pub(crate) struct FieldSlot {
   /// `core::storage::field_remapper`.
   pub(crate) remapper:
     fn(&dyn Any, &CellRemap, &[f64]) -> Box<dyn Any + Send + Sync>,
+  /// Type-erased "zeroed storage of N cells", to resize the slot to a
+  /// reconstructed mesh before loading a checkpoint's stored values over it. See
+  /// `core::storage::field_resizer`.
+  pub(crate) resizer: fn(usize) -> Box<dyn Any + Send + Sync>,
 }
 
 // SAFETY: the schedule layer guarantees that any concurrent access to a

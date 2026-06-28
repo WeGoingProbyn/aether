@@ -45,6 +45,13 @@ pub trait FieldStorage<const N: usize>: Send + Sync {
   fn remap(&self, remap: &CellRemap, old_volumes: &[f64]) -> Self
   where
     Self: Sized;
+
+  /// A zeroed storage of `count` cells — used to resize a field's slot to a new
+  /// cell count (e.g. when restoring an adapted mesh from a checkpoint, before the
+  /// stored values are loaded over the top).
+  fn zeros_storage(count: usize) -> Self
+  where
+    Self: Sized;
 }
 
 /// Volume-weighted mean of `children`'s component `c`, used for the
@@ -179,6 +186,10 @@ impl<const N: usize> FieldStorage<N> for SoaField<N> {
     debug_assert!(state.iter().all(|v| v.len() == new_count));
     SoaField { state }
   }
+
+  fn zeros_storage(count: usize) -> Self {
+    SoaField::zeros(count)
+  }
 }
 
 impl<const N: usize> SoaField<N> {
@@ -296,6 +307,12 @@ impl<const N: usize> FieldStorage<N> for LocalPartitionField<N> {
     // remap. Adapt happens on the global fields, after which partition buffers are
     // re-gathered from scratch.
     unreachable!("partition-local fields are not globally remapped");
+  }
+
+  fn zeros_storage(count: usize) -> Self {
+    // Owned-only buffer; ghosts are gathered separately. Kept total for the
+    // trait — partition-local fields are not registered for global resize.
+    LocalPartitionField::zeros(count, 0)
   }
 }
 
@@ -474,6 +491,10 @@ impl<const N: usize> FieldStorage<N> for AosField<N> {
       .collect();
     AosField { state }
   }
+
+  fn zeros_storage(count: usize) -> Self {
+    AosField::zeros(count)
+  }
 }
 
 impl<const N: usize> AosField<N> {
@@ -522,6 +543,17 @@ where
       .expect("field remapper type mismatch");
     Box::new(field.remap(remap, old_volumes))
   }
+}
+
+/// Build the type-erased resizer for a registered field storage type: a zeroed
+/// storage of the requested cell count. Used to grow/shrink a slot to match a
+/// reconstructed mesh before stored values are loaded over it.
+pub(crate) fn field_resizer<const N: usize, S>()
+-> fn(usize) -> Box<dyn Any + Send + Sync>
+where
+  S: FieldStorage<N> + 'static,
+{
+  |count| Box::new(S::zeros_storage(count))
 }
 
 #[cfg(test)]
