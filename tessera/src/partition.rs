@@ -320,6 +320,48 @@ pub fn decompose_panels(
   decompose_by_owned_cells(mesh, owned_cells)
 }
 
+/// Decompose a mesh into `n_partitions` of roughly equal cell count while keeping
+/// every **radial column intact** in a single partition.
+///
+/// `column_of` groups cells into columns (cells sharing a column key — for a
+/// cube-sphere shell, the cells along one radial ray, which is exactly how the
+/// HEVI solver forms its implicit per-column blocks). Columns are then greedily
+/// bin-packed largest-first onto the least-loaded partition. Unlike
+/// [`decompose_panels`], which leaves a refined panel's partition oversized, this
+/// spreads a locally-refined region's extra cells across partitions — at the cost
+/// of more cross-partition ghost faces. The column-intact guarantee means it is
+/// safe for the vertically-implicit solve.
+pub fn decompose_balanced<K, F>(
+  mesh: Arc<dyn Mesh<3>>,
+  n_partitions: usize,
+  column_of: F,
+) -> Decomposition<3, dyn Mesh<3>>
+where
+  K: std::hash::Hash + Eq,
+  F: Fn(CellId) -> K,
+{
+  let n = n_partitions.max(1);
+  let mut columns: HashMap<K, Vec<CellId>> = HashMap::new();
+  for cell in 0..mesh.cell_count() {
+    let cell = CellId::from(cell);
+    columns.entry(column_of(cell)).or_default().push(cell);
+  }
+
+  // Largest columns first so the greedy least-loaded assignment packs tightly.
+  let mut columns: Vec<Vec<CellId>> = columns.into_values().collect();
+  columns.sort_by_key(|c| std::cmp::Reverse(c.len()));
+
+  let mut owned_cells: Vec<Vec<CellId>> = vec![Vec::new(); n];
+  let mut loads = vec![0usize; n];
+  for column in columns {
+    let p = (0..n).min_by_key(|&i| loads[i]).unwrap();
+    loads[p] += column.len();
+    owned_cells[p].extend(column);
+  }
+  owned_cells.retain(|cells| !cells.is_empty());
+  decompose_by_owned_cells(mesh, owned_cells)
+}
+
 fn build_partition_mesh_from_cells<const D: usize, M>(
   mesh: Arc<M>,
   owned_cells: Vec<CellId>,
@@ -694,4 +736,81 @@ enum FaceKind {
     tag: BoundaryTag,
     out_sign: f64,
   },
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::adaptive::AdaptiveMesh;
+  use crate::cube_sphere::CubeSphere;
+  use crate::refine::AdaptRequest;
+
+  /// A column key from a cell's world direction (cells on one radial ray share
+  /// it) — the same grouping HEVI uses to form its per-column implicit blocks.
+  fn column_key(mesh: &dyn Mesh<3>, cell: CellId) -> (i64, i64, i64) {
+    let p = mesh.cell_world_centroid(cell);
+    let r = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2])
+      .sqrt()
+      .max(f64::EPSILON);
+    let q = 1.0e5;
+    (
+      ((p[0] / r) * q).round() as i64,
+      ((p[1] / r) * q).round() as i64,
+      ((p[2] / r) * q).round() as i64,
+    )
+  }
+
+  #[test]
+  fn balanced_decomposition_evens_out_a_refined_panel() {
+    // Refine two panel-0 interior bottom-layer cells of a [4,4,2] shell so panel
+    // 0 swells well beyond the others.
+    let base = Arc::new(CubeSphere::new([4, 4, 2], 1.0, 1.2));
+    let (refined, _) = AdaptiveMesh::new(base)
+      .refine(&AdaptRequest {
+        refine: vec![CellId::from(5), CellId::from(6)],
+        coarsen: vec![],
+      })
+      .unwrap();
+    let refined = Arc::new(refined);
+    let dyn_mesh: Arc<dyn Mesh<3>> = refined.clone();
+    let total = refined.cell_count();
+
+    // Panel decomposition: the refined panel's partition is oversized.
+    let base_cells = refined.cell_base_cells();
+    let per_panel = (refined.base().cell_count() / 6).max(1);
+    let panel = {
+      let base_cells = base_cells.clone();
+      decompose_panels(dyn_mesh.clone(), 6, move |c| {
+        (base_cells[c.index()].index() / per_panel).min(5)
+      })
+    };
+    let panel_max = panel
+      .partitions
+      .iter()
+      .map(|p| p.num_owned())
+      .max()
+      .unwrap();
+
+    // Balanced by radial column spreads the refined load.
+    let balanced = {
+      let m = dyn_mesh.clone();
+      decompose_balanced(dyn_mesh.clone(), 6, move |c| {
+        column_key(m.as_ref(), c)
+      })
+    };
+    let balanced_max = balanced
+      .partitions
+      .iter()
+      .map(|p| p.num_owned())
+      .max()
+      .unwrap();
+    let balanced_total: usize =
+      balanced.partitions.iter().map(|p| p.num_owned()).sum();
+
+    assert_eq!(balanced_total, total, "must still cover every cell once");
+    assert!(
+      balanced_max < panel_max,
+      "balanced busiest partition {balanced_max} should beat panel {panel_max}"
+    );
+  }
 }

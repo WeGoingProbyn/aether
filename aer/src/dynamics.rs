@@ -906,6 +906,78 @@ mod tests {
     }
   }
 
+  /// The partitioned solver runs on a *refined, multi-layer* atmosphere: refining
+  /// one bottom-layer cell creates angular + radial hanging faces, the refined
+  /// children stay in their base panel's partition, and partitioned still matches
+  /// serial bit-for-bit. This is the adaptive-solver-mesh keystone.
+  #[test]
+  fn partitioned_euler_matches_serial_on_a_refined_multi_layer_atmosphere() {
+    use tessera::adaptive::AdaptiveMesh;
+    use tessera::partition::decompose_panels;
+    use tessera::refine::AdaptRequest;
+
+    let constants = earth_like_constants();
+    let spec = AtmosphereSpec::from_world_constants(&constants).unwrap();
+    let base = Arc::new(CubeSphere::shell(CubeSphereShellSpec::uniform(
+      [4, 4, 2],
+      1.0,
+      1.2,
+    )));
+    // Refine a panel-interior bottom-layer cell (panel 0, angular (1,1), k=0 ⇒
+    // loc 1 + 1·4 + 0·16 = 5).
+    let (refined, _) = AdaptiveMesh::new(base)
+      .refine(&AdaptRequest {
+        refine: vec![CellId::from(5)],
+        coarsen: vec![],
+      })
+      .unwrap();
+    let refined = Arc::new(refined);
+    let cell_count = refined.cell_count();
+    let mut initial = spec.euler_state_field(cell_count);
+    let mut perturbed = *initial.state(CellId::from(0)).as_state();
+    perturbed[0] *= 1.01;
+    perturbed[4] *= 1.01;
+    initial.write(CellId::from(0), &perturbed);
+
+    let base_cells = refined.cell_base_cells();
+    let per_panel = (refined.base().cell_count() / 6).max(1);
+    let dyn_mesh: Arc<dyn Mesh<3>> = refined.clone();
+    let decomposition = decompose_panels(dyn_mesh.clone(), 6, move |cell| {
+      (base_cells[cell.index()].index() / per_panel).min(5)
+    });
+
+    let serial = run_euler_test_step(
+      dyn_mesh.clone(),
+      None,
+      initial.clone_state(),
+      &constants,
+      1,
+    );
+    let partitioned = run_euler_test_step(
+      dyn_mesh,
+      Some(decomposition),
+      initial,
+      &constants,
+      6,
+    );
+
+    for i in 0..cell_count {
+      let cell = CellId::from(i);
+      let a = serial.state(cell);
+      let b = partitioned.state(cell);
+      for component in 0..6 {
+        let scale = a[component].abs().max(1.0);
+        let rel = (a[component] - b[component]).abs() / scale;
+        assert!(
+          rel < 1.0e-10,
+          "cell {i} component {component} serial {} partitioned {} rel {rel}",
+          a[component],
+          b[component],
+        );
+      }
+    }
+  }
+
   fn run_euler_test_step(
     mesh: Arc<dyn Mesh<3>>,
     decomposition: Option<tessera::partition::Decomposition<3, dyn Mesh<3>>>,

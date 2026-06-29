@@ -107,16 +107,20 @@ AMR is no longer restricted to inert, uncoupled meshes on the serial solver:
   coupler touching a re-meshed mesh, so coupling stages never read pairings with
   dead cells. Stages resolve the live coupler each run rather than caching a
   snapshot.
-- **Any solver.** The decomposition is mesh-type-erased
+- **Any solver, including multi-layer.** The decomposition is mesh-type-erased
   (`Decomposition<3, dyn Mesh<3>>`), so the partitioned Euler solver runs on an
   adapted atmosphere (`decompose_panels` partitions an `AdaptiveMesh` by base
-  panel); the barrier rebuilds the decomposition on adapt. Partitioned and serial
-  agree bit-for-bit through an adaptive mesh.
+  panel); the barrier rebuilds the decomposition on adapt. Refining one cell of a
+  *multi-layer* shell creates angular **and radial** hanging faces (the cell above
+  the refined one stays coarse) — the footprint matcher tiles both the same way,
+  and partitioned still matches serial bit-for-bit on the refined multi-layer
+  mesh.
 
 ## v1 limitations
 
-Angular refinement only (radial deferred); panel-seam-crossing refinement is
-skipped. Coupled meshes must share their base angular grid (so interface faces
-nest exactly). Load balancing across the uneven partitions a refined panel
-produces is future work, as is multi-layer (column) refinement of a solver mesh
-and radial refinement.
+Angular (horizontal) refinement only — radial refinement (splitting a cell across
+the shell thickness) is deferred, though multi-*layer* meshes refine fine.
+Panel-seam-crossing refinement is skipped. Coupled meshes must share their base
+angular grid (so interface faces nest exactly). Load balancing across the uneven
+partitions a refined panel produces is future work — partitions stay panel-aligned
+to keep radial columns (and the HEVI solve) intact.

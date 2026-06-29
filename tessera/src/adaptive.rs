@@ -745,6 +745,32 @@ mod tests {
   }
 
   #[test]
+  fn multi_layer_refine_builds_radial_hanging_faces() {
+    // [4,4,2]: refine one cell in the bottom layer (panel 0, angular (1,1),
+    // radial k=0 ⇒ loc 1 + 1·4 + 0·16 = 5). Its radial neighbour above (k=1)
+    // stays level 0, so a *radial* hanging interface forms — the matcher must
+    // tile it the same way it tiles an angular one. `build` would panic on an
+    // unmatched face, so success here is the proof.
+    let base = Arc::new(CubeSphere::new([4, 4, 2], R_INNER, R_OUTER));
+    let mesh = AdaptiveMesh::new(base);
+    let n0 = mesh.cell_count();
+    let req = AdaptRequest {
+      refine: vec![CellId::from(5)],
+      coarsen: vec![],
+    };
+    let new_epoch = mesh.epoch.next();
+    let (new_forest, _) = mesh.forest.adapt(&req, mesh.epoch, new_epoch);
+    let refined =
+      AdaptiveMesh::build(mesh.base().clone(), new_forest, new_epoch).unwrap();
+
+    assert_eq!(refined.cell_count(), n0 + 3);
+    let level1 = (0..refined.cell_count())
+      .filter(|&c| refined.cell_level(CellId::from(c)) == 1)
+      .count();
+    assert_eq!(level1, 4);
+  }
+
+  #[test]
   fn multi_level_jump_is_handled_conservatively() {
     // Refine cell 5 (→ level-1 children at ids 5..=8), then refine one of those
     // children to level 2 while its base-cell neighbours stay level 0. The coarse
