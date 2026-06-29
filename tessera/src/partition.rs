@@ -29,7 +29,7 @@ pub struct GhostDescriptor {
 /// A partition-local view of any mesh with ghost cells.
 pub struct PartitionMesh<const D: usize, M>
 where
-  M: CellGeometry<D> + FaceGeometry<D>,
+  M: CellGeometry<D> + FaceGeometry<D> + Topology + ?Sized,
 {
   mesh: Arc<M>,
 
@@ -52,7 +52,7 @@ where
 
 impl<const D: usize, M> PartitionMesh<D, M>
 where
-  M: Mesh<D>,
+  M: CellGeometry<D> + FaceGeometry<D> + Topology + ?Sized,
 {
   pub fn local_cell_count(&self) -> usize {
     self.local_to_global_cell.len()
@@ -81,7 +81,7 @@ where
 
 impl<const D: usize, M> CellGeometry<D> for PartitionMesh<D, M>
 where
-  M: CellGeometry<D> + FaceGeometry<D>,
+  M: CellGeometry<D> + FaceGeometry<D> + Topology + ?Sized,
 {
   fn cell_centroid(&self, cell: CellId) -> &Point<D> {
     let global = self.local_to_global_cell[cell.index()];
@@ -113,7 +113,7 @@ where
 
 impl<const D: usize, M> FaceGeometry<D> for PartitionMesh<D, M>
 where
-  M: Mesh<D>,
+  M: CellGeometry<D> + FaceGeometry<D> + Topology + ?Sized,
 {
   fn face_centroid(&self, face: FaceId) -> &Point<D> {
     let global = self.local_to_global_face[face.index()];
@@ -147,7 +147,7 @@ where
 
 impl<const D: usize, M> Topology for PartitionMesh<D, M>
 where
-  M: Mesh<D>,
+  M: CellGeometry<D> + FaceGeometry<D> + Topology + ?Sized,
 {
   fn face_connection(&self, face: FaceId) -> &FaceConnection {
     &self.face_connections[face.index()]
@@ -180,14 +180,14 @@ where
 /// Result of decomposing a mesh. Generic over the source mesh type M.
 pub struct Decomposition<const D: usize, M>
 where
-  M: CellGeometry<D> + FaceGeometry<D> + Topology,
+  M: CellGeometry<D> + FaceGeometry<D> + Topology + ?Sized,
 {
   pub partitions: Vec<PartitionMesh<D, M>>,
 }
 
 impl<const D: usize, M> Decomposition<D, M>
 where
-  M: CellGeometry<D> + FaceGeometry<D> + Topology,
+  M: CellGeometry<D> + FaceGeometry<D> + Topology + ?Sized,
 {
   /// All ghost descriptors, grouped per partition. Pleroma uses these to
   /// drive the actual field-data exchange — tessera owns the topology, not
@@ -208,7 +208,7 @@ pub fn decompose_by_owned_cells<const D: usize, M>(
   owned_cells: Vec<Vec<CellId>>,
 ) -> Decomposition<D, M>
 where
-  M: Mesh<D>,
+  M: CellGeometry<D> + FaceGeometry<D> + Topology + ?Sized,
 {
   assert!(
     !owned_cells.is_empty(),
@@ -278,9 +278,14 @@ where
 }
 
 /// Six-way cubed-sphere decomposition with one owned partition per panel.
+///
+/// Returns a mesh-type-erased `Decomposition<3, dyn Mesh<3>>` so the partitioned
+/// solver reads a single decomposition type regardless of whether the source mesh
+/// is a plain [`CubeSphere`] or an adapted wrapper around one (see
+/// [`decompose_panels`]).
 pub fn decompose_cube_sphere_panels(
   mesh: Arc<CubeSphere>,
-) -> Decomposition<3, CubeSphere> {
+) -> Decomposition<3, dyn Mesh<3>> {
   let cells_per_panel = mesh.dims().iter().product::<usize>();
   let owned_cells = (0..6)
     .map(|panel| {
@@ -290,6 +295,28 @@ pub fn decompose_cube_sphere_panels(
     })
     .collect();
 
+  let mesh: Arc<dyn Mesh<3>> = mesh;
+  decompose_by_owned_cells(mesh, owned_cells)
+}
+
+/// Decompose any 3-D mesh into `panel_count` partitions by grouping each cell
+/// under the panel returned by `panel_of`. The mesh-agnostic counterpart of
+/// [`decompose_cube_sphere_panels`]: an
+/// [`AdaptiveMesh`](crate::adaptive::AdaptiveMesh) supplies a `panel_of` that maps
+/// each leaf to its base cell's panel, so a refined cube-sphere stays partitioned
+/// by panel (uneven counts after refinement — load balancing is a later concern).
+/// Empty panels are dropped so every partition owns at least one cell.
+pub fn decompose_panels(
+  mesh: Arc<dyn Mesh<3>>,
+  panel_count: usize,
+  panel_of: impl Fn(CellId) -> usize,
+) -> Decomposition<3, dyn Mesh<3>> {
+  let mut owned_cells: Vec<Vec<CellId>> = vec![Vec::new(); panel_count];
+  for cell in 0..mesh.cell_count() {
+    let cell = CellId::from(cell);
+    owned_cells[panel_of(cell)].push(cell);
+  }
+  owned_cells.retain(|cells| !cells.is_empty());
   decompose_by_owned_cells(mesh, owned_cells)
 }
 
@@ -299,7 +326,7 @@ fn build_partition_mesh_from_cells<const D: usize, M>(
   ghost_cells: Vec<(CellId, usize, CellId)>,
 ) -> PartitionMesh<D, M>
 where
-  M: Mesh<D>,
+  M: CellGeometry<D> + FaceGeometry<D> + Topology + ?Sized,
 {
   let num_owned = owned_cells.len();
   let mut local_to_global_cell = owned_cells;

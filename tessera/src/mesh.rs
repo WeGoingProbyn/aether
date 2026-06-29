@@ -30,12 +30,12 @@ fn axis_of<const D: usize>(v: &Vector<f64, D>) -> usize {
 }
 
 pub trait Mesh<const D: usize>:
-  CellGeometry<D> + FaceGeometry<D> + Topology
+  CellGeometry<D> + FaceGeometry<D> + Topology + Send + Sync
 {
 }
 
 impl<const D: usize, T> Mesh<D> for T where
-  T: CellGeometry<D> + FaceGeometry<D> + Topology
+  T: CellGeometry<D> + FaceGeometry<D> + Topology + Send + Sync
 {
 }
 

@@ -183,6 +183,19 @@ impl AdaptiveMesh {
     self.cell_levels[cell.index()]
   }
 
+  /// Each cell's base (level-0) cell — the unrefined cell it descends from —
+  /// indexed by current `CellId`. Lets a caller partition a refined mesh by its
+  /// base structure (e.g. group leaves under their cube-sphere panel for
+  /// [`decompose_panels`](crate::partition::decompose_panels)).
+  pub fn cell_base_cells(&self) -> Vec<CellId> {
+    self
+      .forest
+      .leaves()
+      .iter()
+      .map(|leaf| leaf.base_cell)
+      .collect()
+  }
+
   /// Apply a (balanced) request and return the **concrete** refined mesh plus
   /// the remap — the typed counterpart of [`RefinableMesh::adapt`], so the
   /// adaptation driver can keep refining the same `AdaptiveMesh` across ticks

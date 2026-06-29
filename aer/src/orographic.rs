@@ -19,15 +19,22 @@
 //!
 //! To keep `aer` free of a `syzygy` dependency, the stage consumes *plain
 //! precomputed data* ([`LiftSite`]s): the surface→atmosphere cell pairing,
-//! per-site tangent frame, and per-site terrain gradient are all assembled once
-//! at setup by [`build_lift_sites`] from the meshes and the coupler pairing.
+//! per-site tangent frame, and per-site terrain gradient. For a fixed surface
+//! these are assembled once by [`build_lift_sites`]; for an adaptive surface the
+//! stage rebuilds them from a live `tessera` coupler whenever the surface
+//! re-meshes ([`build_lift_sites_weighted`] +
+//! [`OrographicLiftStage::with_coupler_rebuild`]), area-weighting the several fine
+//! sources of a refined region into each coarse atmosphere target.
+
+use std::collections::HashMap;
 
 use nexus::{FieldKey, FieldStorage, SoaField, Stage, StageContext};
 use tessera::geo::GeoCoord;
 use tessera::mesh::Mesh;
 use tessera::topology::FaceConnection;
+use tessera::world_mesh::CouplerView;
 use utility::{
-  domain::CellId,
+  domain::{CellId, MeshKey, TopologyEpoch},
   error::{AetherError, AetherResult},
 };
 
@@ -143,6 +150,73 @@ where
     .collect()
 }
 
+/// Assemble lift sites from a live coupler's interface faces, weighting each
+/// atmosphere target's terrain gradient by its share of the interface area.
+///
+/// This is the N:M-aware counterpart of [`build_lift_sites`]: when the surface
+/// has been adaptively refined, several fine surface cells couple to one coarse
+/// atmosphere cell, so the target's gradient is the area-weighted mean of its
+/// sources' gradients (gather). It reads the coupler's [`CoupledFace`]s directly
+/// (tessera, not syzygy) so `aer` stays free of a `syzygy` dependency. Surface
+/// cells outside the (possibly remapped) gradient array are skipped.
+///
+/// [`CoupledFace`]: tessera::coupling::CoupledFace
+pub fn build_lift_sites_weighted<A, S>(
+  atmosphere_mesh: &A,
+  surface_mesh: &S,
+  elevation: &[f64],
+  surface_radius: f64,
+  surface_key: MeshKey,
+  atmosphere_key: MeshKey,
+  coupler: &CouplerView<'_>,
+) -> Vec<LiftSite>
+where
+  A: Mesh<3> + ?Sized,
+  S: Mesh<3> + ?Sized,
+{
+  let grad = compute_enu_gradient(surface_mesh, elevation, surface_radius);
+  // Per atmosphere target: (Σ area·grad, Σ area).
+  let mut acc: HashMap<usize, ([f64; 2], f64)> = HashMap::new();
+  for face in coupler.faces() {
+    let (Some(surface_cell), Some(atmosphere_cell)) =
+      (face.owner_for(surface_key), face.owner_for(atmosphere_key))
+    else {
+      continue;
+    };
+    if surface_cell.index() >= grad.len() {
+      continue;
+    }
+    let g = grad[surface_cell.index()];
+    let entry = acc
+      .entry(atmosphere_cell.index())
+      .or_insert(([0.0; 2], 0.0));
+    entry.0[0] += face.area * g[0];
+    entry.0[1] += face.area * g[1];
+    entry.1 += face.area;
+  }
+
+  acc
+    .into_iter()
+    .filter_map(|(atmosphere_idx, (sum_grad, area))| {
+      if area <= 0.0 {
+        return None;
+      }
+      let grad = [sum_grad[0] / area, sum_grad[1] / area];
+      let target = CellId::from(atmosphere_idx);
+      let centroid = atmosphere_mesh.cell_world_centroid(target);
+      let geo = GeoCoord::from_world(&centroid, surface_radius);
+      let (r_hat, east, north) = enu_basis(&geo);
+      Some(LiftSite {
+        target,
+        r_hat,
+        east,
+        north,
+        grad,
+      })
+    })
+    .collect()
+}
+
 /// Relax each site's radial velocity toward `w = u_h·∇h`, holding internal
 /// energy fixed. Pure (no `StageContext`) so it can be unit-tested directly.
 pub fn apply_orographic_lift(
@@ -190,19 +264,39 @@ pub fn apply_orographic_lift(
   }
 }
 
+/// Inputs the stage needs to recompute its lift sites when the surface mesh is
+/// re-meshed (adaptive refinement). Held so the stage tracks topology changes
+/// instead of forcing the atmosphere with stale gradients on dead cells.
+struct OrographicRebuild {
+  coupler_index: usize,
+  surface_mesh: MeshKey,
+  atmosphere_mesh: MeshKey,
+  elevation: FieldKey,
+  surface_radius: f64,
+  /// Epoch of `surface_mesh` the current sites were built for; `None` until the
+  /// first run forces an initial build.
+  cached_epoch: Option<TopologyEpoch>,
+}
+
 /// Nexus stage wrapping [`apply_orographic_lift`] over the atmosphere state.
 pub struct OrographicLiftStage {
   state: FieldKey,
   sites: Vec<LiftSite>,
   relaxation: f64,
   max_velocity: f64,
+  reads: Vec<FieldKey>,
   writes: [FieldKey; 1],
+  rebuild: Option<OrographicRebuild>,
 }
 
 impl OrographicLiftStage {
   /// `relaxation` ∈ (0, 1] is the per-step fraction of the velocity gap closed;
   /// `max_velocity` (m/s) clamps the induced vertical velocity. Both keep the
   /// forcing bounded.
+  ///
+  /// The sites are fixed for the life of the stage — use this when the surface
+  /// never adapts. For an adaptive surface, prefer
+  /// [`with_coupler_rebuild`](Self::with_coupler_rebuild).
   pub fn new(
     state: FieldKey,
     sites: Vec<LiftSite>,
@@ -214,7 +308,44 @@ impl OrographicLiftStage {
       sites,
       relaxation,
       max_velocity,
+      reads: Vec::new(),
       writes: [state],
+      rebuild: None,
+    }
+  }
+
+  /// Build a stage that recomputes its lift sites from a live coupler whenever
+  /// the surface mesh's topology epoch changes — the adaptive counterpart of
+  /// [`new`](Self::new). The first run builds the sites; subsequent runs rebuild
+  /// only after the surface is re-meshed. Use a geometry-based coupler (so its
+  /// pairings are rebuilt on adapt); an index coupler's stale pairings would feed
+  /// dead cells.
+  #[allow(clippy::too_many_arguments)]
+  pub fn with_coupler_rebuild(
+    state: FieldKey,
+    coupler_index: usize,
+    surface_mesh: MeshKey,
+    atmosphere_mesh: MeshKey,
+    elevation: FieldKey,
+    surface_radius: f64,
+    relaxation: f64,
+    max_velocity: f64,
+  ) -> Self {
+    Self {
+      state,
+      sites: Vec::new(),
+      relaxation,
+      max_velocity,
+      reads: vec![elevation],
+      writes: [state],
+      rebuild: Some(OrographicRebuild {
+        coupler_index,
+        surface_mesh,
+        atmosphere_mesh,
+        elevation,
+        surface_radius,
+        cached_epoch: None,
+      }),
     }
   }
 }
@@ -225,7 +356,7 @@ impl Stage for OrographicLiftStage {
   }
 
   fn reads(&self) -> &[FieldKey] {
-    &[]
+    &self.reads
   }
 
   fn writes(&self) -> &[FieldKey] {
@@ -233,6 +364,58 @@ impl Stage for OrographicLiftStage {
   }
 
   fn run(&mut self, mut ctx: StageContext<'_>) -> AetherResult<()> {
+    // Rebuild the sites if the surface has been re-meshed since they were built
+    // (before touching any cell, so a dead target is never forced).
+    if let Some(rebuild) = self.rebuild.as_ref() {
+      let epoch = ctx.world.tessera.topology_epoch(rebuild.surface_mesh);
+      if rebuild.cached_epoch != Some(epoch) {
+        let sites = {
+          let surface = ctx
+            .world
+            .tessera
+            .mesh(rebuild.surface_mesh)
+            .ok_or_else(|| {
+              AetherError::new(AerError::MissingMesh)
+                .context(format!("{:?}", rebuild.surface_mesh))
+            })?;
+          let atmosphere =
+            ctx.world.tessera.mesh(rebuild.atmosphere_mesh).ok_or_else(
+              || {
+                AetherError::new(AerError::MissingMesh)
+                  .context(format!("{:?}", rebuild.atmosphere_mesh))
+              },
+            )?;
+          let elevation_field: &SoaField<1> =
+            ctx.world.fields.read(rebuild.elevation).ok_or_else(|| {
+              AetherError::new(AerError::MissingReadField)
+                .context(format!("{:?}", rebuild.elevation))
+            })?;
+          let elevation: Vec<f64> = (0..surface.cell_count())
+            .map(|i| elevation_field.state(CellId::from(i))[0])
+            .collect();
+          let view = ctx
+            .world
+            .tessera
+            .coupler_view(rebuild.coupler_index)
+            .ok_or_else(|| {
+              AetherError::new(AerError::MissingMesh)
+                .context("orographic coupler view")
+            })?;
+          build_lift_sites_weighted(
+            atmosphere.as_ref(),
+            surface.as_ref(),
+            &elevation,
+            rebuild.surface_radius,
+            rebuild.surface_mesh,
+            rebuild.atmosphere_mesh,
+            &view,
+          )
+        };
+        self.sites = sites;
+        self.rebuild.as_mut().unwrap().cached_epoch = Some(epoch);
+      }
+    }
+
     let state: &mut SoaField<6> =
       ctx.world.fields.write(self.state).ok_or_else(|| {
         AetherError::new(AerError::MissingWriteField)
@@ -349,5 +532,65 @@ mod tests {
     apply_orographic_lift(&mut state, &[equator_site([10.0, 0.0])], 1.0, 2.0);
     let vr = state.state(CellId::from(0))[1];
     assert!(vr <= 2.0 + 1e-9, "vr {vr} exceeded clamp");
+  }
+
+  #[test]
+  fn weighted_lift_sites_gather_fine_sources_into_one_target() {
+    use tessera::adaptive::AdaptiveMesh;
+    use tessera::geometric_coupler::GeometricRadialCoupler;
+    use tessera::refine::AdaptRequest;
+    use tessera::world_mesh::Tessera;
+    use utility::domain::MeshKey;
+
+    // Refine a panel-interior surface cell beneath a uniform atmosphere, so the
+    // coarse atmosphere cell above it gathers several fine surface sources.
+    let surface =
+      AdaptiveMesh::new(Arc::new(CubeSphere::new([4, 4, 1], 0.99, 1.0)));
+    let (refined, _) = surface
+      .refine(&AdaptRequest {
+        refine: vec![CellId::from(5)],
+        coarsen: vec![],
+      })
+      .unwrap();
+    let n_surf = refined.cell_count();
+    let atmosphere = Arc::new(CubeSphere::new([4, 4, 2], 1.0, 1.02));
+
+    let mut tessera = Tessera::new();
+    tessera.register_mesh(MeshKey::SURFACE, Arc::new(refined));
+    tessera.register_mesh(MeshKey::ATMOSPHERE, atmosphere.clone());
+    let coupler = GeometricRadialCoupler::between_shells(
+      tessera.mesh(MeshKey::SURFACE).unwrap().as_ref(),
+      tessera.mesh(MeshKey::ATMOSPHERE).unwrap().as_ref(),
+    );
+    let idx =
+      tessera.add_coupler(MeshKey::SURFACE, MeshKey::ATMOSPHERE, coupler);
+
+    // Arbitrary but finite terrain so the gradient is well-defined.
+    let elevation: Vec<f64> = (0..n_surf).map(|i| (i % 7) as f64).collect();
+    let surface_ref = tessera.mesh(MeshKey::SURFACE).unwrap();
+    let view = tessera.coupler_view(idx).unwrap();
+    let sites = build_lift_sites_weighted(
+      atmosphere.as_ref(),
+      surface_ref.as_ref(),
+      &elevation,
+      1.0,
+      MeshKey::SURFACE,
+      MeshKey::ATMOSPHERE,
+      &view,
+    );
+
+    assert!(!sites.is_empty());
+    // Exactly one site per atmosphere target — the N:M gather collapses the
+    // several fine surface sources of the refined region into a single forced
+    // atmosphere cell — and every gradient is finite.
+    let mut targets = std::collections::HashSet::new();
+    for site in &sites {
+      assert!(
+        targets.insert(site.target.index()),
+        "duplicate target {}",
+        site.target.index()
+      );
+      assert!(site.grad[0].is_finite() && site.grad[1].is_finite());
+    }
   }
 }

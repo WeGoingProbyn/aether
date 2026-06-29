@@ -3,7 +3,11 @@
 
 use std::any::Any;
 
-use tessera::{mesh::Mesh, partition::PartitionMesh};
+use tessera::{
+  geometry::{CellGeometry, FaceGeometry},
+  partition::PartitionMesh,
+  topology::Topology,
+};
 use utility::serial::deserialize::{Deserialize, Deserializer};
 use utility::serial::serialize::{Serialize, Serializer};
 use utility::{
@@ -366,7 +370,7 @@ pub fn gather_partition_field<const D: usize, const N: usize, M>(
   partition: &PartitionMesh<D, M>,
 ) -> LocalPartitionField<N>
 where
-  M: Mesh<D>,
+  M: CellGeometry<D> + FaceGeometry<D> + Topology + ?Sized,
 {
   let mut values = Vec::with_capacity(partition.local_cell_count());
   for &global_cell in partition.local_to_global_cells() {
@@ -384,7 +388,7 @@ pub fn scatter_partition_owned<const D: usize, const N: usize, M>(
   global: &mut SoaField<N>,
   partition: &PartitionMesh<D, M>,
 ) where
-  M: Mesh<D>,
+  M: CellGeometry<D> + FaceGeometry<D> + Topology + ?Sized,
 {
   assert_eq!(
     local.len(),

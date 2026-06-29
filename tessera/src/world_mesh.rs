@@ -9,9 +9,11 @@ use utility::error::{AetherError, AetherResult};
 use crate::{
   coupling::{CoupledFace, MeshCoupler},
   geo::GeoCoord,
+  geometry::{CellGeometry, FaceGeometry},
   mask::{CellMask, MaskError},
   mesh::Mesh,
   partition::Decomposition,
+  topology::Topology,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -228,7 +230,13 @@ impl Tessera {
     decomposition: Decomposition<3, M>,
   ) -> Option<Decomposition<3, M>>
   where
-    M: Mesh<3> + 'static,
+    M: CellGeometry<3>
+      + FaceGeometry<3>
+      + Topology
+      + Send
+      + Sync
+      + ?Sized
+      + 'static,
   {
     let entry = self.meshes.get_mut(&mesh)?;
     entry
@@ -248,7 +256,13 @@ impl Tessera {
     key: DecompositionKey,
   ) -> Option<&Decomposition<3, M>>
   where
-    M: Mesh<3> + 'static,
+    M: CellGeometry<3>
+      + FaceGeometry<3>
+      + Topology
+      + Send
+      + Sync
+      + ?Sized
+      + 'static,
   {
     self
       .meshes

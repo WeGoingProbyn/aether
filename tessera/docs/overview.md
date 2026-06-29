@@ -23,8 +23,12 @@ shared notion of space the whole pipeline agrees on.
   and surfaces.
 - **`partition.rs`** — domain decomposition into stripes with ghost layers, so
   `nexus` can run N serial solvers over N partitions in parallel.
-- **`coupling.rs` / `world_mesh.rs`** — cross-mesh couplers and `Tessera`, the
-  multi-mesh container a world holds.
+- **`coupling.rs` / `radial_stack.rs` / `geometric_coupler.rs`** — cross-mesh
+  couplers: `RadialStackCoupler` (1:1 index arithmetic over matching structured
+  shells) and `GeometricRadialCoupler` (matches interface faces by angular
+  footprint, so it handles adaptively refined / mixed-level shells N:M and is
+  rebuilt by the adapt barrier). `world_mesh.rs` is `Tessera`, the multi-mesh
+  container a world holds (meshes, couplers, masks, decompositions, epochs).
 - **`geo.rs` / `spatial.rs`** — `GeoCoord { lat, lon, alt }` and a planet-agnostic
   conversion to/from world Cartesian, plus `GeoIndex`, a lat/lon bucket grid for
   point and region lookups robust at the poles and panel seams. This is what lets

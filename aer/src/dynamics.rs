@@ -16,8 +16,7 @@ use nexus::{
 };
 use std::sync::Mutex;
 use tessera::{
-  cube_sphere::CubeSphere, geometry::CellGeometry, mesh::Mesh,
-  world_mesh::DecompositionKey,
+  geometry::CellGeometry, mesh::Mesh, world_mesh::DecompositionKey,
 };
 use utility::{
   debug,
@@ -282,11 +281,11 @@ impl Stage for EulerAtmosphereStep {
     &'a mut self,
     ctx: StageContext<'a>,
   ) -> AetherResult<StagePlan<'a>> {
-    if ctx.world.partition_count == 6
+    if ctx.world.partition_count > 1
       && ctx
         .world
         .tessera
-        .decomposition::<CubeSphere>(self.mesh, DecompositionKey::DEFAULT)
+        .decomposition::<dyn Mesh<3>>(self.mesh, DecompositionKey::DEFAULT)
         .is_some()
     {
       Ok(StagePlan::program(EulerPartitionProgram {
@@ -410,10 +409,10 @@ impl<'a> nexus::StageProgram<'a> for EulerPartitionProgram<'a> {
     })?;
     let cell_count = mesh.cell_count();
     let decomposition = tessera
-      .decomposition::<CubeSphere>(stage.mesh, DecompositionKey::DEFAULT)
+      .decomposition::<dyn Mesh<3>>(stage.mesh, DecompositionKey::DEFAULT)
       .ok_or_else(|| {
         AetherError::new(AerError::MissingMesh).context(format!(
-          "missing default cube-sphere decomposition for {:?}",
+          "missing default decomposition for {:?}",
           stage.mesh
         ))
       })?;
@@ -807,15 +806,16 @@ mod tests {
     perturbed[4] *= 1.01;
     initial.write(CellId::from(0), &perturbed);
 
+    let mesh_dyn: Arc<dyn Mesh<3>> = mesh.clone();
     let serial = run_euler_test_step(
-      Arc::clone(&mesh),
+      mesh_dyn.clone(),
       None,
       initial.clone_state(),
       &constants,
       1,
     );
     let partitioned = run_euler_test_step(
-      Arc::clone(&mesh),
+      mesh_dyn,
       Some(decompose_cube_sphere_panels(mesh)),
       initial,
       &constants,
@@ -842,9 +842,73 @@ mod tests {
     }
   }
 
+  /// The de-typed partitioned path runs through an `AdaptiveMesh` (an arbitrary
+  /// `dyn Mesh<3>`) decomposed by base panel via `decompose_panels`, and still
+  /// matches the serial solver bit-for-bit — proving the solver no longer names a
+  /// concrete mesh type.
+  #[test]
+  fn partitioned_euler_matches_serial_through_an_adaptive_mesh() {
+    use tessera::adaptive::AdaptiveMesh;
+    use tessera::partition::decompose_panels;
+
+    let constants = earth_like_constants();
+    let spec = AtmosphereSpec::from_world_constants(&constants).unwrap();
+    let base = Arc::new(CubeSphere::shell(CubeSphereShellSpec::uniform(
+      [2, 2, 2],
+      1.0,
+      1.2,
+    )));
+    let adaptive = Arc::new(AdaptiveMesh::new(base));
+    let cell_count = adaptive.cell_count();
+    let mut initial = spec.euler_state_field(cell_count);
+    let mut perturbed = *initial.state(CellId::from(0)).as_state();
+    perturbed[0] *= 1.01;
+    perturbed[4] *= 1.01;
+    initial.write(CellId::from(0), &perturbed);
+
+    // Partition the adaptive mesh by its base cube-sphere panel.
+    let base_cells = adaptive.cell_base_cells();
+    let per_panel = (adaptive.base().cell_count() / 6).max(1);
+    let dyn_mesh: Arc<dyn Mesh<3>> = adaptive.clone();
+    let decomposition = decompose_panels(dyn_mesh.clone(), 6, move |cell| {
+      (base_cells[cell.index()].index() / per_panel).min(5)
+    });
+
+    let serial = run_euler_test_step(
+      dyn_mesh.clone(),
+      None,
+      initial.clone_state(),
+      &constants,
+      1,
+    );
+    let partitioned = run_euler_test_step(
+      dyn_mesh,
+      Some(decomposition),
+      initial,
+      &constants,
+      6,
+    );
+
+    for i in 0..cell_count {
+      let cell = CellId::from(i);
+      let a = serial.state(cell);
+      let b = partitioned.state(cell);
+      for component in 0..6 {
+        let scale = a[component].abs().max(1.0);
+        let rel = (a[component] - b[component]).abs() / scale;
+        assert!(
+          rel < 1.0e-10,
+          "cell {i} component {component} serial {} partitioned {} rel {rel}",
+          a[component],
+          b[component],
+        );
+      }
+    }
+  }
+
   fn run_euler_test_step(
-    mesh: Arc<CubeSphere>,
-    decomposition: Option<tessera::partition::Decomposition<3, CubeSphere>>,
+    mesh: Arc<dyn Mesh<3>>,
+    decomposition: Option<tessera::partition::Decomposition<3, dyn Mesh<3>>>,
     initial: SoaField<6>,
     constants: &WorldConstants,
     partition_count: usize,

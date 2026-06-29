@@ -15,8 +15,13 @@ the `syzygy` stencil and stages — so no physics crate depends on `syzygy`.
 
 ## What's inside
 
-- **`stencil.rs`** — `CouplingStencil` / `CouplingEntry`: precompute, from a
-  `tessera` coupler, which source-mesh cells map to which target-mesh cells.
+- **`stencil.rs`** — `CouplingStencil` / `CouplingEntry`: from a `tessera`
+  coupler, which source-mesh cells map to which target-mesh cells, each weighted
+  by interface-overlap area (normalised per target for gathers and per source for
+  conservative scatters — 1:1 is the degenerate unit-weight case, N:M arises when
+  one side is adaptively refined). `StencilSource::Live` resolves the *current*
+  coupler each run, so an adaptively re-meshed interface is tracked without a stale
+  snapshot.
 - **`flux.rs`** — `ScalarInterfaceFlux` and `ScalarInterfaceDeposition`: move a
   scalar across the interface as a flux / deposit a quantity into the target
   (e.g. debit the ocean the latent heat that evaporation carried into the air).

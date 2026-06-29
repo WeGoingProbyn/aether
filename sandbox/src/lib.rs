@@ -40,6 +40,7 @@ use terra::{
 use tessera::adaptive::AdaptiveMesh;
 use tessera::cube_sphere::CubeSphere;
 use tessera::cube_sphere::CubeSphereShellSpec;
+use tessera::geometric_coupler::GeometricRadialCoupler;
 use thalassa::{OceanColumnLayout, OceanModel};
 use utility::domain::{CellId, FieldKey, FieldName, SystemId};
 use utility::error::AetherResult;
@@ -825,8 +826,8 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
   // a cube-sphere built from the same spec, so its cell ids match the couplers and
   // terrain registered below; the AMR adapter is attached to the world after
   // `build()`. The surface carries no solver, so refining it never conflicts with
-  // the partitioned atmosphere — and the orographic lift sites are baked at setup,
-  // so a later surface re-mesh leaves the atmosphere stable.
+  // the partitioned atmosphere — and the orographic lift sites are rebuilt from
+  // the geometric coupler on each surface re-mesh (see the lift stage below).
   let surface_adaptive = Arc::new(AdaptiveMesh::new(Arc::new(
     CubeSphere::shell(shell_layout.surface_shell_spec(angular_dims, 1)),
   )));
@@ -836,8 +837,6 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
 
   let ocean_coupler =
     factory.add_radial_stack_coupler(MeshKey::OCEAN, MeshKey::ATMOSPHERE)?;
-  let surface_coupler =
-    factory.add_radial_stack_coupler(MeshKey::SURFACE, MeshKey::ATMOSPHERE)?;
 
   // Mask the ocean shell so the ocean solver only runs where there is actually
   // ocean: a column is active iff the surface below it is open water. Built here,
@@ -854,6 +853,19 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
     factory.tessera().mesh(MeshKey::ATMOSPHERE).unwrap().clone();
   let ocean_mesh = factory.tessera().mesh(MeshKey::OCEAN).unwrap().clone();
   let surface_mesh = factory.tessera().mesh(MeshKey::SURFACE).unwrap().clone();
+
+  // Couple the (adaptive) surface to the atmosphere for orographic lift with a
+  // *geometric* coupler: unlike the index coupler, it matches interface faces by
+  // angular footprint, so the adapt barrier rebuilds its pairings (N:M when the
+  // surface refines) and the lift stage tracks the re-meshed surface.
+  let surface_coupler = factory.add_coupler(
+    MeshKey::SURFACE,
+    MeshKey::ATMOSPHERE,
+    GeometricRadialCoupler::between_shells(
+      surface_mesh.as_ref(),
+      atmosphere_mesh.as_ref(),
+    ),
+  );
 
   // --- Models ---
   let atmosphere_model = AtmosphereModel::new(MeshKey::ATMOSPHERE)
@@ -968,35 +980,6 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
     SoaField::<1>::zeros(atmosphere_mesh.cell_count()),
   );
 
-  // Orographic lift sites from the surface terrain + surface↔atmosphere coupler.
-  let surface_elevation: Vec<f64> = {
-    let field = factory
-      .pleroma_mut()
-      .read::<SoaField<1>>(surface_terrain.fields().elevation)
-      .expect("surface elevation registered");
-    (0..surface_mesh.cell_count())
-      .map(|i| field.state(CellId::from(i))[0])
-      .collect()
-  };
-  let surface_stencil = CouplingStencil::from_tessera_coupler(
-    factory.tessera(),
-    surface_coupler,
-    MeshKey::SURFACE,
-    MeshKey::ATMOSPHERE,
-  )?;
-  let lift_pairings: Vec<(CellId, CellId)> = surface_stencil
-    .entries()
-    .iter()
-    .map(|e| (e.source_cell, e.target_cell))
-    .collect();
-  let lift_sites = build_lift_sites(
-    atmosphere_mesh.as_ref(),
-    surface_mesh.as_ref(),
-    &surface_elevation,
-    reference_radius,
-    &lift_pairings,
-  );
-
   // --- Stages (add order resolves data conflicts: earlier runs first) ---
   radiation_model.add_stages(factory.nexus_mut())?;
   let sst_relax = ScalarRelaxation::from_coupler(
@@ -1010,9 +993,15 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
   let atmosphere_stages = atmosphere_model.add_stages(factory.nexus_mut())?;
 
   // Orographic lift, after the atmosphere dynamics step (both write EulerState).
-  let lift_id = factory.add_stage(OrographicLiftStage::new(
+  // Rebuilt from the geometric coupler whenever the surface re-meshes, so a
+  // refined surface forces the atmosphere with fresh, area-weighted gradients.
+  let lift_id = factory.add_stage(OrographicLiftStage::with_coupler_rebuild(
     atmosphere_fields.euler_state,
-    lift_sites,
+    surface_coupler,
+    MeshKey::SURFACE,
+    MeshKey::ATMOSPHERE,
+    surface_terrain.fields().elevation,
+    reference_radius,
     0.2,
     20.0,
   ));

@@ -92,10 +92,20 @@ implementation is in place end-to-end — see [amr.md](amr.md) for the design.
   and checkpoint persistence of the adapted topology. Dense `CellId` stays the
   hot-path key; a `TopologyEpoch` + `CellRemap` (broadcast via the event bus) is
   how consumers survive a re-mesh. The cube-sphere is the first refinable backend.
+- **Coupled meshes + any solver (follow-on, DONE).** AMR is no longer limited to
+  inert, uncoupled meshes on the serial solver. Coupling entries are area-weighted
+  (gather / conservative-scatter), a `GeometricRadialCoupler` matches interface
+  faces by angular footprint (1:1 → N:M under refinement), and the adapt barrier
+  rebuilds couplers + the partitioned decomposition atomically with the mesh swap;
+  coupling stages and orographic lift read the live coupler so nothing references a
+  dead cell. The decomposition is mesh-type-erased, so the partitioned Euler solver
+  runs on an adapted atmosphere (partitioned == serial bit-for-bit). See
+  [amr.md](amr.md).
 - **v1 limitations (deferred).** Angular (horizontal) refinement only; refinement
-  that crosses a cube-sphere *panel seam* is skipped (best-effort); AMR runs on the
-  serial solver path (single partition) — AMR-aware partitioning / load balancing,
-  radial refinement, and coupler remap under AMR are future work.
+  that crosses a cube-sphere *panel seam* is skipped (best-effort); coupled meshes
+  must share their base angular grid; load balancing across the uneven partitions a
+  refined panel produces, multi-layer (column) refinement of a solver mesh, and
+  radial refinement are future work.
 - **Render-only LOD** fell out of the same topology-change path rather than being a
   separate milestone.
 

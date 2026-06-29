@@ -11,8 +11,10 @@ use pleroma::Pleroma;
 use pleroma::prelude::PleromaCheckpoint;
 use tessera::adaptive::AdaptiveMesh;
 use tessera::geometry::CellGeometry;
+use tessera::mesh::Mesh;
+use tessera::partition::decompose_panels;
 use tessera::refine::balance_2to1;
-use tessera::world_mesh::Tessera;
+use tessera::world_mesh::{DecompositionKey, Tessera};
 use utility::{
   constants::solar_flux,
   diagnostics::{DiagnosticsPolicy, WorldDiagnostics},
@@ -644,6 +646,27 @@ impl World {
       // Rebuild couplers touching this mesh from the new topology, atomically
       // with the swap, so coupling stages never read pairings with dead cells.
       self.tessera.rebuild_couplers_for(key);
+
+      // If this mesh runs the partitioned solver, rebuild its decomposition from
+      // the new topology too — partition by base cube-sphere panel so a refined
+      // panel keeps its cells together — so the solver reads a decomposition
+      // consistent with the swapped mesh.
+      if self
+        .tessera
+        .contains_decomposition(key, DecompositionKey::DEFAULT)
+      {
+        let base_cells = new_mesh.cell_base_cells();
+        let per_panel = (new_mesh.base().cell_count() / 6).max(1);
+        let dyn_mesh: Arc<dyn Mesh<3>> = new_mesh.clone();
+        let decomposition = decompose_panels(dyn_mesh, 6, move |cell| {
+          (base_cells[cell.index()].index() / per_panel).min(5)
+        });
+        self.tessera.register_decomposition(
+          key,
+          DecompositionKey::DEFAULT,
+          decomposition,
+        );
+      }
 
       // Broadcast for the read-side consumers (query / render / checkpoint).
       if let Some(bus) =

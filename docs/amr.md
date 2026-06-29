@@ -87,16 +87,36 @@ resource the host writes, the same seam (the event bus stays sim → consumer on
 
 ## Showcase
 
-`sandbox::build_showcase_world` makes its (inert) terrain **surface** adaptive and
+`sandbox::build_showcase_world` makes its terrain **surface** adaptive and
 attaches a `RegionRefinementCriterion` over a panel-interior cap; the surface
-refines after the governor's cadence and the cell-outline wireframe shows it.
-Surface refinement never conflicts with the partitioned atmosphere (it carries no
-solver) and the orographic lift sites are baked at setup, so the world stays
-stable across a re-mesh.
+refines after the governor's cadence and the cell-outline wireframe shows it. The
+surface is **coupled** to the atmosphere by orographic lift through a
+`GeometricRadialCoupler`, so a re-mesh is a full coupled-AMR exercise: the barrier
+rebuilds the coupler's pairings (N:M where a coarse atmosphere cell now overlaps
+several fine surface cells) and the lift stage rebuilds its area-weighted gradient
+sites — the atmosphere is forced by the *current* surface, not a stale snapshot.
+
+## Coupling and the partitioned solver under AMR
+
+AMR is no longer restricted to inert, uncoupled meshes on the serial solver:
+
+- **Coupling survives a re-mesh.** A coupling entry carries a raw overlap `area`
+  plus per-target (gather) and per-source (conservative scatter) normalised
+  weights; `GeometricRadialCoupler` matches interface faces by angular footprint
+  (1:1 when conforming, N:M when nested) and the adapt barrier rebuilds every
+  coupler touching a re-meshed mesh, so coupling stages never read pairings with
+  dead cells. Stages resolve the live coupler each run rather than caching a
+  snapshot.
+- **Any solver.** The decomposition is mesh-type-erased
+  (`Decomposition<3, dyn Mesh<3>>`), so the partitioned Euler solver runs on an
+  adapted atmosphere (`decompose_panels` partitions an `AdaptiveMesh` by base
+  panel); the barrier rebuilds the decomposition on adapt. Partitioned and serial
+  agree bit-for-bit through an adaptive mesh.
 
 ## v1 limitations
 
 Angular refinement only (radial deferred); panel-seam-crossing refinement is
-skipped; AMR runs on the serial solver path (single partition). AMR-aware
-partitioning / load balancing, radial refinement, and coupler remap under AMR are
-future work.
+skipped. Coupled meshes must share their base angular grid (so interface faces
+nest exactly). Load balancing across the uneven partitions a refined panel
+produces is future work, as is multi-layer (column) refinement of a solver mesh
+and radial refinement.
