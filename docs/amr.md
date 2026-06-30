@@ -85,12 +85,32 @@ resource the host writes, the same seam (the event bus stays sim → consumer on
   resized) *before* the stored values are loaded, so an adapted world restarts
   bit-for-bit.
 
+## View-dependent LOD (camera-driven refinement)
+
+Refinement can track the viewer. `CameraLodCriterion` (aether) refines cells whose
+screen-space size (`cell_volume^(1/3) / distance-to-camera`) is large and coarsens
+those that are small, so detail follows where the camera is.
+
+The camera is **owned by the simulation**, not the renderer — keeping eidolon
+strictly on top (it presents, it never sends data back):
+
+- `CameraView` lives in `utility` (shared vocab); the host sets it with
+  `World::set_camera`, landing it in pleroma as the inbound `ResourceKey::Camera`.
+- aether reads it (the criterion) and drives **tessera** refinement through the
+  same barrier as any other criterion.
+- eidolon reads it *forward*: the extractor emits `Update::SetCamera` into the IR
+  and the bevy backend positions a `SimDrivenCamera` from it — so the rendered
+  view *is* the simulation's camera. The data path is host → aether → tessera, and
+  separately aether → eidolon → backend; never backend → aether.
+
 ## Showcase
 
-`sandbox::build_showcase_world` makes its terrain **surface** adaptive and
-attaches a `RegionRefinementCriterion` over a panel-interior cap; the surface
-refines after the governor's cadence and the cell-outline wireframe shows it. The
-surface is **coupled** to the atmosphere by orographic lift through a
+`sandbox::build_showcase_world` makes its terrain **surface** adaptive and drives
+it with `CameraLodCriterion`; the showcase host feeds a (scripted, orbiting)
+camera via `set_camera` each tick, the surface refines toward it, and the
+cell-outline wireframe shows the detail tracking the view. (`showcase_extract_config`
+sets `track_camera`, so the same camera positions the rendered view.) The surface
+is **coupled** to the atmosphere by orographic lift through a
 `GeometricRadialCoupler`, so a re-mesh is a full coupled-AMR exercise: the barrier
 rebuilds the coupler's pairings (N:M where a coarse atmosphere cell now overlaps
 several fine surface cells) and the lift stage rebuilds its area-weighted gradient

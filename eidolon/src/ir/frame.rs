@@ -12,6 +12,22 @@ pub struct RenderFrame {
   /// Simulation time represented by this frame, in seconds.
   pub sim_time: f64,
   pub worlds: Vec<RenderWorld>,
+  /// The view the simulation wants presented, if it owns one (e.g. when a
+  /// view-dependent LOD criterion drives refinement from the camera). The
+  /// backend positions its view from this; `None` leaves the backend's own
+  /// camera (e.g. an interactive orbit camera) in control. Engine-neutral: it is
+  /// world-space geometry, not an engine camera type.
+  pub camera: Option<RenderCamera>,
+}
+
+/// A world-space view the backend should present from: where the eye is, what it
+/// looks at, and which way is up. Emitted forward by the extractor when the
+/// simulation owns the camera; the backend never writes back.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RenderCamera {
+  pub position: [f64; 3],
+  pub target: [f64; 3],
+  pub up: [f64; 3],
 }
 
 #[derive(Clone, Debug)]

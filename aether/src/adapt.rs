@@ -198,6 +198,74 @@ impl RefinementCriterion for RegionRefinementCriterion {
   }
 }
 
+/// The host's camera pose, read by [`CameraLodCriterion`]. Defined in `utility`
+/// so the consumer (eidolon) can read it forward without depending on aether;
+/// re-exported here for the criterion + [`World::set_camera`](crate::core::World::set_camera).
+pub use utility::domain::CameraView;
+
+/// View-dependent level-of-detail: refine cells that subtend a large angle from
+/// the camera and coarsen those that subtend a small one, so detail tracks where
+/// the viewer is looking. The indicator is a screen-space-error proxy — a cell's
+/// characteristic size (`cell_volume^(1/3)`) over its distance to the camera — so
+/// refinement is *graded* (closer ⇒ more levels) rather than a single shell.
+///
+/// `refine_above` / `coarsen_below` are thresholds on that size/distance ratio
+/// (`coarsen_below < refine_above` gives hysteresis), and `max_level` caps depth.
+/// Reads the [`CameraView`] from [`ResourceKey::Camera`]; if the host hasn't
+/// written one yet, it is a no-op (the mesh is left unchanged) — so a headless run
+/// with no camera simply never view-refines.
+pub struct CameraLodCriterion {
+  refine_above: f64,
+  coarsen_below: f64,
+  max_level: u32,
+}
+
+impl CameraLodCriterion {
+  pub fn new(refine_above: f64, coarsen_below: f64, max_level: u32) -> Self {
+    Self {
+      refine_above,
+      coarsen_below,
+      max_level,
+    }
+  }
+}
+
+impl RefinementCriterion for CameraLodCriterion {
+  fn evaluate(
+    &self,
+    mesh: &dyn RefinableMesh<3>,
+    pleroma: &Pleroma,
+  ) -> AetherResult<RefineFlags> {
+    // No camera yet ⇒ nothing to do (headless / pre-first-frame).
+    let Some(camera) =
+      pleroma.read_resource::<CameraView>(utility::domain::ResourceKey::Camera)
+    else {
+      return Ok(RefineFlags::default());
+    };
+    let eye = camera.position;
+
+    let mut flags = RefineFlags::default();
+    for c in 0..mesh.cell_count() {
+      let cell = CellId::from(c);
+      let p = mesh.cell_world_centroid(cell);
+      let d = ((p[0] - eye[0]).powi(2)
+        + (p[1] - eye[1]).powi(2)
+        + (p[2] - eye[2]).powi(2))
+      .sqrt()
+      .max(f64::EPSILON);
+      let size = mesh.cell_volume(cell).max(0.0).cbrt();
+      let projected = size / d;
+      let level = mesh.cell_level(cell);
+      if projected > self.refine_above && level < self.max_level {
+        flags.refine.push(cell);
+      } else if projected < self.coarsen_below && level > 0 {
+        flags.coarsen.push(cell);
+      }
+    }
+    Ok(flags)
+  }
+}
+
 /// Bounds how often and how much the mesh adapts, so the (full) re-mesh + field
 /// remap cost cannot dominate: adapt only every `every_n_ticks` ticks, and change
 /// at most `max_refine` / `max_coarsen` cells per adapt.
@@ -304,5 +372,59 @@ mod tests {
   #[test]
   fn zero_cadence_is_clamped_to_one() {
     assert_eq!(AdaptGovernor::new(0, 1, 1).every_n_ticks, 1);
+  }
+
+  #[test]
+  fn camera_lod_refines_the_cells_nearest_the_eye() {
+    use tessera::cube_sphere::CubeSphere;
+    use tessera::geometry::CellGeometry;
+    use utility::domain::ResourceKey;
+
+    let mesh =
+      AdaptiveMesh::new(Arc::new(CubeSphere::new([8, 8, 1], 0.99, 1.0)));
+    let eye = [0.0, 0.0, 1.5]; // just beyond the +z pole
+    let mut pleroma = Pleroma::new();
+    pleroma
+      .register_resource(ResourceKey::Camera, CameraView { position: eye });
+
+    let dist = |c: CellId| {
+      let p = mesh.cell_world_centroid(c);
+      ((p[0] - eye[0]).powi(2)
+        + (p[1] - eye[1]).powi(2)
+        + (p[2] - eye[2]).powi(2))
+      .sqrt()
+    };
+    // Pick a threshold at the 75th percentile of the size/distance indicator so
+    // roughly the nearest quarter refine — robust to the cube-sphere's per-cell
+    // volume variation.
+    let mut projected: Vec<f64> = (0..mesh.cell_count())
+      .map(|c| {
+        let cell = CellId::from(c);
+        mesh.cell_volume(cell).max(0.0).cbrt() / dist(cell)
+      })
+      .collect();
+    projected.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let threshold = projected[projected.len() * 3 / 4];
+
+    let criterion = CameraLodCriterion::new(threshold, threshold * 0.1, 1);
+    let flags = criterion.evaluate(&mesh, &pleroma).unwrap();
+
+    assert!(!flags.refine.is_empty(), "some cells should view-refine");
+    assert!(
+      flags.refine.len() < mesh.cell_count(),
+      "not every cell should refine"
+    );
+    // The refined cells are nearer the eye than the mesh as a whole.
+    let mean_all: f64 = (0..mesh.cell_count())
+      .map(|c| dist(CellId::from(c)))
+      .sum::<f64>()
+      / mesh.cell_count() as f64;
+    let mean_refined: f64 = flags.refine.iter().map(|&c| dist(c)).sum::<f64>()
+      / flags.refine.len() as f64;
+    assert!(
+      mean_refined < mean_all,
+      "refined cells ({mean_refined:.3}) should sit nearer the eye than \
+       average ({mean_all:.3})"
+    );
   }
 }

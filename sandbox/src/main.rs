@@ -26,16 +26,16 @@
 //!                step then holds, racing the game clock ahead of sim time
 //!                (see the runner's periodic regime log)
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use aether::adapt::CameraView;
 use bevy::prelude::*;
-use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
 use chronos::{Regime, RegimeConfig};
 
 use eidolon::{
-  bevy::{AetherBevyPlugin, RenderRegistry, SunLight},
+  bevy::{AetherBevyPlugin, RenderRegistry, SimDrivenCamera, SunLight},
   extract::FrameProducer,
   ir::{LayerHandle, LayerId, MeshRepresentation, RenderMeshId},
   runtime::{render_channel, spawn_runner},
@@ -81,8 +81,18 @@ fn main() -> AetherResult<()> {
   );
   Profiler::init();
 
-  let (mut aether, _layout) = build_showcase_world()?;
+  let (mut aether, layout) = build_showcase_world()?;
   let mut producer = FrameProducer::new(showcase_extract_config());
+
+  // The simulation owns the camera (view-dependent surface LOD). The host drives
+  // it from input: `camera_control_system` (WASD orbit, Q/E zoom) writes the eye
+  // into this shared cell each frame; the runner feeds it to the world via
+  // `set_camera`, the LOD criterion refines toward it, and eidolon emits it
+  // forward so the rendered view follows (interpolated). The host reads input and
+  // the sim owns the camera — eidolon never sends anything back.
+  let camera_radius = layout.reference_radius() * 2.5;
+  let camera_eye = Arc::new(Mutex::new(orbit_eye(0.0, 0.2, camera_radius)));
+  let camera_eye_runner = Arc::clone(&camera_eye);
 
   // One stable atmosphere step per climatology burst, so entering the regime
   // never takes an unstable jump — the held span is what makes it cheap.
@@ -112,6 +122,10 @@ fn main() -> AetherResult<()> {
       } else {
         Regime::Live
       });
+      // Feed the host-controlled camera (updated by `camera_control_system`) into
+      // the world: the LOD criterion refines toward it and eidolon presents it.
+      let eye = *camera_eye_runner.lock().expect("camera eye lock");
+      world.set_camera(CameraView { position: eye });
     }
     // Live integrates the full game step; climatology bursts one stable step and
     // holds the rest, so the game clock races ahead of integrated sim time.
@@ -178,6 +192,7 @@ fn main() -> AetherResult<()> {
 
   info!(
     "sandbox showcase: terrain + ocean + moist atmosphere. \
+     WASD orbits the camera, Q/E zooms (surface LOD follows the view); \
      Tab toggles debug/rendered; 1/2/3 swap atmosphere temp/humidity/pressure; \
      4/5 swap surface elevation/albedo; \
      6/7/8 swap atmosphere climatology mean temp/humidity/pressure; \
@@ -186,14 +201,25 @@ fn main() -> AetherResult<()> {
   );
   App::new()
     .add_plugins(DefaultPlugins)
-    .add_plugins(PanOrbitCameraPlugin)
     .add_plugins(AetherBevyPlugin::new(rx))
     .add_plugins(ShowcaseRenderPlugin)
     .insert_resource(RegimeToggle(climatology))
+    .insert_resource(OrbitCamera {
+      azimuth: 0.0,
+      colatitude: 0.2,
+      radius: camera_radius,
+      min_radius: layout.reference_radius() * 1.1,
+      eye: camera_eye,
+    })
     .add_systems(Startup, spawn_camera_and_light)
     .add_systems(
       Update,
-      (layer_toggle_input, regime_toggle_input, outline_view_input),
+      (
+        layer_toggle_input,
+        regime_toggle_input,
+        outline_view_input,
+        camera_control_system,
+      ),
     )
     .run();
 
@@ -202,17 +228,76 @@ fn main() -> AetherResult<()> {
   Ok(())
 }
 
+/// Host-side orbit-camera state. The simulation owns the camera, so input only
+/// updates this controller and writes the resulting eye into the shared cell the
+/// runner feeds to `World::set_camera` each tick — the host reads input, the sim
+/// owns the camera, and eidolon presents it forward.
+#[derive(Resource)]
+struct OrbitCamera {
+  azimuth: f64,
+  colatitude: f64,
+  radius: f64,
+  min_radius: f64,
+  eye: Arc<Mutex<[f64; 3]>>,
+}
+
+/// World-space eye position for an orbit looking at the planet centre, at polar
+/// angle `colatitude` from +z and `azimuth` about it.
+fn orbit_eye(azimuth: f64, colatitude: f64, radius: f64) -> [f64; 3] {
+  let (sc, cc) = colatitude.sin_cos();
+  let (sa, ca) = azimuth.sin_cos();
+  [radius * sc * ca, radius * sc * sa, radius * cc]
+}
+
+/// WASD orbits the view (A/D azimuth, W/S colatitude), Q/E zoom. Updates the
+/// orbit state and publishes the eye for the runner to feed to `set_camera`.
+/// Clamped off the poles and above the surface.
+fn camera_control_system(
+  time: Res<Time>,
+  keys: Res<ButtonInput<KeyCode>>,
+  mut orbit: ResMut<OrbitCamera>,
+) {
+  let dt = time.delta_secs() as f64;
+  let orbit_speed = 1.2; // rad/s
+  let zoom_rate = 1.5; // fraction of the radius per second
+  if keys.pressed(KeyCode::KeyA) {
+    orbit.azimuth -= orbit_speed * dt;
+  }
+  if keys.pressed(KeyCode::KeyD) {
+    orbit.azimuth += orbit_speed * dt;
+  }
+  if keys.pressed(KeyCode::KeyW) {
+    orbit.colatitude -= orbit_speed * dt;
+  }
+  if keys.pressed(KeyCode::KeyS) {
+    orbit.colatitude += orbit_speed * dt;
+  }
+  if keys.pressed(KeyCode::KeyQ) {
+    orbit.radius *= 1.0 - zoom_rate * dt;
+  }
+  if keys.pressed(KeyCode::KeyE) {
+    orbit.radius *= 1.0 + zoom_rate * dt;
+  }
+  orbit.colatitude = orbit.colatitude.clamp(0.05, std::f64::consts::PI - 0.05);
+  orbit.radius = orbit.radius.max(orbit.min_radius);
+
+  let eye = orbit_eye(orbit.azimuth, orbit.colatitude, orbit.radius);
+  if let Ok(mut shared) = orbit.eye.lock() {
+    *shared = eye;
+  }
+}
+
 fn spawn_camera_and_light(mut commands: Commands) {
   let distance = 2.5e7_f32;
+  // The view follows the simulation-owned camera: tag it `SimDrivenCamera` so the
+  // eidolon backend positions it from each `SetCamera` (the orbit the runner
+  // feeds via `set_camera`, driven by `camera_control_system`). The initial
+  // transform is a placeholder until the first frame's camera arrives.
   commands.spawn((
     Camera3d::default(),
     Transform::from_xyz(distance, distance * 0.4, distance)
       .looking_at(Vec3::ZERO, Vec3::Y),
-    PanOrbitCamera {
-      focus: Vec3::ZERO,
-      radius: Some(distance * 1.7),
-      ..default()
-    },
+    SimDrivenCamera,
   ));
 
   commands.spawn((

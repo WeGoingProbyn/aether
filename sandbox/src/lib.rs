@@ -16,7 +16,7 @@ use aer::{
   SaturationAdjustmentStep, ShellColumns, build_lift_sites,
 };
 use aether::{
-  adapt::{AdaptGovernor, MeshAdapter, RegionRefinementCriterion},
+  adapt::{AdaptGovernor, CameraLodCriterion, MeshAdapter},
   core::{Aether, System},
   factory::WorldFactory,
 };
@@ -655,6 +655,7 @@ pub fn ocean_world_extract_config() -> ExtractConfig {
     ],
     categorical_layers: Vec::new(),
     track_sun_direction: true,
+    track_camera: false,
   }
 }
 
@@ -714,6 +715,7 @@ pub fn demo_extract_config() -> ExtractConfig {
     ],
     categorical_layers: Vec::new(),
     track_sun_direction: true,
+    track_camera: false,
   }
 }
 
@@ -793,7 +795,7 @@ pub fn debug_render_frame(
 /// differ in albedo, orography, rendering, ocean activity and moisture.)
 #[profile]
 pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
-  let angular_dims = [16, 16];
+  let angular_dims = [32, 32];
   let atmosphere_layers = 6;
   let ocean_layers = 2;
   let atmosphere_height = 20_000.0;
@@ -1041,22 +1043,40 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
 
   let mut world = factory.build()?;
 
-  // Attach an AMR adapter to the surface: refine a spherical cap over the north
-  // pole (the centre of the ZP cube-sphere panel, well clear of the panel seams)
-  // to level 1 on a slow cadence. This drives the cell-outline debug view so it
-  // is obvious where refinement is applied. The region criterion is field-free;
-  // a `GradientCriterion` (e.g. on `SurfaceElevation`) is the physics-driven
-  // alternative, constrained to panel interiors by the v1 seam limitation.
+  // Attach a **view-dependent LOD** adapter to the surface: refine cells the
+  // camera is near and coarsen those far away, so detail follows the viewer. The
+  // camera is owned by the simulation (the host sets it via `World::set_camera`,
+  // and `showcase_extract_config` emits it forward so the rendered view follows
+  // it) — eidolon never sends anything back.
+  //
+  // Thresholds are the cell's `size/distance`; derive a sensible starting point
+  // from the mesh's own cell size and the expected camera distance (~3 radii),
+  // then tune to taste. v1 seam caveat: a refinement request that would cross a
+  // cube-sphere panel seam is skipped best-effort, so refinement tracks the
+  // camera within a panel; the governor also caps churn per adapt.
+  let median_cell_size = {
+    let mut sizes: Vec<f64> = (0..surface_mesh.cell_count())
+      .map(|i| surface_mesh.cell_volume(CellId::from(i)).max(0.0).cbrt())
+      .collect();
+    sizes.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    sizes[sizes.len() / 2]
+  };
+  // Tight enough that only a panel-interior cap right under the camera flags
+  // (well under the governor's churn cap, and clear of cube-sphere seams), so the
+  // refinement is genuinely camera-local rather than an arbitrary CellId-ordered
+  // truncation. Distances are in radii: refine within ~1.8 R of the eye, coarsen
+  // beyond ~3 R.
+  let refine_above = median_cell_size / (reference_radius * 1.8);
+  let coarsen_below = median_cell_size / (reference_radius * 3.0);
   world.add_adapter(MeshAdapter::new(
     MeshKey::SURFACE,
     surface_adaptive,
-    Box::new(RegionRefinementCriterion::new(
-      [0.0, 0.0, 1.0],
-      0.30,
-      0.45,
-      1,
-    )),
-    AdaptGovernor::new(4, 256, 256),
+    Box::new(CameraLodCriterion::new(refine_above, coarsen_below, 1)),
+    // Camera LOD re-meshes whenever the view moves enough to change the refined
+    // set, so — unlike a static region that refined once — it keeps adapting. Run
+    // it on a slower cadence (every 15 ticks ≈ 0.25 s at 60 Hz) so the (full)
+    // re-mesh cost stays off the per-frame path; the LOD lags the camera slightly.
+    AdaptGovernor::new(15, 256, 256),
   ));
 
   let system_id = SystemId(0);
@@ -1217,5 +1237,8 @@ pub fn showcase_extract_config() -> ExtractConfig {
       ),
     ],
     track_sun_direction: true,
+    // The simulation owns the camera (view-dependent LOD): emit it forward so the
+    // bevy view follows it.
+    track_camera: true,
   }
 }

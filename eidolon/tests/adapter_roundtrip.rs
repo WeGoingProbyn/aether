@@ -84,6 +84,7 @@ fn earth_frame() -> RenderFrame {
     frame: 42,
     sim_time: 1.5,
     worlds: vec![world],
+    camera: None,
   }
 }
 
@@ -154,6 +155,7 @@ fn empty_frame_emits_only_set_sim_time() {
     frame: 7,
     sim_time: 0.25,
     worlds: Vec::new(),
+    camera: None,
   };
   let batch = frame_to_initial_batch(&frame);
   assert_eq!(batch.updates.len(), 1);

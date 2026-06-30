@@ -354,6 +354,27 @@ pub enum ResourceKey {
   /// emit `Event`s during a tick; the buffer is published at the end-of-tick
   /// barrier and read via `World::events()`. Ephemeral / not checkpointed.
   Events,
+  /// View-dependent LOD input ([`CameraView`]): the host writes the current
+  /// camera pose into pleroma each tick; a view-dependent refinement criterion
+  /// reads it to refine near the camera and coarsen far away. An *inbound*
+  /// resource (consumer→sim), the mirror of the outbound [`ResourceKey::Events`].
+  /// Ephemeral / not checkpointed.
+  Camera,
+}
+
+/// The host camera pose, stored as the inbound [`ResourceKey::Camera`] resource.
+///
+/// Lives in `utility` so the producer side (aether, via `World::set_camera`, and
+/// the view-dependent refinement criterion that reads it) and the consumer side
+/// (eidolon's extractor, reading it *forward* into the render IR to position the
+/// view) share one vocabulary without depending on each other — the same
+/// shared-type discipline as [`SurfaceClass`]. Only a world-space position is
+/// needed for distance-based level-of-detail; richer view data can be added
+/// without changing the seam.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CameraView {
+  /// World-space camera position.
+  pub position: [f64; 3],
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

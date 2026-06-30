@@ -138,6 +138,14 @@ pub enum Update {
     direction: [f64; 3],
   },
 
+  /// The view the simulation wants presented (it owns the camera, e.g. for
+  /// view-dependent LOD). The backend positions its camera from this; absent ⇒
+  /// the backend's own camera stays in control. World-space geometry, not an
+  /// engine camera type — eidolon emits it *forward*; the backend never replies.
+  SetCamera {
+    camera: crate::ir::RenderCamera,
+  },
+
   /// Authoritative simulation time for this batch. Always emitted last
   /// in a batch; consumers read it to drive any time-dependent
   /// rendering (animation, HUDs).

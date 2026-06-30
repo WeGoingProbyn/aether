@@ -93,13 +93,17 @@ fn match_faces(
       pairs.push(FacePair::new(lf, uf));
     }
   };
+  // Spatial buckets over each side's directions so the nearest-neighbour passes
+  // are O(N) instead of O(N²) — the dominant cost when a coupled mesh re-meshes.
+  let upper_grid = DirGrid::build(&upper_faces);
+  let lower_grid = DirGrid::build(&lower_faces);
   for (lf, ldir) in &lower_faces {
-    if let Some((uf, _)) = nearest(*ldir, &upper_faces) {
+    if let Some(uf) = upper_grid.nearest(*ldir, &upper_faces) {
       add(*lf, uf, &mut pairs);
     }
   }
   for (uf, udir) in &upper_faces {
-    if let Some((lf, _)) = nearest(*udir, &lower_faces) {
+    if let Some(lf) = lower_grid.nearest(*udir, &lower_faces) {
       add(lf, *uf, &mut pairs);
     }
   }
@@ -147,26 +151,94 @@ fn interface_faces(
     .collect()
 }
 
-/// The face in `faces` whose direction is angularly nearest to `dir`.
-fn nearest(
-  dir: [f64; 3],
-  faces: &[(FaceId, [f64; 3])],
-) -> Option<(FaceId, f64)> {
-  faces
-    .iter()
-    .map(|(f, d)| (*f, angle(dir, *d)))
-    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+/// A coarse spatial bucket of interface faces by unit direction, for O(N)
+/// nearest-direction queries instead of an O(N²) scan.
+struct DirGrid {
+  res: f64,
+  bins: std::collections::HashMap<(i64, i64, i64), Vec<usize>>,
+}
+
+impl DirGrid {
+  fn build(faces: &[(FaceId, [f64; 3])]) -> Self {
+    // ~one bin per face's angular spacing keeps shell expansion to a step or two.
+    let res = ((faces.len() as f64).sqrt() / 2.0).max(4.0);
+    let mut bins: std::collections::HashMap<(i64, i64, i64), Vec<usize>> =
+      std::collections::HashMap::new();
+    for (i, (_, d)) in faces.iter().enumerate() {
+      bins.entry(Self::key(*d, res)).or_default().push(i);
+    }
+    Self { res, bins }
+  }
+
+  fn key(d: [f64; 3], res: f64) -> (i64, i64, i64) {
+    (
+      (d[0] * res).floor() as i64,
+      (d[1] * res).floor() as i64,
+      (d[2] * res).floor() as i64,
+    )
+  }
+
+  /// The face nearest `dir` by angle. Expands Chebyshev shells around `dir`'s bin
+  /// and stops once no unsearched shell could hold a closer face, so the result
+  /// is the *exact* nearest — just found in ~O(1) bins rather than scanning all.
+  fn nearest(
+    &self,
+    dir: [f64; 3],
+    faces: &[(FaceId, [f64; 3])],
+  ) -> Option<FaceId> {
+    let (cx, cy, cz) = Self::key(dir, self.res);
+    let bin = 1.0 / self.res;
+    let mut best: Option<(FaceId, f64)> = None; // (face, chord²)
+    let mut r: i64 = 0;
+    loop {
+      for dx in -r..=r {
+        for dy in -r..=r {
+          for dz in -r..=r {
+            // Only the shell at Chebyshev distance r; the interior is searched.
+            if dx.abs().max(dy.abs()).max(dz.abs()) != r {
+              continue;
+            }
+            if let Some(idxs) = self.bins.get(&(cx + dx, cy + dy, cz + dz)) {
+              for &i in idxs {
+                let c2 = chord2(dir, faces[i].1);
+                if best.map_or(true, |(_, b)| c2 < b) {
+                  best = Some((faces[i].0, c2));
+                }
+              }
+            }
+          }
+        }
+      }
+      // The next shell (r+1) lies at least r·bin from `dir`, so once the best so
+      // far is closer than that, no farther face can beat it.
+      if let Some((_, b)) = best {
+        let ring_min = r as f64 * bin;
+        if ring_min * ring_min >= b {
+          break;
+        }
+      }
+      r += 1;
+      // Safety: every direction is on the unit sphere (chord ≤ 2).
+      if r > (2.0 * self.res) as i64 + 2 {
+        break;
+      }
+    }
+    best.map(|(f, _)| f)
+  }
+}
+
+/// Squared chord length between two unit vectors — monotonic in the angle
+/// between them, so it ranks nearest-by-angle without an `acos`.
+fn chord2(a: [f64; 3], b: [f64; 3]) -> f64 {
+  let dx = a[0] - b[0];
+  let dy = a[1] - b[1];
+  let dz = a[2] - b[2];
+  dx * dx + dy * dy + dz * dz
 }
 
 fn unit(v: Vector<f64, 3>) -> Option<[f64; 3]> {
   let m = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
   (m > 0.0).then(|| [v[0] / m, v[1] / m, v[2] / m])
-}
-
-fn angle(a: [f64; 3], b: [f64; 3]) -> f64 {
-  (a[0] * b[0] + a[1] * b[1] + a[2] * b[2])
-    .clamp(-1.0, 1.0)
-    .acos()
 }
 
 #[cfg(test)]

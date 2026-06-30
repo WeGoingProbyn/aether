@@ -232,7 +232,10 @@ fn showcase_refines_the_surface_and_emits_a_wireframe() {
   use tessera::geometry::CellGeometry;
   use utility::events::Event;
 
-  let (mut aether, _layout) = build_showcase_world().unwrap();
+  use aether::adapt::CameraView;
+  use utility::domain::SystemId;
+
+  let (mut aether, layout) = build_showcase_world().unwrap();
   let initial = aether
     .world(SANDBOX_WORLD_ID)
     .unwrap()
@@ -241,8 +244,21 @@ fn showcase_refines_the_surface_and_emits_a_wireframe() {
     .unwrap()
     .cell_count();
 
-  // The surface adapter fires every 4th tick; step exactly to the first firing.
-  for _ in 0..4 {
+  // The surface uses *view-dependent* LOD, so it only refines once the host has
+  // placed the camera. Put it above the +z pole (panel-interior, clear of seams),
+  // so the near cells refine.
+  let radius = layout.reference_radius();
+  aether
+    .system_mut(SystemId(0))
+    .and_then(|s| s.world_mut(SANDBOX_WORLD_ID))
+    .unwrap()
+    .set_camera(CameraView {
+      position: [0.0, 0.0, radius * 2.5],
+    });
+
+  // The surface adapter fires on a 15-tick cadence; step exactly to the first
+  // firing so the TopologyChanged event is in this tick's buffer.
+  for _ in 0..15 {
     aether.step(20.0).unwrap();
   }
 
@@ -282,6 +298,17 @@ fn showcase_refines_the_surface_and_emits_a_wireframe() {
       }
     )),
     "expected a wireframe (line) mesh for the surface cell outlines"
+  );
+
+  // The simulation-owned camera is emitted *forward* into the IR (the backend
+  // positions its view from it). This is the same view that drove the LOD above.
+  assert!(
+    batch.updates.iter().any(|u| matches!(
+      u,
+      Update::SetCamera { camera }
+        if (camera.position[2] - radius * 2.5).abs() < 1.0
+    )),
+    "expected the simulation camera to be emitted forward as SetCamera"
   );
 }
 

@@ -19,9 +19,10 @@ use utility::{
   constants::solar_flux,
   diagnostics::{DiagnosticsPolicy, WorldDiagnostics},
   domain::{CellId, MeshKey, MeshType, SystemId, TopologyEpoch},
+  end_profile,
   error::{AetherError, AetherResult, ErrorDomain},
   events::{Event, EventBus, RegimeKind},
-  profile,
+  inline_profile, profile,
   serial::deserialize::Deserialize,
   serial::json::{JsonDeserializer, JsonSerializer},
   serial::serialize::Serialize,
@@ -259,6 +260,22 @@ impl World {
   /// registered into the world's `Tessera` for `mesh_key`.
   pub fn add_adapter(&mut self, adapter: crate::adapt::MeshAdapter) {
     self.adapters.push(adapter);
+  }
+
+  /// Update the host camera pose used by view-dependent LOD
+  /// ([`CameraLodCriterion`](crate::adapt::CameraLodCriterion)). The host calls
+  /// this each frame/tick before [`tick`](Self::tick); the value lands in pleroma
+  /// as the inbound [`ResourceKey::Camera`] resource. Registers the resource on
+  /// first use. Inbound (consumer→sim) — the mirror of the outbound event bus.
+  pub fn set_camera(&mut self, view: crate::adapt::CameraView) {
+    if let Some(slot) = self
+      .pleroma
+      .write_resource::<crate::adapt::CameraView>(ResourceKey::Camera)
+    {
+      *slot = view;
+    } else {
+      self.pleroma.register_resource(ResourceKey::Camera, view);
+    }
   }
 
   pub fn body_index(&self) -> Option<usize> {
@@ -611,9 +628,11 @@ impl World {
       let mesh = self.adapters[i].mesh.clone();
       let key = self.adapters[i].mesh_key;
 
+      inline_profile!("run_adapters.criterion");
       let desired = self.adapters[i]
         .criterion
         .evaluate(mesh.as_ref(), &self.pleroma)?;
+      end_profile!("run_adapters.criterion");
       let request = governor.cap(desired);
       if request.refine.is_empty() && request.coarsen.is_empty() {
         continue;
@@ -632,25 +651,33 @@ impl World {
       // Best-effort: a request the backend can't realise (e.g. one that would
       // cross a cube-sphere panel seam — the v1 limitation) is skipped this tick,
       // leaving the mesh unchanged, rather than failing the whole simulation.
-      let Ok((new_mesh, remap)) = mesh.refine(&balanced) else {
+      inline_profile!("run_adapters.refine");
+      let refined = mesh.refine(&balanced);
+      end_profile!("run_adapters.refine");
+      let Ok((new_mesh, remap)) = refined else {
         continue;
       };
       let epoch = remap.new_epoch();
 
       // Remap state into the new cell layout, then swap the mesh in and bump the
       // epoch (build-then-swap: state is intact until the remap completes).
+      inline_profile!("run_adapters.remap");
       self.pleroma.remap_mesh_fields(key, &remap, &old_volumes);
+      end_profile!("run_adapters.remap");
       let new_mesh = Arc::new(new_mesh);
       self.tessera.register_mesh(key, new_mesh.clone());
       self.tessera.set_topology_epoch(key, epoch);
       // Rebuild couplers touching this mesh from the new topology, atomically
       // with the swap, so coupling stages never read pairings with dead cells.
+      inline_profile!("run_adapters.rebuild_couplers");
       self.tessera.rebuild_couplers_for(key);
+      end_profile!("run_adapters.rebuild_couplers");
 
       // If this mesh runs the partitioned solver, rebuild its decomposition from
       // the new topology too — balanced across partitions by radial column so a
       // locally-refined region doesn't leave one panel's partition oversized,
       // while keeping each column intact for the vertically-implicit solve.
+      inline_profile!("run_adapters.decompose");
       if self
         .tessera
         .contains_decomposition(key, DecompositionKey::DEFAULT)
@@ -677,6 +704,7 @@ impl World {
           decomposition,
         );
       }
+      end_profile!("run_adapters.decompose");
 
       // Broadcast for the read-side consumers (query / render / checkpoint).
       if let Some(bus) =
@@ -1391,6 +1419,89 @@ mod tests {
     assert!(
       (0..n_atm).any(|i| atm_field.state(CellId::from(i))[0] > 1.0),
       "atmosphere should relax toward the surface across the rebuilt coupler"
+    );
+  }
+
+  #[test]
+  fn camera_lod_refines_the_mesh_toward_the_viewer() {
+    use crate::adapt::{
+      AdaptGovernor, CameraLodCriterion, CameraView, MeshAdapter,
+    };
+    use tessera::cube_sphere::CubeSphere;
+    use tessera::geometry::CellGeometry;
+    use utility::events::EventBus;
+    use utility::thread::pool::Pool;
+
+    let surface = Arc::new(AdaptiveMesh::new(Arc::new(CubeSphere::new(
+      [8, 8, 1],
+      0.99,
+      1.0,
+    ))));
+    let n0 = surface.cell_count();
+
+    // Threshold at the 70th percentile of the size/distance indicator for a
+    // camera beyond the +z pole, so the nearest ~30% are flagged.
+    let eye = [0.0, 0.0, 1.5];
+    let dist = |c: CellId| {
+      let p = surface.cell_world_centroid(c);
+      ((p[0] - eye[0]).powi(2)
+        + (p[1] - eye[1]).powi(2)
+        + (p[2] - eye[2]).powi(2))
+      .sqrt()
+    };
+    let mut projected: Vec<f64> = (0..n0)
+      .map(|c| {
+        let cell = CellId::from(c);
+        surface.cell_volume(cell).max(0.0).cbrt() / dist(cell)
+      })
+      .collect();
+    projected.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let threshold = projected[n0 * 7 / 10];
+
+    let mut tessera = Tessera::default();
+    tessera.register_mesh(MeshKey::SURFACE, surface.clone());
+    let mut pleroma = Pleroma::new();
+    pleroma.register_resource(ResourceKey::Events, EventBus::new());
+    let compiled = nexus::Nexus::new().build(&pleroma).unwrap();
+
+    let mut world = World::new(
+      WorldId(0),
+      factory::earth(),
+      None,
+      tessera,
+      pleroma,
+      compiled,
+    );
+    world.add_adapter(MeshAdapter::new(
+      MeshKey::SURFACE,
+      surface,
+      Box::new(CameraLodCriterion::new(threshold, threshold * 0.1, 1)),
+      AdaptGovernor::new(1, 1024, 1024),
+    ));
+
+    // Host pushes the camera, then the world ticks: the barrier view-refines.
+    world.set_camera(CameraView { position: eye });
+    world.tick(&Pool::default(), 0.5).unwrap();
+
+    // The typed refined mesh lives on the adapter (the registry holds it as
+    // `dyn Mesh`, which has no `level_of`).
+    let refined = &world.adapters[0].mesh;
+    assert!(refined.cell_count() > n0, "the mesh should view-refine");
+
+    // The refinement tracks the viewer: level-1 cells sit on the +z (camera) side.
+    let mut sum_z = 0.0;
+    let mut level1 = 0usize;
+    for c in 0..refined.cell_count() {
+      let cell = CellId::from(c);
+      if refined.level_of(cell) == 1 {
+        sum_z += refined.cell_world_centroid(cell)[2];
+        level1 += 1;
+      }
+    }
+    assert!(level1 > 0);
+    assert!(
+      sum_z / level1 as f64 > 0.0,
+      "refined cells should cluster toward the +z camera"
     );
   }
 

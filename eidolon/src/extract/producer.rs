@@ -52,6 +52,10 @@ pub struct ExtractConfig {
   pub categorical_layers: Vec<CategoricalLayerConfig>,
   /// Whether to emit `UpdateSunDirection` from `ResourceKey::SunPosition`.
   pub track_sun_direction: bool,
+  /// Whether to emit `SetCamera` from the inbound `ResourceKey::Camera` resource,
+  /// so the backend presents the simulation-owned view (view-dependent LOD).
+  /// Off by default: the backend keeps its own camera unless asked.
+  pub track_camera: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -202,6 +206,7 @@ struct ProducerCache {
   layer_sample_hashes: HashMap<LayerHandle, u64>,
   layer_sample_epochs: HashMap<LayerHandle, u64>,
   last_sun_direction_hash: Option<u64>,
+  last_camera_hash: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -246,6 +251,7 @@ impl FrameProducer {
     self.emit_layers(world_id, pleroma, &mut updates);
     self.emit_categorical_layers(world_id, pleroma, &mut updates);
     self.emit_sun_direction(world_id, pleroma, &mut updates);
+    self.emit_camera(pleroma, &mut updates);
 
     updates.push(Update::SetSimTime { sim_time, frame });
     UpdateBatch {
@@ -565,6 +571,34 @@ impl FrameProducer {
         direction,
       });
       self.cache.last_sun_direction_hash = Some(h);
+    }
+  }
+
+  /// Emit the simulation-owned camera *forward*: read the inbound
+  /// [`ResourceKey::Camera`] the host wrote and turn it into a `SetCamera` the
+  /// backend presents from. Looks at the world origin (planet centre) with +z up
+  /// — the same stable pole reference the sun uses. eidolon only reads here; it
+  /// never writes the camera back.
+  fn emit_camera(&mut self, pleroma: &Pleroma, updates: &mut Vec<Update>) {
+    if !self.config.track_camera {
+      return;
+    }
+    let Some(view) =
+      pleroma.read_resource::<utility::domain::CameraView>(ResourceKey::Camera)
+    else {
+      return;
+    };
+    let position = view.position;
+    let h = hash_f64_slice(&position);
+    if self.cache.last_camera_hash != Some(h) {
+      updates.push(Update::SetCamera {
+        camera: crate::ir::RenderCamera {
+          position,
+          target: [0.0, 0.0, 0.0],
+          up: [0.0, 0.0, 1.0],
+        },
+      });
+      self.cache.last_camera_hash = Some(h);
     }
   }
 }

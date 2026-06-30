@@ -57,6 +57,7 @@ fn config(displacement: Option<f32>) -> ExtractConfig {
     }],
     categorical_layers: vec![],
     track_sun_direction: false,
+    track_camera: false,
   }
 }
 

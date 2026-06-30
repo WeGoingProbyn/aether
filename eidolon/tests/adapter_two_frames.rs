@@ -41,6 +41,7 @@ fn frame_with_temperature(world_id: WorldId, samples: Vec<f64>) -> RenderFrame {
     frame: 0,
     sim_time: 0.0,
     worlds: vec![world],
+    camera: None,
   }
 }
 

@@ -19,7 +19,10 @@ pub mod registry;
 pub mod sun;
 pub mod transform;
 
-pub use camera::spawn_orbit_camera;
+pub use camera::{
+  SimCamera, SimDrivenCamera, position_camera_from_view_system,
+  spawn_orbit_camera,
+};
 pub use categorical::CategoricalStyle;
 pub use plugin::{AetherBevyPlugin, UpdateReceiverResource};
 pub use registry::{LayerEntry, MeshEntry, RenderRegistry, WorldEntry};

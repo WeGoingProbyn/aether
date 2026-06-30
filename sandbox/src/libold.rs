@@ -631,6 +631,7 @@ pub fn ocean_world_extract_config() -> ExtractConfig {
     ],
     categorical_layers: Vec::new(),
     track_sun_direction: true,
+    track_camera: false,
   }
 }
 
@@ -685,6 +686,7 @@ pub fn demo_extract_config() -> ExtractConfig {
     ],
     categorical_layers: Vec::new(),
     track_sun_direction: true,
+    track_camera: false,
   }
 }
 
