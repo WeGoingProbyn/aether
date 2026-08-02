@@ -15,9 +15,14 @@
 //! read-side consumers (query / render / checkpoint).
 //!
 //! **Direction note.** A criterion reads world state through `&Pleroma`. A physics
-//! criterion reads a field; a future view-dependent (camera) criterion would read
-//! an *input resource* the host writes into pleroma — never the outbound
-//! [`EventBus`](utility::events::EventBus), which is sim→consumer only.
+//! criterion reads a field; [`FocusLodCriterion`] reads an *input resource* the
+//! host writes into pleroma ([`ResourceKey::RefinementFocus`]) — never the
+//! outbound [`EventBus`](utility::events::EventBus), which is sim→consumer only.
+//!
+//! Nothing in this module knows about rendering. A host that wants
+//! view-dependent LOD converts its camera into a [`RefinementFocus`] and writes
+//! it in; the view it *presents* is its own concern and never round-trips
+//! through the simulation.
 
 use std::sync::Arc;
 
@@ -198,29 +203,35 @@ impl RefinementCriterion for RegionRefinementCriterion {
   }
 }
 
-/// The host's camera pose, read by [`CameraLodCriterion`]. Defined in `utility`
-/// so the consumer (eidolon) can read it forward without depending on aether;
-/// re-exported here for the criterion + [`World::set_camera`](crate::core::World::set_camera).
-pub use utility::domain::CameraView;
+/// The host's region of interest, read by [`FocusLodCriterion`]. Defined in
+/// `utility` so any host can write it without depending on aether, and
+/// re-exported here for the criterion +
+/// [`World::set_refinement_focus`](crate::core::World::set_refinement_focus).
+pub use utility::domain::RefinementFocus;
 
-/// View-dependent level-of-detail: refine cells that subtend a large angle from
-/// the camera and coarsen those that subtend a small one, so detail tracks where
-/// the viewer is looking. The indicator is a screen-space-error proxy — a cell's
-/// characteristic size (`cell_volume^(1/3)`) over its distance to the camera — so
-/// refinement is *graded* (closer ⇒ more levels) rather than a single shell.
+/// Focus-driven level-of-detail: refine cells that subtend a large angle from
+/// the [`RefinementFocus`] and coarsen those that subtend a small one, so detail
+/// tracks the host's region of interest. The indicator is a projected-size proxy
+/// — a cell's characteristic size (`cell_volume^(1/3)`) over its distance to the
+/// focus — so refinement is *graded* (closer ⇒ more levels) rather than a single
+/// shell.
 ///
 /// `refine_above` / `coarsen_below` are thresholds on that size/distance ratio
 /// (`coarsen_below < refine_above` gives hysteresis), and `max_level` caps depth.
-/// Reads the [`CameraView`] from [`ResourceKey::Camera`]; if the host hasn't
-/// written one yet, it is a no-op (the mesh is left unchanged) — so a headless run
-/// with no camera simply never view-refines.
-pub struct CameraLodCriterion {
+/// Reads [`ResourceKey::RefinementFocus`]; if the host hasn't written one yet, it
+/// is a no-op (the mesh is left unchanged) — so a run with no focus simply never
+/// focus-refines.
+///
+/// Note this is a *data-plane* criterion: it changes the discretisation the
+/// solver integrates. A host driving it from a camera gets view-dependent AMR,
+/// but nothing here knows what a camera is.
+pub struct FocusLodCriterion {
   refine_above: f64,
   coarsen_below: f64,
   max_level: u32,
 }
 
-impl CameraLodCriterion {
+impl FocusLodCriterion {
   pub fn new(refine_above: f64, coarsen_below: f64, max_level: u32) -> Self {
     Self {
       refine_above,
@@ -230,19 +241,19 @@ impl CameraLodCriterion {
   }
 }
 
-impl RefinementCriterion for CameraLodCriterion {
+impl RefinementCriterion for FocusLodCriterion {
   fn evaluate(
     &self,
     mesh: &dyn RefinableMesh<3>,
     pleroma: &Pleroma,
   ) -> AetherResult<RefineFlags> {
-    // No camera yet ⇒ nothing to do (headless / pre-first-frame).
-    let Some(camera) =
-      pleroma.read_resource::<CameraView>(utility::domain::ResourceKey::Camera)
-    else {
+    // No focus yet ⇒ nothing to do (headless / pre-first-frame).
+    let Some(focus) = pleroma.read_resource::<RefinementFocus>(
+      utility::domain::ResourceKey::RefinementFocus,
+    ) else {
       return Ok(RefineFlags::default());
     };
-    let eye = camera.position;
+    let eye = focus.position;
 
     let mut flags = RefineFlags::default();
     for c in 0..mesh.cell_count() {
@@ -375,7 +386,7 @@ mod tests {
   }
 
   #[test]
-  fn camera_lod_refines_the_cells_nearest_the_eye() {
+  fn focus_lod_refines_the_cells_nearest_the_focus() {
     use tessera::cube_sphere::CubeSphere;
     use tessera::geometry::CellGeometry;
     use utility::domain::ResourceKey;
@@ -384,8 +395,10 @@ mod tests {
       AdaptiveMesh::new(Arc::new(CubeSphere::new([8, 8, 1], 0.99, 1.0)));
     let eye = [0.0, 0.0, 1.5]; // just beyond the +z pole
     let mut pleroma = Pleroma::new();
-    pleroma
-      .register_resource(ResourceKey::Camera, CameraView { position: eye });
+    pleroma.register_resource(
+      ResourceKey::RefinementFocus,
+      RefinementFocus { position: eye },
+    );
 
     let dist = |c: CellId| {
       let p = mesh.cell_world_centroid(c);
@@ -406,7 +419,7 @@ mod tests {
     projected.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let threshold = projected[projected.len() * 3 / 4];
 
-    let criterion = CameraLodCriterion::new(threshold, threshold * 0.1, 1);
+    let criterion = FocusLodCriterion::new(threshold, threshold * 0.1, 1);
     let flags = criterion.evaluate(&mesh, &pleroma).unwrap();
 
     assert!(!flags.refine.is_empty(), "some cells should view-refine");

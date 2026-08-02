@@ -31,7 +31,6 @@ pub fn apply_updates_system(
   mut materials: ResMut<Assets<StandardMaterial>>,
   mut interp: ResMut<FrameInterpolatorResource>,
   mut sun: ResMut<super::sun::SunDirection>,
-  mut sim_camera: ResMut<super::camera::SimCamera>,
 ) {
   let Some(batch) = pull_batch(&receiver) else {
     return;
@@ -53,11 +52,6 @@ pub fn apply_updates_system(
         direction[1] as f32,
         direction[2] as f32,
       ));
-    }
-    // Record the simulation-owned view so `position_camera_from_view_system`
-    // can drive a `SimDrivenCamera` from it.
-    if let Update::SetCamera { camera } = &update {
-      sim_camera.view = Some(*camera);
     }
     apply_one(
       update,
@@ -290,10 +284,6 @@ fn apply_one(
     Update::UpdateSunDirection { .. } => {
       // Handled in `apply_updates_system` (it owns the `SunDirection`
       // resource); the sun direction does not touch the registry/ECS here.
-    }
-    Update::SetCamera { .. } => {
-      // Handled in `apply_updates_system` (it owns the `SimCamera` resource);
-      // the camera is applied to the `SimDrivenCamera` by a dedicated system.
     }
     Update::SetSimTime { .. } => {
       // Wall-clock progression is the driver's concern, not the

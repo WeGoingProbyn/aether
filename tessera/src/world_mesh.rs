@@ -127,15 +127,29 @@ impl Tessera {
     Self::default()
   }
 
+  /// Register `key`'s mesh, returning the mesh it replaced (if any).
+  ///
+  /// **Replacing a mesh bumps its [`topology_epoch`](Self::topology_epoch).** The
+  /// epoch is what consumers key their caches on (the render producer skips
+  /// rebuilding geometry when it has not moved), so a swap that left the epoch
+  /// behind would leave them showing the old topology. Keeping the bump here
+  /// makes that impossible to forget — a caller that knows the exact epoch it
+  /// wants (the adapt barrier, which must match the remap's) still overrides it
+  /// afterwards with [`set_topology_epoch`](Self::set_topology_epoch).
   pub fn register_mesh(
     &mut self,
     key: MeshKey,
     mesh: Arc<dyn Mesh<3>>,
   ) -> Option<Arc<dyn Mesh<3>>> {
-    self
+    let previous = self
       .meshes
       .insert(key, MeshEntry::new(mesh))
-      .map(|entry| entry.mesh)
+      .map(|entry| entry.mesh);
+    if previous.is_some() {
+      let next = self.topology_epoch(key).next();
+      self.epochs.insert(key, next);
+    }
+    previous
   }
 
   pub fn mesh(&self, key: MeshKey) -> Option<&Arc<dyn Mesh<3>>> {

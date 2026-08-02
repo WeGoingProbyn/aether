@@ -96,6 +96,13 @@ pub struct AdaptiveMesh {
   forest: RefinementForest,
   epoch: TopologyEpoch,
 
+  /// Geometry oracles by level: `oracles[l]` is the uniformly-`l`-times-refined
+  /// base mesh, built on first use and carried across adapts. A whole uniform
+  /// shell is expensive to construct and depends only on `(base, level)`, so
+  /// rebuilding it every adapt was pure waste; `refine` clones this (an `Arc`
+  /// each) into the new mesh. Index 0 is always `None` — level 0 reads `base`.
+  oracles: Vec<Option<Arc<dyn Subdividable>>>,
+
   // Per active cell (leaf), in dense CellId order.
   cell_levels: Vec<u32>,
   cell_centroids: Vec<Point<3>>,
@@ -139,22 +146,30 @@ fn dist3(a: &Point<3>, b: &Point<3>) -> f64 {
   ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
 }
 
-/// Order-independent world-footprint key: vertices rounded to the millimetre and
-/// sorted. Two faces that are the same physical quad (e.g. shared by two leaves
-/// at the same level, or the same oracle face seen from both sides) hash equal.
-fn footprint_key(verts: &[Point<3>]) -> Vec<[i64; 3]> {
-  let mut k: Vec<[i64; 3]> = verts
-    .iter()
-    .map(|v| {
-      [
-        (v[0] * 1.0e3).round() as i64,
-        (v[1] * 1.0e3).round() as i64,
-        (v[2] * 1.0e3).round() as i64,
-      ]
-    })
-    .collect();
-  k.sort();
-  k
+/// A vertex rounded to the millimetre — the quantisation that makes two faces of
+/// the same physical quad compare equal despite floating-point noise.
+fn round_vert(v: &Point<3>) -> [i64; 3] {
+  [
+    (v[0] * 1.0e3).round() as i64,
+    (v[1] * 1.0e3).round() as i64,
+    (v[2] * 1.0e3).round() as i64,
+  ]
+}
+
+/// Order-independent hash of a face's (already sorted) rounded vertices. Used
+/// only to bucket candidates — every reported match is confirmed by comparing the
+/// vertices themselves, so a collision costs a comparison, never a wrong join.
+fn footprint_hash(sorted: &[[i64; 3]]) -> u64 {
+  // FNV-1a: no allocation, no `HashMap` machinery, stable across runs (unlike
+  // `RandomState`), which is what makes face assembly reproducible.
+  let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+  for v in sorted {
+    for c in v {
+      h ^= *c as u64;
+      h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+  }
+  h
 }
 
 impl AdaptiveMesh {
@@ -163,7 +178,7 @@ impl AdaptiveMesh {
   pub fn new(base: Arc<dyn Subdividable>) -> Self {
     let forest = RefinementForest::new(base.cell_count());
     // Level 0 has no level jumps, so assembly cannot fail.
-    Self::build(base, forest, TopologyEpoch::ZERO)
+    Self::build(base, forest, TopologyEpoch::ZERO, Vec::new())
       .expect("level-0 adaptive mesh assembly is always valid")
   }
 
@@ -207,7 +222,14 @@ impl AdaptiveMesh {
     let new_epoch = self.epoch.next();
     let (new_forest, remap) = self.forest.adapt(request, self.epoch, new_epoch);
     Ok((
-      AdaptiveMesh::build(self.base.clone(), new_forest, new_epoch)?,
+      AdaptiveMesh::build(
+        self.base.clone(),
+        new_forest,
+        new_epoch,
+        // Hand the built oracles on: each is an `Arc` clone, and the levels this
+        // adapt reuses are then never rebuilt.
+        self.oracles.clone(),
+      )?,
       remap,
     ))
   }
@@ -230,7 +252,7 @@ impl AdaptiveMesh {
   ) -> AetherResult<Self> {
     let forest =
       RefinementForest::from_leaf_codes(base.cell_count(), bases, paths);
-    Self::build(base, forest, epoch)
+    Self::build(base, forest, epoch, Vec::new())
   }
 
   /// Assemble the flat mesh from `base` + `forest`. Errors with
@@ -242,15 +264,24 @@ impl AdaptiveMesh {
     base: Arc<dyn Subdividable>,
     forest: RefinementForest,
     epoch: TopologyEpoch,
+    mut oracles: Vec<Option<Arc<dyn Subdividable>>>,
   ) -> AetherResult<Self> {
     let leaves = forest.leaves();
     let ncells = leaves.len();
     let max_level = leaves.iter().map(|l| l.level()).max().unwrap_or(0);
 
     // Geometry oracle: one uniform mesh per level present (level 0 = base).
-    let oracles: Vec<Option<Arc<dyn Subdividable>>> = (0..=max_level)
-      .map(|lvl| (lvl >= 1).then(|| base.uniform_at_level(lvl)))
-      .collect();
+    // Levels already built by a previous adapt are reused as-is — the oracle is a
+    // pure function of `(base, level)`, and constructing one is a full shell
+    // build, by far the most expensive thing here.
+    if oracles.len() <= max_level as usize {
+      oracles.resize(max_level as usize + 1, None);
+    }
+    for lvl in 1..=max_level {
+      if oracles[lvl as usize].is_none() {
+        oracles[lvl as usize] = Some(base.uniform_at_level(lvl));
+      }
+    }
 
     let mut cell_levels = Vec::with_capacity(ncells);
     let mut cell_centroids = Vec::with_capacity(ncells);
@@ -323,6 +354,7 @@ impl AdaptiveMesh {
       base,
       forest,
       epoch,
+      oracles,
       cell_levels,
       cell_centroids,
       cell_world_centroids,
@@ -340,18 +372,54 @@ impl AdaptiveMesh {
       boundary_face_lists: Vec::new(),
     };
 
-    // Bucket leaf-faces by world footprint.
-    let mut buckets: HashMap<Vec<[i64; 3]>, Vec<usize>> = HashMap::new();
-    for (i, lf) in lfaces.iter().enumerate() {
-      buckets.entry(footprint_key(&lf.verts)).or_default().push(i);
+    // Bucket leaf-faces by world footprint. The footprints live in one flat
+    // arena — one allocation for the whole mesh rather than a `Vec` key per face
+    // — and grouping is a sort on `(hash, footprint)` rather than a `HashMap`.
+    // Sorting also makes the grouping *order* a function of geometry alone, so
+    // `FaceId` assignment is reproducible run to run (a `HashMap`'s iteration
+    // order is not, which silently made flux summation order vary between runs).
+    let mut arena: Vec<[i64; 3]> = Vec::with_capacity(lfaces.len() * 4);
+    let mut spans: Vec<(u32, u32)> = Vec::with_capacity(lfaces.len());
+    let mut hashes: Vec<u64> = Vec::with_capacity(lfaces.len());
+    for lf in &lfaces {
+      let start = arena.len();
+      arena.extend(lf.verts.iter().map(round_vert));
+      arena[start..].sort_unstable();
+      spans.push((start as u32, (arena.len() - start) as u32));
+      hashes.push(footprint_hash(&arena[start..]));
     }
+    let footprint = |i: usize| {
+      let (s, len) = spans[i];
+      &arena[s as usize..(s + len) as usize]
+    };
+
+    let mut order: Vec<usize> = (0..lfaces.len()).collect();
+    order.sort_unstable_by(|&a, &b| {
+      hashes[a]
+        .cmp(&hashes[b])
+        .then_with(|| footprint(a).cmp(footprint(b)))
+    });
 
     let mut boundary_map: HashMap<BoundaryTag, Vec<(FaceId, CellId)>> =
       HashMap::new();
     let mut leftover: Vec<usize> = Vec::new();
 
-    for idxs in buckets.values() {
-      match idxs.as_slice() {
+    // Walk the sorted order, taking each run of identical footprints as a group.
+    // Equality is on the vertices themselves, so a hash collision merely puts two
+    // unrelated faces next to each other; it can never join them.
+    let mut start = 0usize;
+    while start < order.len() {
+      let mut end = start + 1;
+      while end < order.len()
+        && hashes[order[end]] == hashes[order[start]]
+        && footprint(order[end]) == footprint(order[start])
+      {
+        end += 1;
+      }
+      let group = &order[start..end];
+      start = end;
+
+      match group {
         [a, b] => {
           // Conforming interior face shared by two leaves. Owner = lower id, use
           // its outward geometry.
@@ -390,7 +458,42 @@ impl AdaptiveMesh {
     // fine faces. Process largest-first so a coarse face consumes its children.
     leftover
       .sort_by(|&a, &b| lfaces[b].area.partial_cmp(&lfaces[a].area).unwrap());
+
+    // A coarse face's children all lie within its circumradius, so index the
+    // leftovers by a grid of that pitch and scan only the 27 neighbouring
+    // buckets. The naive version compared every leftover against every other,
+    // which is quadratic in the size of the refined region.
+    let radius_of = |i: usize| {
+      let lf = &lfaces[i];
+      lf.verts
+        .iter()
+        .map(|v| dist3(v, &lf.world_centroid))
+        .fold(0.0, f64::max)
+        * 1.001
+    };
+    let pitch = leftover
+      .iter()
+      .map(|&i| radius_of(i))
+      .fold(0.0, f64::max)
+      .max(f64::MIN_POSITIVE);
+    let bucket_of = |p: &Point<3>| {
+      [
+        (p[0] / pitch).floor() as i64,
+        (p[1] / pitch).floor() as i64,
+        (p[2] / pitch).floor() as i64,
+      ]
+    };
+    let mut grid: HashMap<[i64; 3], Vec<usize>> =
+      HashMap::with_capacity(leftover.len());
+    for &i in &leftover {
+      grid
+        .entry(bucket_of(&lfaces[i].world_centroid))
+        .or_default()
+        .push(i);
+    }
+
     let mut consumed = vec![false; lfaces.len()];
+    let mut children: Vec<usize> = Vec::new();
     for ci in 0..leftover.len() {
       let c_idx = leftover[ci];
       if consumed[c_idx] {
@@ -398,36 +501,46 @@ impl AdaptiveMesh {
       }
       let c = &lfaces[c_idx];
       let c_norm = c.area_vec * (1.0 / c.area.max(f64::MIN_POSITIVE));
-      let radius = c
-        .verts
-        .iter()
-        .map(|v| dist3(v, &c.world_centroid))
-        .fold(0.0, f64::max)
-        * 1.001;
+      let radius = radius_of(c_idx);
 
-      let mut children = Vec::new();
-      for &f_idx in &leftover {
-        if f_idx == c_idx || consumed[f_idx] {
-          continue;
+      children.clear();
+      let home = bucket_of(&c.world_centroid);
+      for dx in -1..=1 {
+        for dy in -1..=1 {
+          for dz in -1..=1 {
+            let Some(bucket) =
+              grid.get(&[home[0] + dx, home[1] + dy, home[2] + dz])
+            else {
+              continue;
+            };
+            for &f_idx in bucket {
+              if f_idx == c_idx || consumed[f_idx] {
+                continue;
+              }
+              let f = &lfaces[f_idx];
+              if f.owner == c.owner || f.area >= c.area {
+                continue;
+              }
+              let f_norm = f.area_vec * (1.0 / f.area.max(f64::MIN_POSITIVE));
+              // Same physical interface ⇒ outward normals antiparallel, and the
+              // fine face sits within the coarse face's footprint.
+              if dot3(&c_norm, &f_norm) > -0.9 {
+                continue;
+              }
+              if dist3(&f.world_centroid, &c.world_centroid) > radius {
+                continue;
+              }
+              children.push(f_idx);
+            }
+          }
         }
-        let f = &lfaces[f_idx];
-        if f.owner == c.owner || f.area >= c.area {
-          continue;
-        }
-        let f_norm = f.area_vec * (1.0 / f.area.max(f64::MIN_POSITIVE));
-        // Same physical interface ⇒ outward normals antiparallel, and the fine
-        // face sits within the coarse face's footprint.
-        if dot3(&c_norm, &f_norm) > -0.9 {
-          continue;
-        }
-        if dist3(&f.world_centroid, &c.world_centroid) > radius {
-          continue;
-        }
-        children.push(f_idx);
       }
+      // Bucket visit order is grid-relative, so sort for a stable `FaceId`
+      // assignment independent of how the grid happened to be populated.
+      children.sort_unstable();
 
       if !children.is_empty() {
-        for f_idx in children {
+        for &f_idx in &children {
           mesh.push_interior(&lfaces[f_idx], c.owner);
           consumed[f_idx] = true;
         }
@@ -705,8 +818,13 @@ mod tests {
     // Rebuild a concrete AdaptiveMesh (adapt returns a dyn Mesh).
     let new_epoch = mesh.epoch.next();
     let (new_forest, remap) = mesh.forest.adapt(&req, mesh.epoch, new_epoch);
-    let refined =
-      AdaptiveMesh::build(mesh.base().clone(), new_forest, new_epoch).unwrap();
+    let refined = AdaptiveMesh::build(
+      mesh.base().clone(),
+      new_forest,
+      new_epoch,
+      Vec::new(),
+    )
+    .unwrap();
 
     // One cell → four children: net +3 cells, and a hanging interface exists
     // (more interior faces than the conforming level-0 mesh).
@@ -760,8 +878,13 @@ mod tests {
     };
     let new_epoch = mesh.epoch.next();
     let (new_forest, _) = mesh.forest.adapt(&req, mesh.epoch, new_epoch);
-    let refined =
-      AdaptiveMesh::build(mesh.base().clone(), new_forest, new_epoch).unwrap();
+    let refined = AdaptiveMesh::build(
+      mesh.base().clone(),
+      new_forest,
+      new_epoch,
+      Vec::new(),
+    )
+    .unwrap();
 
     assert_eq!(refined.cell_count(), n0 + 3);
     let level1 = (0..refined.cell_count())
@@ -790,7 +913,8 @@ mod tests {
       e0.next(),
     );
     let level1 =
-      AdaptiveMesh::build(mesh.base().clone(), forest1, e0.next()).unwrap();
+      AdaptiveMesh::build(mesh.base().clone(), forest1, e0.next(), Vec::new())
+        .unwrap();
     assert_eq!(level1.cell_level(CellId::from(5)), 1);
 
     let e1 = level1.epoch;
@@ -799,8 +923,13 @@ mod tests {
       coarsen: vec![],
     };
     let (forest2, remap) = level1.forest.adapt(&req, e1, e1.next());
-    let level2 =
-      AdaptiveMesh::build(level1.base().clone(), forest2, e1.next()).unwrap();
+    let level2 = AdaptiveMesh::build(
+      level1.base().clone(),
+      forest2,
+      e1.next(),
+      Vec::new(),
+    )
+    .unwrap();
     // A level-2 cell now exists next to level-0 base neighbours.
     assert!(
       (0..level2.cell_count()).any(|c| level2.cell_level(CellId::from(c)) == 2)

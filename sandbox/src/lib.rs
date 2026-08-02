@@ -16,7 +16,7 @@ use aer::{
   SaturationAdjustmentStep, ShellColumns, build_lift_sites,
 };
 use aether::{
-  adapt::{AdaptGovernor, CameraLodCriterion, MeshAdapter},
+  adapt::{AdaptGovernor, FocusLodCriterion, MeshAdapter},
   core::{Aether, System},
   factory::WorldFactory,
 };
@@ -655,7 +655,6 @@ pub fn ocean_world_extract_config() -> ExtractConfig {
     ],
     categorical_layers: Vec::new(),
     track_sun_direction: true,
-    track_camera: false,
   }
 }
 
@@ -715,7 +714,6 @@ pub fn demo_extract_config() -> ExtractConfig {
     ],
     categorical_layers: Vec::new(),
     track_sun_direction: true,
-    track_camera: false,
   }
 }
 
@@ -1043,17 +1041,17 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
 
   let mut world = factory.build()?;
 
-  // Attach a **view-dependent LOD** adapter to the surface: refine cells the
-  // camera is near and coarsen those far away, so detail follows the viewer. The
-  // camera is owned by the simulation (the host sets it via `World::set_camera`,
-  // and `showcase_extract_config` emits it forward so the rendered view follows
-  // it) — eidolon never sends anything back.
+  // Attach a **focus-driven LOD** adapter to the surface: refine cells near the
+  // host's region of interest and coarsen those far away. The host writes that
+  // focus with `World::set_refinement_focus`; here it happens to be derived from
+  // a camera, but the simulation neither knows nor cares — and nothing flows
+  // back, so the host's view is never gated on a sim tick.
   //
   // Thresholds are the cell's `size/distance`; derive a sensible starting point
-  // from the mesh's own cell size and the expected camera distance (~3 radii),
+  // from the mesh's own cell size and the expected focus distance (~3 radii),
   // then tune to taste. v1 seam caveat: a refinement request that would cross a
   // cube-sphere panel seam is skipped best-effort, so refinement tracks the
-  // camera within a panel; the governor also caps churn per adapt.
+  // focus within a panel; the governor also caps churn per adapt.
   let median_cell_size = {
     let mut sizes: Vec<f64> = (0..surface_mesh.cell_count())
       .map(|i| surface_mesh.cell_volume(CellId::from(i)).max(0.0).cbrt())
@@ -1071,11 +1069,11 @@ pub fn build_showcase_world() -> AetherResult<(Aether, AtmosphereShellLayout)> {
   world.add_adapter(MeshAdapter::new(
     MeshKey::SURFACE,
     surface_adaptive,
-    Box::new(CameraLodCriterion::new(refine_above, coarsen_below, 1)),
-    // Camera LOD re-meshes whenever the view moves enough to change the refined
+    Box::new(FocusLodCriterion::new(refine_above, coarsen_below, 1)),
+    // Focus LOD re-meshes whenever the focus moves enough to change the refined
     // set, so — unlike a static region that refined once — it keeps adapting. Run
-    // it on a slower cadence (every 15 ticks ≈ 0.25 s at 60 Hz) so the (full)
-    // re-mesh cost stays off the per-frame path; the LOD lags the camera slightly.
+    // it on a slower cadence (every 15 ticks) so the (full) re-mesh cost stays off
+    // the per-tick path; the LOD lags the focus slightly.
     AdaptGovernor::new(15, 256, 256),
   ));
 
@@ -1237,8 +1235,5 @@ pub fn showcase_extract_config() -> ExtractConfig {
       ),
     ],
     track_sun_direction: true,
-    // The simulation owns the camera (view-dependent LOD): emit it forward so the
-    // bevy view follows it.
-    track_camera: true,
   }
 }

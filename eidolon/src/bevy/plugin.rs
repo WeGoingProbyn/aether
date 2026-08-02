@@ -63,7 +63,6 @@ impl Plugin for AetherBevyPlugin {
       .init_resource::<FrameInterpolatorResource>()
       .init_resource::<super::categorical::CategoricalStyle>()
       .init_resource::<super::sun::SunDirection>()
-      .init_resource::<super::camera::SimCamera>()
       .add_systems(PreUpdate, apply_updates_system)
       .add_systems(
         Update,
@@ -74,7 +73,6 @@ impl Plugin for AetherBevyPlugin {
         )
           .chain(),
       )
-      .add_systems(Update, super::sun::orient_sun_light_system)
-      .add_systems(Update, super::camera::position_camera_from_view_system);
+      .add_systems(Update, super::sun::orient_sun_light_system);
   }
 }

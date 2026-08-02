@@ -373,11 +373,6 @@ impl BackendRegistry {
         entry.sun_direction = Some(*direction);
       }
 
-      Update::SetCamera { .. } => {
-        // A live-render hint (the simulation-owned view). The snapshot / VTK
-        // path has no camera, so there is nothing to apply here.
-      }
-
       Update::SetSimTime { sim_time, frame } => {
         self.sim_time = *sim_time;
         self.frame = *frame;
@@ -447,7 +442,6 @@ impl BackendRegistry {
       frame: self.frame,
       sim_time: self.sim_time,
       worlds,
-      camera: None,
     }
   }
 

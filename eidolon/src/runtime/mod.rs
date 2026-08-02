@@ -81,7 +81,6 @@ impl UpdateReceiver {
   /// - `UpdateLayerPalette` for the same layer — keep last only.
   /// - `UpdateLayerBinding` for the same mesh — keep last only.
   /// - `UpdateSunDirection` for the same world — keep last only.
-  /// - `SetCamera` — keep last (latest view wins).
   /// - `SetSimTime` — keep last (latest sim time wins).
   pub fn drain_coalesced(&self) -> Option<UpdateBatch> {
     let mut first = self.inner.try_recv().ok()?;
@@ -121,7 +120,6 @@ fn coalesce_batch(batch: UpdateBatch) -> UpdateBatch {
   let mut seen_layer_palette: HashSet<LayerHandle> = HashSet::new();
   let mut seen_layer_binding: HashSet<MeshHandle> = HashSet::new();
   let mut seen_sun: HashSet<WorldHandle> = HashSet::new();
-  let mut seen_camera = false;
   let mut seen_set_sim_time = false;
 
   let mut reversed: Vec<Update> = Vec::with_capacity(updates.len());
@@ -161,12 +159,6 @@ fn coalesce_batch(batch: UpdateBatch) -> UpdateBatch {
         if !seen_sun.insert(*world) {
           continue;
         }
-      }
-      Update::SetCamera { .. } => {
-        if seen_camera {
-          continue;
-        }
-        seen_camera = true;
       }
       Update::SetSimTime { .. } => {
         if seen_set_sim_time {

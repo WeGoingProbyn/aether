@@ -79,7 +79,6 @@ fn config() -> ExtractConfig {
       MeshRepresentation::BoundaryFaces,
     )],
     track_sun_direction: false,
-    track_camera: false,
   }
 }
 

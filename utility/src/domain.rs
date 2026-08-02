@@ -354,26 +354,32 @@ pub enum ResourceKey {
   /// emit `Event`s during a tick; the buffer is published at the end-of-tick
   /// barrier and read via `World::events()`. Ephemeral / not checkpointed.
   Events,
-  /// View-dependent LOD input ([`CameraView`]): the host writes the current
-  /// camera pose into pleroma each tick; a view-dependent refinement criterion
-  /// reads it to refine near the camera and coarsen far away. An *inbound*
-  /// resource (consumer→sim), the mirror of the outbound [`ResourceKey::Events`].
-  /// Ephemeral / not checkpointed.
-  Camera,
+  /// Adaptive-refinement region of interest ([`RefinementFocus`]): the host
+  /// writes a world-space point it wants resolved finely; a focus-driven
+  /// refinement criterion reads it to refine nearby and coarsen far away. An
+  /// *inbound* resource (host→sim), the mirror of the outbound
+  /// [`ResourceKey::Events`]. Ephemeral / not checkpointed.
+  RefinementFocus,
 }
 
-/// The host camera pose, stored as the inbound [`ResourceKey::Camera`] resource.
+/// A world-space point the host wants resolved finely, stored as the inbound
+/// [`ResourceKey::RefinementFocus`] resource.
 ///
-/// Lives in `utility` so the producer side (aether, via `World::set_camera`, and
-/// the view-dependent refinement criterion that reads it) and the consumer side
-/// (eidolon's extractor, reading it *forward* into the render IR to position the
-/// view) share one vocabulary without depending on each other — the same
-/// shared-type discipline as [`SurfaceClass`]. Only a world-space position is
-/// needed for distance-based level-of-detail; richer view data can be added
-/// without changing the seam.
+/// Deliberately *not* a camera. A host that renders will usually derive this
+/// from its view, but the simulation has no business knowing that: all it needs
+/// is "resolve detail near here", which is the same request whether it comes
+/// from a camera, a player position, a probe, or a scripted region of interest.
+/// Keeping the sim's vocabulary free of rendering concepts is what lets the
+/// renderer stay a pure downstream consumer.
+///
+/// Lives in `utility` (the shared-type discipline used by [`SurfaceClass`]) so
+/// aether can read it without depending on any particular host. Only a
+/// world-space position is needed for distance-based level-of-detail; richer
+/// data (a direction, a frustum, a falloff radius) can be added without
+/// changing the seam.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct CameraView {
-  /// World-space camera position.
+pub struct RefinementFocus {
+  /// World-space point to resolve finely.
   pub position: [f64; 3],
 }
 

@@ -262,19 +262,28 @@ impl World {
     self.adapters.push(adapter);
   }
 
-  /// Update the host camera pose used by view-dependent LOD
-  /// ([`CameraLodCriterion`](crate::adapt::CameraLodCriterion)). The host calls
-  /// this each frame/tick before [`tick`](Self::tick); the value lands in pleroma
-  /// as the inbound [`ResourceKey::Camera`] resource. Registers the resource on
-  /// first use. Inbound (consumer→sim) — the mirror of the outbound event bus.
-  pub fn set_camera(&mut self, view: crate::adapt::CameraView) {
+  /// Update the host's region of interest used by focus-driven LOD
+  /// ([`FocusLodCriterion`](crate::adapt::FocusLodCriterion)). The host calls
+  /// this before [`tick`](Self::tick); the value lands in pleroma as the inbound
+  /// [`ResourceKey::RefinementFocus`] resource. Registers the resource on first
+  /// use. Inbound (host→sim) — the mirror of the outbound event bus.
+  ///
+  /// This is a latest-value input, so it does not matter that the host updates
+  /// it far more often than the sim ticks: each tick simply reads the newest
+  /// focus. Nothing flows back — a host that renders drives its own view
+  /// directly and never waits on the simulation to hand it back.
+  pub fn set_refinement_focus(&mut self, focus: crate::adapt::RefinementFocus) {
     if let Some(slot) = self
       .pleroma
-      .write_resource::<crate::adapt::CameraView>(ResourceKey::Camera)
+      .write_resource::<crate::adapt::RefinementFocus>(
+        ResourceKey::RefinementFocus,
+      )
     {
-      *slot = view;
+      *slot = focus;
     } else {
-      self.pleroma.register_resource(ResourceKey::Camera, view);
+      self
+        .pleroma
+        .register_resource(ResourceKey::RefinementFocus, focus);
     }
   }
 
@@ -1423,9 +1432,9 @@ mod tests {
   }
 
   #[test]
-  fn camera_lod_refines_the_mesh_toward_the_viewer() {
+  fn focus_lod_refines_the_mesh_toward_the_focus() {
     use crate::adapt::{
-      AdaptGovernor, CameraLodCriterion, CameraView, MeshAdapter,
+      AdaptGovernor, FocusLodCriterion, MeshAdapter, RefinementFocus,
     };
     use tessera::cube_sphere::CubeSphere;
     use tessera::geometry::CellGeometry;
@@ -1440,7 +1449,7 @@ mod tests {
     let n0 = surface.cell_count();
 
     // Threshold at the 70th percentile of the size/distance indicator for a
-    // camera beyond the +z pole, so the nearest ~30% are flagged.
+    // focus beyond the +z pole, so the nearest ~30% are flagged.
     let eye = [0.0, 0.0, 1.5];
     let dist = |c: CellId| {
       let p = surface.cell_world_centroid(c);
@@ -1475,12 +1484,12 @@ mod tests {
     world.add_adapter(MeshAdapter::new(
       MeshKey::SURFACE,
       surface,
-      Box::new(CameraLodCriterion::new(threshold, threshold * 0.1, 1)),
+      Box::new(FocusLodCriterion::new(threshold, threshold * 0.1, 1)),
       AdaptGovernor::new(1, 1024, 1024),
     ));
 
-    // Host pushes the camera, then the world ticks: the barrier view-refines.
-    world.set_camera(CameraView { position: eye });
+    // Host pushes the focus, then the world ticks: the barrier refines toward it.
+    world.set_refinement_focus(RefinementFocus { position: eye });
     world.tick(&Pool::default(), 0.5).unwrap();
 
     // The typed refined mesh lives on the adapter (the registry holds it as
@@ -1488,7 +1497,7 @@ mod tests {
     let refined = &world.adapters[0].mesh;
     assert!(refined.cell_count() > n0, "the mesh should view-refine");
 
-    // The refinement tracks the viewer: level-1 cells sit on the +z (camera) side.
+    // The refinement tracks the focus: level-1 cells sit on the +z side.
     let mut sum_z = 0.0;
     let mut level1 = 0usize;
     for c in 0..refined.cell_count() {
@@ -1501,7 +1510,7 @@ mod tests {
     assert!(level1 > 0);
     assert!(
       sum_z / level1 as f64 > 0.0,
-      "refined cells should cluster toward the +z camera"
+      "refined cells should cluster toward the +z focus"
     );
   }
 

@@ -30,12 +30,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use aether::adapt::CameraView;
+use aether::adapt::RefinementFocus;
 use bevy::prelude::*;
 use chronos::{Regime, RegimeConfig};
 
 use eidolon::{
-  bevy::{AetherBevyPlugin, RenderRegistry, SimDrivenCamera, SunLight},
+  bevy::{AetherBevyPlugin, RenderRegistry, SunLight},
   extract::FrameProducer,
   ir::{LayerHandle, LayerId, MeshRepresentation, RenderMeshId},
   runtime::{render_channel, spawn_runner},
@@ -84,12 +84,12 @@ fn main() -> AetherResult<()> {
   let (mut aether, layout) = build_showcase_world()?;
   let mut producer = FrameProducer::new(showcase_extract_config());
 
-  // The simulation owns the camera (view-dependent surface LOD). The host drives
-  // it from input: `camera_control_system` (WASD orbit, Q/E zoom) writes the eye
-  // into this shared cell each frame; the runner feeds it to the world via
-  // `set_camera`, the LOD criterion refines toward it, and eidolon emits it
-  // forward so the rendered view follows (interpolated). The host reads input and
-  // the sim owns the camera — eidolon never sends anything back.
+  // The **host** owns the camera. `camera_control_system` (WASD orbit, Q/E zoom)
+  // moves it and writes the camera transform directly, every render frame, so the
+  // view is never gated on a sim tick. It also publishes the eye into this shared
+  // cell; the runner hands that to the world as a `RefinementFocus`, and the LOD
+  // criterion refines the surface toward it. Two independent consumers of one
+  // host-owned value — the view does not round-trip through the simulation.
   let camera_radius = layout.reference_radius() * 2.5;
   let camera_eye = Arc::new(Mutex::new(orbit_eye(0.0, 0.2, camera_radius)));
   let camera_eye_runner = Arc::clone(&camera_eye);
@@ -125,7 +125,7 @@ fn main() -> AetherResult<()> {
       // Feed the host-controlled camera (updated by `camera_control_system`) into
       // the world: the LOD criterion refines toward it and eidolon presents it.
       let eye = *camera_eye_runner.lock().expect("camera eye lock");
-      world.set_camera(CameraView { position: eye });
+      world.set_refinement_focus(RefinementFocus { position: eye });
     }
     // Live integrates the full game step; climatology bursts one stable step and
     // holds the rest, so the game clock races ahead of integrated sim time.
@@ -228,10 +228,10 @@ fn main() -> AetherResult<()> {
   Ok(())
 }
 
-/// Host-side orbit-camera state. The simulation owns the camera, so input only
-/// updates this controller and writes the resulting eye into the shared cell the
-/// runner feeds to `World::set_camera` each tick — the host reads input, the sim
-/// owns the camera, and eidolon presents it forward.
+/// Host-side orbit-camera state. The host owns the camera outright: input updates
+/// this controller, which both positions the bevy camera directly (at render
+/// rate) and publishes the eye into the shared cell the runner feeds to
+/// `World::set_refinement_focus` as an LOD region of interest.
 #[derive(Resource)]
 struct OrbitCamera {
   azimuth: f64,
@@ -250,12 +250,17 @@ fn orbit_eye(azimuth: f64, colatitude: f64, radius: f64) -> [f64; 3] {
 }
 
 /// WASD orbits the view (A/D azimuth, W/S colatitude), Q/E zoom. Updates the
-/// orbit state and publishes the eye for the runner to feed to `set_camera`.
-/// Clamped off the poles and above the surface.
+/// orbit state, moves the camera immediately, and publishes the eye for the
+/// runner to feed to `set_refinement_focus`. Clamped off the poles and above the
+/// surface.
+///
+/// The camera is written here, on the render thread, from this frame's input —
+/// so view motion is smooth regardless of what the simulation costs per tick.
 fn camera_control_system(
   time: Res<Time>,
   keys: Res<ButtonInput<KeyCode>>,
   mut orbit: ResMut<OrbitCamera>,
+  mut cameras: Query<&mut Transform, With<Camera3d>>,
 ) {
   let dt = time.delta_secs() as f64;
   let orbit_speed = 1.2; // rad/s
@@ -282,6 +287,18 @@ fn camera_control_system(
   orbit.radius = orbit.radius.max(orbit.min_radius);
 
   let eye = orbit_eye(orbit.azimuth, orbit.colatitude, orbit.radius);
+  // Present: drive the camera now, this frame.
+  let goal = Transform::from_translation(Vec3::new(
+    eye[0] as f32,
+    eye[1] as f32,
+    eye[2] as f32,
+  ))
+  .looking_at(Vec3::ZERO, Vec3::Z);
+  for mut transform in &mut cameras {
+    *transform = goal;
+  }
+  // Simulate: publish the same eye as the LOD region of interest. Latest-value,
+  // so the sim reading it at its own (slower) cadence is fine.
   if let Ok(mut shared) = orbit.eye.lock() {
     *shared = eye;
   }
@@ -289,15 +306,12 @@ fn camera_control_system(
 
 fn spawn_camera_and_light(mut commands: Commands) {
   let distance = 2.5e7_f32;
-  // The view follows the simulation-owned camera: tag it `SimDrivenCamera` so the
-  // eidolon backend positions it from each `SetCamera` (the orbit the runner
-  // feeds via `set_camera`, driven by `camera_control_system`). The initial
-  // transform is a placeholder until the first frame's camera arrives.
+  // Host-owned: `camera_control_system` writes this transform every frame. The
+  // initial pose is a placeholder until the first input frame runs.
   commands.spawn((
     Camera3d::default(),
     Transform::from_xyz(distance, distance * 0.4, distance)
-      .looking_at(Vec3::ZERO, Vec3::Y),
-    SimDrivenCamera,
+      .looking_at(Vec3::ZERO, Vec3::Z),
   ));
 
   commands.spawn((

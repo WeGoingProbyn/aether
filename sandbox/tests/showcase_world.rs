@@ -232,7 +232,7 @@ fn showcase_refines_the_surface_and_emits_a_wireframe() {
   use tessera::geometry::CellGeometry;
   use utility::events::Event;
 
-  use aether::adapt::CameraView;
+  use aether::adapt::RefinementFocus;
   use utility::domain::SystemId;
 
   let (mut aether, layout) = build_showcase_world().unwrap();
@@ -244,15 +244,15 @@ fn showcase_refines_the_surface_and_emits_a_wireframe() {
     .unwrap()
     .cell_count();
 
-  // The surface uses *view-dependent* LOD, so it only refines once the host has
-  // placed the camera. Put it above the +z pole (panel-interior, clear of seams),
-  // so the near cells refine.
+  // The surface uses *focus-driven* LOD, so it only refines once the host has
+  // published a region of interest. Put it above the +z pole (panel-interior,
+  // clear of seams), so the near cells refine.
   let radius = layout.reference_radius();
   aether
     .system_mut(SystemId(0))
     .and_then(|s| s.world_mut(SANDBOX_WORLD_ID))
     .unwrap()
-    .set_camera(CameraView {
+    .set_refinement_focus(RefinementFocus {
       position: [0.0, 0.0, radius * 2.5],
     });
 
@@ -300,16 +300,11 @@ fn showcase_refines_the_surface_and_emits_a_wireframe() {
     "expected a wireframe (line) mesh for the surface cell outlines"
   );
 
-  // The simulation-owned camera is emitted *forward* into the IR (the backend
-  // positions its view from it). This is the same view that drove the LOD above.
-  assert!(
-    batch.updates.iter().any(|u| matches!(
-      u,
-      Update::SetCamera { camera }
-        if (camera.position[2] - radius * 2.5).abs() < 1.0
-    )),
-    "expected the simulation camera to be emitted forward as SetCamera"
-  );
+  // Note what is *absent*: the focus that drove this refinement does not come
+  // back out in the batch. The render IR has no camera at all — a host's view is
+  // its own to present, so it can never be gated on the simulation's tick rate.
+  // That seam is enforced by construction (there is no camera update to emit),
+  // which is why there is nothing to assert here beyond the refinement itself.
 }
 
 /// The render config gives a consumer the art-free terrain data it needs: a

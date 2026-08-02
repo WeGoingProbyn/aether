@@ -22,7 +22,6 @@ pub fn tessera_debug_frame(
     frame,
     sim_time,
     worlds: vec![tessera_debug_world(world, tessera)],
-    camera: None,
   }
 }
 

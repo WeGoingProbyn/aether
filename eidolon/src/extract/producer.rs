@@ -52,10 +52,6 @@ pub struct ExtractConfig {
   pub categorical_layers: Vec<CategoricalLayerConfig>,
   /// Whether to emit `UpdateSunDirection` from `ResourceKey::SunPosition`.
   pub track_sun_direction: bool,
-  /// Whether to emit `SetCamera` from the inbound `ResourceKey::Camera` resource,
-  /// so the backend presents the simulation-owned view (view-dependent LOD).
-  /// Off by default: the backend keeps its own camera unless asked.
-  pub track_camera: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -197,6 +193,13 @@ struct ProducerCache {
   /// mesh is here we never touch it again — no rebuild, no hash, no
   /// `UpdateMeshGeometry`. Mesh transform is also identity by
   /// construction; tracking it would just be wasted work.
+  /// Per configured mesh, what the last built geometry was derived from: the
+  /// mesh's `TopologyEpoch` and a hash of its cell mask. Rebuilding the triangle
+  /// list is the single most expensive thing the extractor does, and for a mesh
+  /// that has not adapted it produces the identical result every tick — so skip
+  /// it outright when neither input has changed.
+  mesh_source_keys:
+    HashMap<(MeshKey, MeshRepresentation), (MeshHandle, u64, u64)>,
   mesh_geometry_hashes: HashMap<MeshHandle, u64>,
   mesh_geometry_epochs: HashMap<MeshHandle, u64>,
   mesh_transform_hashes: HashMap<MeshHandle, u64>,
@@ -206,7 +209,6 @@ struct ProducerCache {
   layer_sample_hashes: HashMap<LayerHandle, u64>,
   layer_sample_epochs: HashMap<LayerHandle, u64>,
   last_sun_direction_hash: Option<u64>,
-  last_camera_hash: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -251,7 +253,6 @@ impl FrameProducer {
     self.emit_layers(world_id, pleroma, &mut updates);
     self.emit_categorical_layers(world_id, pleroma, &mut updates);
     self.emit_sun_direction(world_id, pleroma, &mut updates);
-    self.emit_camera(pleroma, &mut updates);
 
     updates.push(Update::SetSimTime { sim_time, frame });
     UpdateBatch {
@@ -332,10 +333,34 @@ impl FrameProducer {
       let Some(mesh) = tessera.mesh(mesh_cfg.mesh_key) else {
         continue;
       };
+
+      // Geometry depends on the mesh topology (which only changes when AMR
+      // adapts) and on the cell mask (which reads a field, so it can change any
+      // tick). Both are cheap to evaluate; the triangle build they feed is not.
+      let cache_key = (mesh_cfg.mesh_key, mesh_cfg.representation);
+      let source_key = (
+        tessera.topology_epoch(mesh_cfg.mesh_key).0,
+        hash_cell_mask(mesh_cfg, pleroma),
+      );
+      if let Some((handle, topology, mask)) =
+        self.cache.mesh_source_keys.get(&cache_key).copied()
+        && (topology, mask) == source_key
+        && self.cache.registered_meshes.contains(&handle)
+      {
+        // Same topology, same mask ⇒ byte-identical geometry. Emitting nothing
+        // is exactly what the hash comparison below would conclude, minus the
+        // cost of rebuilding the geometry to discover it.
+        continue;
+      }
+
       let render_mesh = build_mesh(world_id, mesh_cfg, mesh.as_ref(), pleroma);
       let handle = render_mesh.id.handle();
       let geometry_hash = hash_geometry(&render_mesh.geometry);
       let transform_hash = hash_transform(&render_mesh.transform);
+      self
+        .cache
+        .mesh_source_keys
+        .insert(cache_key, (handle, source_key.0, source_key.1));
 
       if self.cache.registered_meshes.insert(handle) {
         self.cache.mesh_geometry_epochs.insert(handle, 1);
@@ -573,34 +598,29 @@ impl FrameProducer {
       self.cache.last_sun_direction_hash = Some(h);
     }
   }
+}
 
-  /// Emit the simulation-owned camera *forward*: read the inbound
-  /// [`ResourceKey::Camera`] the host wrote and turn it into a `SetCamera` the
-  /// backend presents from. Looks at the world origin (planet centre) with +z up
-  /// — the same stable pole reference the sun uses. eidolon only reads here; it
-  /// never writes the camera back.
-  fn emit_camera(&mut self, pleroma: &Pleroma, updates: &mut Vec<Update>) {
-    if !self.config.track_camera {
-      return;
-    }
-    let Some(view) =
-      pleroma.read_resource::<utility::domain::CameraView>(ResourceKey::Camera)
-    else {
-      return;
+/// Hash the cell mask a mesh config selects on, or `0` when it has no filter.
+/// Reading the field is cheap next to building geometry from it, so this is what
+/// lets the producer notice a mask change without rebuilding to find out.
+fn hash_cell_mask(cfg: &MeshConfig, pleroma: &Pleroma) -> u64 {
+  let Some(filter) = cfg.cell_filter else {
+    return 0;
+  };
+  let Some(values) = read_scalar_component(pleroma, filter.field, 0) else {
+    return 0;
+  };
+  let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+  for v in &values {
+    let keep = if filter.keep_at_or_above {
+      *v >= filter.threshold
+    } else {
+      *v < filter.threshold
     };
-    let position = view.position;
-    let h = hash_f64_slice(&position);
-    if self.cache.last_camera_hash != Some(h) {
-      updates.push(Update::SetCamera {
-        camera: crate::ir::RenderCamera {
-          position,
-          target: [0.0, 0.0, 0.0],
-          up: [0.0, 0.0, 1.0],
-        },
-      });
-      self.cache.last_camera_hash = Some(h);
-    }
+    h ^= keep as u64;
+    h = h.wrapping_mul(0x0000_0100_0000_01b3);
   }
+  h
 }
 
 fn build_mesh(

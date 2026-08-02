@@ -69,47 +69,57 @@ a successful tick, never mid-DAG. Each adapter: evaluates its `RefinementCriteri
 cost (adapt every N ticks; cap cells changed per adapt). A refine the backend
 cannot realise (e.g. one crossing a panel seam) is skipped best-effort rather than
 failing the tick. Criteria are mesh- and consumer-agnostic — `GradientCriterion`
-(refine on a field's jump) and `RegionRefinementCriterion` (refine a spherical cap)
-ship today; a future view-dependent (camera) criterion would read an input
-resource the host writes, the same seam (the event bus stays sim → consumer only).
+(refine on a field's jump), `RegionRefinementCriterion` (refine a spherical cap)
+and `FocusLodCriterion` (refine toward a host-supplied point) ship today; the
+last reads an input resource the host writes, which is the seam any host-driven
+criterion uses (the event bus stays sim → consumer only).
 
 ## Consumers react
 
-- **Render / LOD** — the eidolon producer rebuilds geometry from the current mesh
-  each frame and diffs it, so a refined mesh re-emits `UpdateMeshGeometry`
-  automatically. The `MeshRepresentation::Wireframe` cell-outline view makes "where
-  AMR is applied" obvious — the grid densifies where the mesh refined.
+- **Render / LOD** — the eidolon producer keys each mesh's geometry on the
+  `TopologyEpoch` (plus a hash of its cell mask, which reads a field and so can
+  change any tick). Unchanged inputs ⇒ it skips the rebuild entirely; an adapt
+  bumps the epoch and re-emits `UpdateMeshGeometry` automatically. The
+  `MeshRepresentation::Wireframe` cell-outline view makes "where AMR is applied"
+  obvious — the grid densifies where the mesh refined.
 - **Query** — rebuild `WorldQuery::new(&tessera, r)` on the new mesh.
 - **Checkpoint** — `WorldCheckpoint` persists each adaptive mesh's epoch + forest
   leaf codes; on load the adapted mesh is reconstructed (and the field slots
   resized) *before* the stored values are loaded, so an adapted world restarts
   bit-for-bit.
 
-## View-dependent LOD (camera-driven refinement)
+## Focus-driven LOD (refining toward a region of interest)
 
-Refinement can track the viewer. `CameraLodCriterion` (aether) refines cells whose
-screen-space size (`cell_volume^(1/3) / distance-to-camera`) is large and coarsens
-those that are small, so detail follows where the camera is.
+Refinement can track a region of interest. `FocusLodCriterion` (aether) refines
+cells whose projected size (`cell_volume^(1/3) / distance-to-focus`) is large and
+coarsens those that are small, so detail follows the focus.
 
-The camera is **owned by the simulation**, not the renderer — keeping eidolon
-strictly on top (it presents, it never sends data back):
+The focus is **the host's**, and it is an *input*:
 
-- `CameraView` lives in `utility` (shared vocab); the host sets it with
-  `World::set_camera`, landing it in pleroma as the inbound `ResourceKey::Camera`.
+- `RefinementFocus` lives in `utility` (shared vocab); the host sets it with
+  `World::set_refinement_focus`, landing it in pleroma as the inbound
+  `ResourceKey::RefinementFocus`.
 - aether reads it (the criterion) and drives **tessera** refinement through the
   same barrier as any other criterion.
-- eidolon reads it *forward*: the extractor emits `Update::SetCamera` into the IR
-  and the bevy backend positions a `SimDrivenCamera` from it — so the rendered
-  view *is* the simulation's camera. The data path is host → aether → tessera, and
-  separately aether → eidolon → backend; never backend → aether.
+
+Note what the simulation is *not* told: nothing here is a camera. A host that
+renders will usually derive the focus from its view, but "resolve detail near
+here" is the same request whether it comes from a camera, a player, or a probe —
+so the sim's vocabulary stays free of rendering concepts.
+
+**The view never round-trips through the simulation.** A host that renders owns
+its camera outright: it positions it directly, at render rate, *and* publishes a
+focus for LOD. These are two independent consumers of one host-owned value. The
+render IR carries no camera at all, deliberately — routing the view through the
+sim would gate camera motion on the tick rate, which at a realistic tick cost is
+visible as stutter while the view moves.
 
 ## Showcase
 
 `sandbox::build_showcase_world` makes its terrain **surface** adaptive and drives
-it with `CameraLodCriterion`; the showcase host feeds a (scripted, orbiting)
-camera via `set_camera` each tick, the surface refines toward it, and the
-cell-outline wireframe shows the detail tracking the view. (`showcase_extract_config`
-sets `track_camera`, so the same camera positions the rendered view.) The surface
+it with `FocusLodCriterion`; the showcase host publishes its orbit-camera eye as
+a focus via `set_refinement_focus` each tick, the surface refines toward it, and
+the cell-outline wireframe shows the detail tracking the view. The surface
 is **coupled** to the atmosphere by orographic lift through a
 `GeometricRadialCoupler`, so a re-mesh is a full coupled-AMR exercise: the barrier
 rebuilds the coupler's pairings (N:M where a coarse atmosphere cell now overlaps
@@ -135,6 +145,29 @@ AMR is no longer restricted to inert, uncoupled meshes on the serial solver:
   the refined one stays coarse) — the footprint matcher tiles both the same way,
   and partitioned still matches serial bit-for-bit on the refined multi-layer
   mesh.
+
+## Cost of an adapt
+
+Re-meshing is the expensive part of AMR and it lands on the simulation tick, so it
+directly bounds how often a consumer gets a fresh frame. Measure it with
+`cargo run --release -p sandbox --example amr_bench`, which drives the showcase
+world with an orbiting focus and prints the profiler; read `run_adapters.refine`
+(the re-mesh) and `extract` (the render-batch build).
+
+Two things dominated and are now cached or indexed:
+
+- **Geometry oracles.** `AdaptiveMesh` reads each leaf's geometry from a uniformly
+  refined copy of the base mesh, one per level present. That copy is a full shell
+  build and depends only on `(base, level)`, so it is built once and carried
+  across adapts rather than rebuilt every time.
+- **Face matching.** Leaf faces are grouped by world footprint. Footprints live in
+  one flat arena (not a `Vec` key per face) and are grouped by sorting rather than
+  hashing, and the hanging-face pass indexes the unmatched faces on a grid of the
+  coarse circumradius instead of comparing every leftover against every other.
+
+Sorting also fixed a latent determinism bug: grouping used to run off `HashMap`
+iteration order, so `FaceId` assignment — and therefore flux summation order —
+varied between runs of the same simulation.
 
 ## v1 limitations
 
